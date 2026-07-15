@@ -10,6 +10,7 @@ import { MobileDayPickerSheet } from './PlacesSidebarMobileDayPicker'
 import { ListImportModal } from './PlacesSidebarListImportModal'
 import { PlacesBulkCategoryModal } from './PlacesBulkCategoryModal'
 import SaveTripPlacesToListModal from '../Collections/SaveTripPlacesToListModal'
+import { PlaceEnrichmentModal } from './PlaceEnrichmentModal'
 
 const PlacesSidebar = React.memo(function PlacesSidebar(props: PlacesSidebarProps) {
   const S = usePlacesSidebar(props)
@@ -20,6 +21,7 @@ const PlacesSidebar = React.memo(function PlacesSidebar(props: PlacesSidebarProp
     ctxMenu, isMobile, pendingDeleteIds, setPendingDeleteIds, onBulkDeleteConfirm,
     categories, selectedIds, exitSelectMode, onBulkChangeCategory, categoryPickerOpen, setCategoryPickerOpen,
     collectionsEnabled, saveToListOpen, setSaveToListOpen,
+    enrichmentOpen, setEnrichmentOpen, places,
   } = S
   return (
     <div
@@ -47,6 +49,12 @@ const PlacesSidebar = React.memo(function PlacesSidebar(props: PlacesSidebarProp
 
       {dayPickerPlace && <MobileDayPickerSheet {...S} />}
       {listImportOpen && <ListImportModal {...S} />}
+      <PlaceEnrichmentModal
+        isOpen={enrichmentOpen}
+        onClose={() => setEnrichmentOpen(false)}
+        tripId={tripId}
+        places={places}
+      />
       <FileImportModal
         isOpen={fileImportOpen}
         onClose={() => { setFileImportOpen(false); setSidebarDropFile(null) }}

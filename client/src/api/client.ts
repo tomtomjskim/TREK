@@ -29,6 +29,8 @@ import {
   type AssignmentCreateRequest, type AssignmentParticipantsRequest, type AssignmentTimeRequest,
   type PlaceBulkDeleteRequest,
   type PlaceBulkUpdateRequest,
+  type PlaceEnrichmentPreviewRequest, type PlaceEnrichmentPreviewResult,
+  type PlaceEnrichmentApplyRequest, type PlaceEnrichmentApplyResult,
   type DayNoteCreateRequest, type DayNoteUpdateRequest,
   type PackingImportRequest, type PackingBagMembersRequest, type PackingUpdateBagRequest,
   type PackingCategoryAssigneesRequest,
@@ -421,6 +423,10 @@ export const placesApi = {
       apiClient.post(`/trips/${tripId}/places/bulk-delete`, { ids } satisfies PlaceBulkDeleteRequest).then(r => r.data),
   bulkUpdate: (tripId: number | string, ids: number[], data: Omit<PlaceBulkUpdateRequest, 'ids'>) =>
       apiClient.post(`/trips/${tripId}/places/bulk-update`, { ids, ...data } satisfies PlaceBulkUpdateRequest).then(r => r.data),
+  previewEnrichment: (tripId: number | string, data: PlaceEnrichmentPreviewRequest) =>
+      apiClient.post(`/trips/${tripId}/places/enrichment/preview`, data).then(r => r.data as PlaceEnrichmentPreviewResult),
+  applyEnrichment: (tripId: number | string, data: PlaceEnrichmentApplyRequest) =>
+      apiClient.post(`/trips/${tripId}/places/enrichment/apply`, data).then(r => r.data as PlaceEnrichmentApplyResult),
 }
 
 export const assignmentsApi = {

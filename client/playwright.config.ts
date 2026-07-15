@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const backendPort = Number(process.env.TREK_E2E_BACKEND_PORT || 3001)
+
 /**
  * E2E harness for TREK's critical user flows (FE7).
  *
@@ -41,17 +43,19 @@ export default defineConfig({
       // Always start our own backend (never reuse) so the isolated test DB is
       // reset + reseeded on every run, regardless of any stray dev server.
       command: 'node e2e/server-launch.mjs',
-      port: 3001,
+      port: backendPort,
       reuseExistingServer: false,
       timeout: 180_000,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: { TREK_E2E_BACKEND_PORT: String(backendPort) },
     },
     {
       command: 'npm run dev',
       port: 5173,
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
+      env: { VITE_PROXY_TARGET: `http://localhost:${backendPort}` },
     },
   ],
 })

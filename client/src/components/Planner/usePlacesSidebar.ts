@@ -61,6 +61,7 @@ export function usePlacesSidebar(props: PlacesSidebarProps) {
   const isNaverListImportEnabled = true
 
   const [fileImportOpen, setFileImportOpen] = useState(false)
+  const [enrichmentOpen, setEnrichmentOpen] = useState(false)
   const [sidebarDropFile, setSidebarDropFile] = useState<File | null>(null)
   const [sidebarDragOver, setSidebarDragOver] = useState(false)
   const sidebarDragCounter = useRef(0)
@@ -258,6 +259,7 @@ export function usePlacesSidebar(props: PlacesSidebarProps) {
     ...props,
     t, toast, ctxMenu, trip, canEditPlaces,
     fileImportOpen, setFileImportOpen, sidebarDropFile, setSidebarDropFile,
+    enrichmentOpen, setEnrichmentOpen,
     sidebarDragOver, handleSidebarDragEnter, handleSidebarDragOver, handleSidebarDragLeave, handleSidebarDrop,
     scrollContainerRef, onScrollTopChange,
     listImportOpen, setListImportOpen, listImportUrl, setListImportUrl,

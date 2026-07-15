@@ -573,3 +573,173 @@ describe('Google Maps list import', () => {
     });
   });
 });
+
+// ── Preview-first place enrichment ───────────────────────────────────────────
+
+describe('Place detail refresh', () => {
+  beforeEach(() => {
+    seedStore(useAuthStore, { hasMapsKey: true });
+  });
+
+  it('FE-PLANNER-ENRICH-001: action is key-gated and opens the cost-aware dialog', async () => {
+    const user = userEvent.setup();
+    const place = buildPlace({ id: 50, name: 'Cafe Fuji', lat: 35, lng: 138, google_place_id: null });
+    render(<PlacesSidebar {...defaultProps} places={[place]} />);
+
+    await user.click(screen.getByRole('button', { name: /Refresh details/i }));
+
+    expect(await screen.findByRole('dialog', { name: /Refresh place details/i })).toBeInTheDocument();
+    expect(screen.getByText(/Text Search Pro/i)).toBeInTheDocument();
+    expect(screen.getByText(/80%/i)).toBeInTheDocument();
+  });
+
+  it('FE-PLANNER-ENRICH-002: action stays hidden when no Maps key is configured', () => {
+    seedStore(useAuthStore, { hasMapsKey: false });
+    render(<PlacesSidebar {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: /Refresh details/i })).not.toBeInTheDocument();
+  });
+
+  it('FE-PLANNER-ENRICH-003: safe matches are preselected and selected apply reloads the trip', async () => {
+    const previewSpy = vi.spyOn(placesApi, 'previewEnrichment').mockResolvedValueOnce({
+      entries: [{
+        place_id: 50,
+        place_name: 'Cafe Fuji',
+        current_address: null,
+        candidates: [{
+          google_place_id: 'ChIJSafe', google_ftid: null, name: 'Cafe Fuji', address: 'Shizuoka',
+          lat: 35, lng: 138, types: ['cafe'], distance_meters: 12, confidence: 'safe',
+        }],
+      }],
+      errors: [], requested: 1, processed: 1, skipped: 0, stopped: null,
+      usage: [{ period: '2026-07', timezone: 'America/Los_Angeles', sku: 'text_search_pro', used: 1, cap: 4000, remaining: 3999, official_free_cap: 5000, exhausted: false }],
+    });
+    const applySpy = vi.spyOn(placesApi, 'applyEnrichment').mockResolvedValueOnce({
+      updated: [buildPlace({ id: 50, name: 'Cafe Fuji', google_place_id: 'ChIJSafe' })],
+      errors: [], requested: 1, processed: 1, skipped: 0, stopped: null, usage: [],
+    });
+    const loadTrip = vi.fn().mockResolvedValue(undefined);
+    seedStore(useTripStore, { loadTrip });
+    const user = userEvent.setup();
+    const place = buildPlace({ id: 50, name: 'Cafe Fuji', lat: 35, lng: 138, google_place_id: null });
+    render(<PlacesSidebar {...defaultProps} places={[place]} />);
+
+    await user.click(screen.getByRole('button', { name: /Refresh details/i }));
+    await user.click(screen.getByRole('button', { name: /Scan 1 place/i }));
+    expect(await screen.findByText('Shizuoka')).toBeInTheDocument();
+    expect(screen.getByText(/1 \/ 4,000/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Apply 1 selected/i }));
+
+    await waitFor(() => expect(applySpy).toHaveBeenCalledWith(1, {
+      matches: [{ place_id: 50, google_place_id: 'ChIJSafe' }],
+      lang: 'en',
+    }));
+    expect(await screen.findByText(/Updated 1 place/i)).toBeInTheDocument();
+    expect(loadTrip).not.toHaveBeenCalled();
+    const closeButtons = screen.getAllByRole('button', { name: /Close/i });
+    await user.click(closeButtons[closeButtons.length - 1]);
+    expect(loadTrip).toHaveBeenCalledWith(1);
+    previewSpy.mockRestore();
+    applySpy.mockRestore();
+  });
+
+  it('FE-PLANNER-ENRICH-004: review-confidence candidates require an explicit checkbox', async () => {
+    const previewSpy = vi.spyOn(placesApi, 'previewEnrichment').mockResolvedValueOnce({
+      entries: [{
+        place_id: 60,
+        place_name: 'Saved Name',
+        current_address: null,
+        candidates: [{
+          google_place_id: 'ChIJReview', google_ftid: null, name: 'Different Name', address: 'Tokyo',
+          lat: 35, lng: 138, types: ['store'], distance_meters: 80, confidence: 'review',
+        }],
+      }],
+      errors: [], requested: 1, processed: 1, skipped: 0, stopped: null, usage: [],
+    });
+    const user = userEvent.setup();
+    const place = buildPlace({ id: 60, name: 'Saved Name', lat: 35, lng: 138, google_place_id: null });
+    render(<PlacesSidebar {...defaultProps} places={[place]} />);
+
+    await user.click(screen.getByRole('button', { name: /Refresh details/i }));
+    await user.click(screen.getByRole('button', { name: /Scan 1 place/i }));
+    const apply = await screen.findByRole('button', { name: /Apply 0 selected/i });
+    expect(apply).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: /Select Saved Name/i }));
+    expect(screen.getByRole('button', { name: /Apply 1 selected/i })).toBeEnabled();
+    previewSpy.mockRestore();
+  });
+
+  it('FE-PLANNER-ENRICH-005: a hard-cap response shows a blocking safety message', async () => {
+    const previewSpy = vi.spyOn(placesApi, 'previewEnrichment').mockRejectedValueOnce({
+      response: { status: 429, data: { error: 'cap reached', code: 'GOOGLE_API_MONTHLY_CAP_REACHED' } },
+    });
+    const user = userEvent.setup();
+    const place = buildPlace({ id: 70, name: 'Cafe', lat: 35, lng: 138, google_place_id: null });
+    render(<PlacesSidebar {...defaultProps} places={[place]} />);
+
+    await user.click(screen.getByRole('button', { name: /Refresh details/i }));
+    await user.click(screen.getByRole('button', { name: /Scan 1 place/i }));
+
+    expect(await screen.findByText(/monthly Google safety limit has been reached/i)).toBeInTheDocument();
+    previewSpy.mockRestore();
+  });
+
+  it('FE-PLANNER-ENRICH-006: a partial apply reports that the safety cap stopped the batch', async () => {
+    const previewSpy = vi.spyOn(placesApi, 'previewEnrichment').mockResolvedValueOnce({
+      entries: [{
+        place_id: 80,
+        place_name: 'Cafe Fuji',
+        current_address: null,
+        candidates: [{
+          google_place_id: 'ChIJPartial', google_ftid: null, name: 'Cafe Fuji', address: 'Shizuoka',
+          lat: 35, lng: 138, types: ['cafe'], distance_meters: 10, confidence: 'safe',
+        }],
+      }],
+      errors: [], requested: 1, processed: 1, skipped: 0, stopped: null, usage: [],
+    });
+    const applySpy = vi.spyOn(placesApi, 'applyEnrichment').mockResolvedValueOnce({
+      updated: [buildPlace({ id: 80, name: 'Cafe Fuji', google_place_id: 'ChIJPartial' })],
+      errors: [], requested: 2, processed: 1, skipped: 0,
+      stopped: { code: 'GOOGLE_API_MONTHLY_CAP_REACHED', error: 'provider detail' },
+      usage: [],
+    });
+    const user = userEvent.setup();
+    const place = buildPlace({ id: 80, name: 'Cafe Fuji', lat: 35, lng: 138, google_place_id: null });
+    render(<PlacesSidebar {...defaultProps} places={[place]} />);
+
+    await user.click(screen.getByRole('button', { name: /Refresh details/i }));
+    await user.click(screen.getByRole('button', { name: /Scan 1 place/i }));
+    await user.click(await screen.findByRole('button', { name: /Apply 1 selected/i }));
+
+    expect(await screen.findByText(/Updated 1 place/i)).toBeInTheDocument();
+    expect(screen.getByText(/monthly Google safety limit has been reached/i)).toBeInTheDocument();
+    previewSpy.mockRestore();
+    applySpy.mockRestore();
+  });
+
+  it('FE-PLANNER-ENRICH-007: partial provider failures are visible without provider diagnostics', async () => {
+    const previewSpy = vi.spyOn(placesApi, 'previewEnrichment').mockResolvedValueOnce({
+      entries: [],
+      errors: [{
+        place_id: 90,
+        place_name: 'Cafe Fuji',
+        code: 'PROVIDER_ERROR',
+        error: 'Google Places request failed',
+      }],
+      requested: 1,
+      processed: 1,
+      skipped: 0,
+      stopped: null,
+      usage: [],
+    });
+    const user = userEvent.setup();
+    const place = buildPlace({ id: 90, name: 'Cafe Fuji', lat: 35, lng: 138, google_place_id: null });
+    render(<PlacesSidebar {...defaultProps} places={[place]} />);
+
+    await user.click(screen.getByRole('button', { name: /Refresh details/i }));
+    await user.click(screen.getByRole('button', { name: /Scan 1 place/i }));
+
+    expect(await screen.findByText(/1 place could not be scanned/i)).toBeInTheDocument();
+    expect(screen.queryByText(/provider diagnostic/i)).not.toBeInTheDocument();
+    previewSpy.mockRestore();
+  });
+});

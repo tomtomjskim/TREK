@@ -1,4 +1,10 @@
-import { placeCreateRequestSchema, placeBulkDeleteRequestSchema, placeImportListRequestSchema } from './place.schema';
+import {
+  placeCreateRequestSchema,
+  placeBulkDeleteRequestSchema,
+  placeImportListRequestSchema,
+  placeEnrichmentPreviewRequestSchema,
+  placeEnrichmentApplyRequestSchema,
+} from './place.schema';
 
 import { describe, it, expect } from 'vitest';
 
@@ -27,5 +33,29 @@ describe('placeImportListRequestSchema', () => {
   it('requires a non-empty url', () => {
     expect(placeImportListRequestSchema.safeParse({ url: 'http://x' }).success).toBe(true);
     expect(placeImportListRequestSchema.safeParse({ url: '' }).success).toBe(false);
+  });
+});
+
+describe('place enrichment request schemas', () => {
+  it('accepts supported language tags and rejects query-string injection', () => {
+    expect(placeEnrichmentPreviewRequestSchema.safeParse({ lang: 'pt-BR' }).success).toBe(true);
+    expect(placeEnrichmentPreviewRequestSchema.safeParse({ lang: 'en&region=US' }).success).toBe(false);
+  });
+
+  it('limits batches and accepts only Google place-id characters', () => {
+    expect(
+      placeEnrichmentPreviewRequestSchema.safeParse({ place_ids: Array.from({ length: 101 }, (_, i) => i + 1) })
+        .success,
+    ).toBe(false);
+    expect(
+      placeEnrichmentApplyRequestSchema.safeParse({
+        matches: [{ place_id: 1, google_place_id: 'ChIJ_valid-ID' }],
+      }).success,
+    ).toBe(true);
+    expect(
+      placeEnrichmentApplyRequestSchema.safeParse({
+        matches: [{ place_id: 1, google_place_id: 'ChIJ?unsafe' }],
+      }).success,
+    ).toBe(false);
   });
 });

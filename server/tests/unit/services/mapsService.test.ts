@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 
-const { mockDbGet, mockDbRun, mockCheckSsrf, mockCacheGet, mockCacheGetErrored, mockCachePut, mockCacheGetInFlight, mockCacheSetInFlight } = vi.hoisted(() => ({
+const { mockDbGet, mockDbRun, mockCheckSsrf, mockCacheGet, mockCacheGetErrored, mockCachePut, mockCacheGetInFlight, mockCacheSetInFlight, mockReserveGoogleApiCall } = vi.hoisted(() => ({
   mockDbGet: vi.fn(() => undefined as any),
   mockDbRun: vi.fn(),
   mockCheckSsrf: vi.fn(async () => ({ allowed: true })),
@@ -21,6 +21,7 @@ const { mockDbGet, mockDbRun, mockCheckSsrf, mockCacheGet, mockCacheGetErrored, 
   })),
   mockCacheGetInFlight: vi.fn(() => undefined),
   mockCacheSetInFlight: vi.fn(),
+  mockReserveGoogleApiCall: vi.fn(),
 }));
 
 vi.mock('../../../src/db/database', () => ({
@@ -52,6 +53,10 @@ vi.mock('../../../src/utils/ssrfGuard', () => {
 
 vi.mock('../../../src/services/apiKeyCrypto', () => ({
   decrypt_api_key: (v: string | null) => v,
+}));
+
+vi.mock('../../../src/services/googleApiUsageService', () => ({
+  reserveGoogleApiCall: mockReserveGoogleApiCall,
 }));
 
 vi.mock('../../../src/config', () => ({
@@ -100,6 +105,7 @@ afterEach(() => {
   mockCacheGetInFlight.mockReset();
   mockCacheGetInFlight.mockReturnValue(undefined);
   mockCacheSetInFlight.mockReset();
+  mockReserveGoogleApiCall.mockReset();
 });
 
 // ── parseOpeningHours ─────────────────────────────────────────────────────────
@@ -771,6 +777,36 @@ describe('searchPlaces (fetch stubbed)', () => {
     expect(result.source).toBe('google');
     expect((result.places[0] as any).google_place_id).toBe('gid1');
     expect((result.places[0] as any).google_ftid).toBeNull();
+    expect(mockReserveGoogleApiCall).toHaveBeenCalledWith('text_search_enterprise');
+  });
+
+  it('MAPS-039f: enrichment candidate search uses the Pro mask and Pro safety budget', async () => {
+    mockDbGet.mockReturnValueOnce({ maps_api_key: 'gkey' });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        places: [{
+          id: 'gid-pro',
+          displayName: { text: 'Cafe' },
+          formattedAddress: 'Shizuoka',
+          location: { latitude: 34.97, longitude: 138.38 },
+          types: ['cafe'],
+        }],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { searchPlaceCandidates } = await import('../../../src/services/mapsService');
+    const result = await searchPlaceCandidates(1, 'Cafe', 'ja', { lat: 34.97, lng: 138.38 });
+
+    expect(result.places).toHaveLength(1);
+    expect(mockReserveGoogleApiCall).toHaveBeenCalledWith('text_search_pro');
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    const mask = (request.headers as Record<string, string>)['X-Goog-FieldMask'];
+    expect(mask).toContain('places.displayName');
+    expect(mask).not.toContain('rating');
+    expect(mask).not.toContain('websiteUri');
+    expect(mask).not.toContain('nationalPhoneNumber');
   });
 
   it('MAPS-039b: throws with Google error status when Google API returns non-ok', async () => {
@@ -882,6 +918,7 @@ describe('autocompletePlaces (fetch stubbed)', () => {
     expect(result.suggestions[0].placeId).toBe('ChIJ1234');
     expect(result.suggestions[0].mainText).toBe('Eiffel Tower');
     expect(result.suggestions[0].secondaryText).toBe('Paris, France');
+    expect(mockReserveGoogleApiCall).toHaveBeenCalledWith('autocomplete');
   });
 
   it('MAPS-083: throws with Google error status when API returns non-ok', async () => {
@@ -1124,6 +1161,33 @@ describe('getPlaceDetails (fetch stubbed)', () => {
     // Lean mask — reviews/summary not fetched in getPlaceDetails; use getPlaceDetailsExpanded for those
     expect(place.reviews).toHaveLength(0);
     expect(place.summary).toBeNull();
+    expect(mockReserveGoogleApiCall).toHaveBeenCalledWith('place_details_enterprise');
+  });
+
+  it('MAPS-041b3: explicit refresh bypasses the seven-day details cache', async () => {
+    mockDbGet
+      .mockReturnValueOnce({ maps_api_key: 'gkey' })
+      .mockReturnValue({
+        payload_json: JSON.stringify({ google_place_id: 'ChIJCached', name: 'Stale name' }),
+        fetched_at: Date.now(),
+      });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 'ChIJCached',
+        displayName: { text: 'Fresh name' },
+        location: { latitude: 35, longitude: 138 },
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { getPlaceDetails } = await import('../../../src/services/mapsService');
+
+    const result = await getPlaceDetails(1, 'ChIJCached', 'en', true);
+
+    expect((result.place as any).name).toBe('Fresh name');
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(mockDbGet).toHaveBeenCalledOnce();
+    expect(mockReserveGoogleApiCall).toHaveBeenCalledWith('place_details_enterprise');
   });
 
   it('MAPS-041b2: normalises non-standard TREK language codes for Google (br→pt-BR, gr→el)', async () => {
@@ -1182,6 +1246,7 @@ describe('getPlaceDetails (fetch stubbed)', () => {
     expect(review.text).toBeNull();
     expect(review.time).toBeNull();
     expect(review.photo).toBeNull();
+    expect(mockReserveGoogleApiCall).toHaveBeenCalledWith('place_details_atmosphere');
   });
 
   it('MAPS-040c: OSM path enriches name/address/coords from Nominatim (serial fetch)', async () => {
@@ -1318,6 +1383,7 @@ describe('getPlacePhoto (fetch stubbed)', () => {
     const result = await getPlacePhoto(999, placeId, 48.8, 2.3, 'Cache Test');
     expect(result.photoUrl).toBe(cachedUrl);
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockReserveGoogleApiCall).not.toHaveBeenCalled();
   });
 
   it('MAPS-043c: throws 404 from error cache without making a network request', async () => {
@@ -1365,6 +1431,7 @@ describe('getPlacePhoto (fetch stubbed)', () => {
     expect(result.photoUrl).toBe(`/api/maps/place-photo/${encodeURIComponent(uniqueId)}/bytes`);
     expect(result.attribution).toBe('Photographer');
     expect(mockCachePut).toHaveBeenCalledOnce();
+    expect(mockReserveGoogleApiCall).toHaveBeenCalledWith('place_photos');
   });
 
   it('MAPS-044b: throws 404 when Google details fetch returns non-ok', async () => {

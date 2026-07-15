@@ -1,6 +1,19 @@
 import { db, getPlaceWithTags } from '../db/database';
 import { broadcast } from '../websocket';
-import { getMapsKey, searchPlaces, getPlacePhoto } from './mapsService';
+import {
+  getMapsKey,
+  searchPlaces,
+  searchPlaceCandidates,
+  getPlaceDetails,
+  getPlacePhoto,
+} from './mapsService';
+import { getGoogleApiUsageSnapshot } from './googleApiUsageService';
+import type {
+  PlaceEnrichmentApplyResult,
+  PlaceEnrichmentCandidate,
+  PlaceEnrichmentPreviewResult,
+  PlaceEnrichmentStop,
+} from '@trek/shared';
 
 /**
  * Background enrichment for list-imported places (#886).
@@ -40,7 +53,7 @@ const SEARCH_BIAS_RADIUS_METERS = 2000;
 /** Concurrent enrichment lookups — small, to stay friendly to the Maps quota. */
 const ENRICH_CONCURRENCY = 3;
 
-function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+export function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
   const R = 6371000;
   const toRad = (d: number) => (d * Math.PI) / 180;
   const dLat = toRad(b.lat - a.lat);
@@ -49,6 +62,50 @@ function haversineMeters(a: { lat: number; lng: number }, b: { lat: number; lng:
   const lat2 = toRad(b.lat);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function normalizedPlaceName(value: string): string {
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/[\p{P}\p{S}\s]/gu, '');
+}
+
+function isNameMatch(left: string, right: string): boolean {
+  const a = normalizedPlaceName(left);
+  const b = normalizedPlaceName(right);
+  if (!a || !b) return false;
+  return a === b || (Math.min(a.length, b.length) >= 3 && (a.includes(b) || b.includes(a)));
+}
+
+/** Rank up to three nearby Google candidates for a human-reviewed preview. */
+export function rankEnrichmentCandidates(
+  candidates: Record<string, unknown>[],
+  target: { name: string; lat: number; lng: number },
+  maxMeters: number = MATCH_RADIUS_METERS,
+): PlaceEnrichmentCandidate[] {
+  return (candidates || []).flatMap((candidate): PlaceEnrichmentCandidate[] => {
+    const googlePlaceId = str(candidate.google_place_id);
+    const lat = candidate.lat;
+    const lng = candidate.lng;
+    if (!googlePlaceId || typeof lat !== 'number' || typeof lng !== 'number') return [];
+    const distance = haversineMeters(target, { lat, lng });
+    if (distance > maxMeters) return [];
+    const name = str(candidate.name) ?? '';
+    return [{
+      google_place_id: googlePlaceId,
+      google_ftid: str(candidate.google_ftid),
+      name,
+      address: str(candidate.address),
+      lat,
+      lng,
+      types: Array.isArray(candidate.types)
+        ? candidate.types.filter((type): type is string => typeof type === 'string')
+        : [],
+      distance_meters: Math.round(distance),
+      confidence: distance <= 100 && isNameMatch(target.name, name) ? 'safe' : 'review',
+    }];
+  }).sort((left, right) => {
+    if (left.confidence !== right.confidence) return left.confidence === 'safe' ? -1 : 1;
+    return left.distance_meters - right.distance_meters;
+  }).slice(0, 3);
 }
 
 /**
@@ -90,6 +147,214 @@ async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) =>
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+interface BatchPlace extends EnrichablePlace {
+  address?: string | null;
+}
+
+function quotaStop(error: unknown): PlaceEnrichmentStop | null {
+  const detail = error as {
+    status?: number;
+    code?: string;
+    message?: string;
+    sku?: string;
+    usage?: unknown;
+  };
+  if (detail.code === 'GOOGLE_API_MONTHLY_CAP_REACHED') {
+    return {
+      code: detail.code,
+      error: detail.message || 'Google Places monthly safety cap reached',
+      sku: detail.sku,
+      usage: detail.usage,
+    };
+  }
+  if (detail.status === 429) {
+    return {
+      code: 'GOOGLE_PROVIDER_RATE_LIMITED',
+      error: 'Google Places temporarily rate limited this batch',
+    };
+  }
+  return null;
+}
+
+function safeProviderError(_error: unknown): string {
+  return 'Google Places request failed';
+}
+
+function loadPreviewPlaces(tripId: string, placeIds?: number[]): { places: BatchPlace[]; skipped: number } {
+  const uniqueIds = placeIds ? [...new Set(placeIds)] : undefined;
+  if (uniqueIds?.length === 0) return { places: [], skipped: 0 };
+  const idFilter = uniqueIds ? ` AND id IN (${uniqueIds.map(() => '?').join(',')})` : '';
+  const places = db.prepare(`
+    SELECT id, name, lat, lng, address, google_place_id
+    FROM places
+    WHERE trip_id = ?
+      AND lat IS NOT NULL AND lng IS NOT NULL
+      AND (google_place_id IS NULL OR TRIM(google_place_id) = '')
+      ${idFilter}
+    ORDER BY id ASC
+    LIMIT 100
+  `).all(tripId, ...(uniqueIds ?? [])) as BatchPlace[];
+  return { places, skipped: uniqueIds ? Math.max(0, uniqueIds.length - places.length) : 0 };
+}
+
+export async function previewTripPlaceEnrichment(
+  tripId: string,
+  userId: number,
+  options: { place_ids?: number[]; lang?: string },
+): Promise<PlaceEnrichmentPreviewResult> {
+  if (!getMapsKey(userId)) {
+    throw Object.assign(new Error('Google Maps API key not configured'), { status: 400 });
+  }
+  const selected = loadPreviewPlaces(tripId, options.place_ids);
+  const entries: PlaceEnrichmentPreviewResult['entries'] = [];
+  const errors: PlaceEnrichmentPreviewResult['errors'] = [];
+  let processed = 0;
+  let stopped: PlaceEnrichmentStop | null = null;
+
+  await mapWithConcurrency(selected.places, ENRICH_CONCURRENCY, async (place) => {
+    if (stopped) return;
+    try {
+      const result = await searchPlaceCandidates(userId, place.name, options.lang, {
+        lat: place.lat,
+        lng: place.lng,
+        radius: SEARCH_BIAS_RADIUS_METERS,
+      });
+      entries.push({
+        place_id: place.id,
+        place_name: place.name,
+        current_address: str(place.address),
+        candidates: rankEnrichmentCandidates(result.places, place),
+      });
+      processed++;
+    } catch (error) {
+      const stop = quotaStop(error);
+      if (stop) {
+        stopped ??= stop;
+        return;
+      }
+      errors.push({
+        place_id: place.id,
+        place_name: place.name,
+        code: 'PROVIDER_ERROR',
+        error: safeProviderError(error),
+      });
+      processed++;
+    }
+  });
+
+  entries.sort((a, b) => a.place_id - b.place_id);
+  errors.sort((a, b) => a.place_id - b.place_id);
+  return {
+    entries,
+    errors,
+    requested: selected.places.length + selected.skipped,
+    processed,
+    skipped: selected.skipped,
+    stopped,
+    usage: getGoogleApiUsageSnapshot(),
+  };
+}
+
+export async function applyTripPlaceEnrichment(
+  tripId: string,
+  userId: number,
+  matches: Array<{ place_id: number; google_place_id: string }>,
+  lang?: string,
+): Promise<PlaceEnrichmentApplyResult> {
+  if (!getMapsKey(userId)) {
+    throw Object.assign(new Error('Google Maps API key not configured'), { status: 400 });
+  }
+  const selected = [...new Map(matches.map((match) => [match.place_id, match])).values()].slice(0, 100);
+  const updated: NonNullable<ReturnType<typeof getPlaceWithTags>>[] = [];
+  const errors: PlaceEnrichmentApplyResult['errors'] = [];
+  let processed = 0;
+  let skipped = Math.max(0, matches.length - selected.length);
+  let stopped: PlaceEnrichmentStop | null = null;
+
+  await mapWithConcurrency(selected, ENRICH_CONCURRENCY, async (match) => {
+    if (stopped) return;
+    const place = db.prepare(`
+      SELECT id, name, lat, lng, google_place_id
+      FROM places WHERE id = ? AND trip_id = ?
+    `).get(match.place_id, tripId) as BatchPlace | undefined;
+    if (!place) {
+      errors.push({ place_id: match.place_id, code: 'PLACE_NOT_FOUND', error: 'Place not found' });
+      processed++;
+      return;
+    }
+    const existingGoogleId = str(place.google_place_id);
+    if (existingGoogleId && existingGoogleId !== match.google_place_id) {
+      skipped++;
+      processed++;
+      return;
+    }
+    if (typeof place.lat !== 'number' || typeof place.lng !== 'number') {
+      errors.push({ place_id: place.id, code: 'MISSING_COORDINATES', error: 'Place has no coordinates' });
+      processed++;
+      return;
+    }
+
+    try {
+      const detailResult = await getPlaceDetails(userId, match.google_place_id, lang, true);
+      const detail = detailResult.place;
+      const detailLat = detail.lat;
+      const detailLng = detail.lng;
+      if (typeof detailLat !== 'number' || typeof detailLng !== 'number'
+        || haversineMeters(place, { lat: detailLat, lng: detailLng }) > MATCH_RADIUS_METERS) {
+        errors.push({
+          place_id: place.id,
+          code: 'MATCH_TOO_FAR',
+          error: 'Selected Google place is too far from the saved coordinates',
+        });
+        processed++;
+        return;
+      }
+
+      db.prepare(`
+        UPDATE places SET
+          google_place_id = CASE WHEN google_place_id IS NULL OR TRIM(google_place_id) = '' THEN ? ELSE google_place_id END,
+          google_ftid = CASE WHEN google_ftid IS NULL OR TRIM(google_ftid) = '' THEN ? ELSE google_ftid END,
+          address = CASE WHEN address IS NULL OR TRIM(address) = '' THEN ? ELSE address END,
+          website = CASE WHEN website IS NULL OR TRIM(website) = '' THEN ? ELSE website END,
+          phone = CASE WHEN phone IS NULL OR TRIM(phone) = '' THEN ? ELSE phone END,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND trip_id = ?
+      `).run(
+        match.google_place_id,
+        str(detail.google_ftid),
+        str(detail.address),
+        str(detail.website),
+        str(detail.phone),
+        place.id,
+        tripId,
+      );
+      const enriched = getPlaceWithTags(place.id);
+      if (enriched) updated.push(enriched);
+      processed++;
+    } catch (error) {
+      const stop = quotaStop(error);
+      if (stop) {
+        stopped ??= stop;
+        return;
+      }
+      errors.push({ place_id: place.id, code: 'PROVIDER_ERROR', error: safeProviderError(error) });
+      processed++;
+    }
+  });
+
+  updated.sort((a, b) => a.id - b.id);
+  errors.sort((a, b) => a.place_id - b.place_id);
+  return {
+    updated: updated as PlaceEnrichmentApplyResult['updated'],
+    errors,
+    requested: matches.length,
+    processed,
+    skipped,
+    stopped,
+    usage: getGoogleApiUsageSnapshot(),
+  };
+}
 
 async function enrichOne(tripId: string, userId: number, place: EnrichablePlace, lang?: string): Promise<void> {
   // Already linked (shouldn't happen for list imports) — nothing to resolve.

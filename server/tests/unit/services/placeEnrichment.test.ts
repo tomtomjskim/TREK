@@ -15,7 +15,7 @@ vi.mock('../../../src/services/mapsService', () => ({
   getPlacePhoto: async () => ({ photoUrl: '', attribution: null }),
 }));
 
-import { pickEnrichmentMatch } from '../../../src/services/placeEnrichment';
+import { pickEnrichmentMatch, rankEnrichmentCandidates } from '../../../src/services/placeEnrichment';
 
 const target = { lat: 48.85, lng: 2.35 };
 
@@ -45,5 +45,37 @@ describe('pickEnrichmentMatch', () => {
   it('PENRICH-004: ignores candidates with non-numeric coordinates', () => {
     const candidates = [{ google_place_id: 'A', lat: 'x', lng: 'y' }];
     expect(pickEnrichmentMatch(candidates as never, target)).toBeNull();
+  });
+});
+
+describe('rankEnrichmentCandidates', () => {
+  it('PENRICH-005: marks a close normalized-name match safe and recommends it first', () => {
+    const ranked = rankEnrichmentCandidates([
+      { google_place_id: 'review', name: 'Another Shop', address: 'A', lat: 48.8501, lng: 2.3501, types: ['store'] },
+      { google_place_id: 'safe', name: 'Cafe Étoile', address: 'B', lat: 48.8502, lng: 2.3502, types: ['cafe'] },
+    ], { name: 'Ｃａｆｅ Étoile', lat: 48.85, lng: 2.35 });
+
+    expect(ranked[0]).toMatchObject({ google_place_id: 'safe', confidence: 'safe' });
+    expect(ranked[0].distance_meters).toBeLessThan(100);
+  });
+
+  it('PENRICH-006: keeps a nearby name mismatch for review and drops hits beyond 250m', () => {
+    const ranked = rankEnrichmentCandidates([
+      { google_place_id: 'near', name: 'Different', lat: 48.8503, lng: 2.3503 },
+      { google_place_id: 'far', name: 'Cafe', lat: 48.86, lng: 2.36 },
+    ], { name: 'Cafe', lat: 48.85, lng: 2.35 });
+
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0]).toMatchObject({ google_place_id: 'near', confidence: 'review' });
+  });
+
+  it('PENRICH-007: returns at most three valid Google candidates', () => {
+    const candidates = Array.from({ length: 5 }, (_, index) => ({
+      google_place_id: `g${index}`,
+      name: 'Cafe',
+      lat: 48.85 + index * 0.00001,
+      lng: 2.35,
+    }));
+    expect(rankEnrichmentCandidates(candidates, { name: 'Cafe', lat: 48.85, lng: 2.35 })).toHaveLength(3);
   });
 });

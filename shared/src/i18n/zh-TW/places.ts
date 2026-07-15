@@ -84,5 +84,37 @@ const places: TranslationStrings = {
   'places.addAnyway': '仍要新增',
   'places.enrichOnImport': '透過 Google 豐富地點資訊',
   'places.enrichOnImportHint': '查詢每個匯入的地點以補上照片、地址與聯絡資訊。需要 Google Maps 金鑰。',
+  // English fallback until this feature receives a locale-specific translation.
+  'places.enrichmentAction': 'Refresh details',
+  'places.enrichmentTitle': 'Refresh place details',
+  'places.enrichmentIntro':
+    'Match unlinked saved places with Google, review the results, then apply only the places you select.',
+  'places.enrichmentBillingTitle': 'Cost guard is active',
+  'places.enrichmentBillingHint':
+    'Scanning uses one Text Search Pro request per eligible place. Applying uses one Place Details Enterprise request per selection. TREK blocks calls at 80% of Google’s documented monthly free-use caps.',
+  'places.enrichmentEligible': '{count} unlinked places with coordinates are ready to scan.',
+  'places.enrichmentNoEligible': 'No unlinked places with coordinates need a scan.',
+  'places.enrichmentScanSingular': 'Scan 1 place',
+  'places.enrichmentScan': 'Scan {count} places',
+  'places.enrichmentScanning': 'Scanning nearby Google places…',
+  'places.enrichmentResults': '{count} places scanned',
+  'places.enrichmentSelect': 'Select {name}',
+  'places.enrichmentCandidate': 'Google match for {name}',
+  'places.enrichmentNoMatch': 'No nearby Google match was found.',
+  'places.enrichmentSafe': 'High-confidence match',
+  'places.enrichmentReview': 'Review required',
+  'places.enrichmentApply': 'Apply {count} selected',
+  'places.enrichmentApplying': 'Applying…',
+  'places.enrichmentQuotaReached':
+    'The monthly Google safety limit has been reached. Google calls are blocked until the next billing month.',
+  'places.enrichmentFailed': 'Could not scan place details.',
+  'places.enrichmentApplyFailed': 'Could not apply the selected place details.',
+  'places.enrichmentScanErrorSingular': '1 place could not be scanned. No saved data was changed.',
+  'places.enrichmentScanErrors': '{count} places could not be scanned. No saved data was changed.',
+  'places.enrichmentApplyErrorSingular': '1 selected place could not be updated. Other completed updates were kept.',
+  'places.enrichmentApplyErrors': '{count} selected places could not be updated. Other completed updates were kept.',
+  'places.enrichmentUpdatedSingular': 'Updated 1 place',
+  'places.enrichmentUpdated': 'Updated {count} places',
+  'places.enrichmentDoneHint': 'Existing notes, categories, schedules and non-empty fields were preserved.',
 };
 export default places;

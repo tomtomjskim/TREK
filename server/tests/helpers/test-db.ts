@@ -94,6 +94,7 @@ const RESET_TABLES = [
   'notification_channel_preferences',
   'notifications',
   'audit_log',
+  'google_api_usage',
   // System notices
   'user_notice_dismissals',
   // User data

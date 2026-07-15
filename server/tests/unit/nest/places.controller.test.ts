@@ -222,6 +222,53 @@ describe('PlacesController (parity with the legacy /api/trips/:tripId/places rou
     });
   });
 
+  describe('POST /enrichment/preview + /enrichment/apply', () => {
+    it('404s inaccessible trips and 403s users without place_edit before provider work', async () => {
+      const previewEnrichment = vi.fn();
+      expect(await thrownAsync(() => new PlacesController(svc({
+        verifyTripAccess: vi.fn().mockReturnValue(undefined), previewEnrichment,
+      } as Partial<PlacesService>)).previewEnrichment(user, '5', {}))).toEqual({ status: 404, body: { error: 'Trip not found' } });
+      expect(await thrownAsync(() => new PlacesController(svc({
+        canEdit: vi.fn().mockReturnValue(false), previewEnrichment,
+      } as Partial<PlacesService>)).previewEnrichment(user, '5', {}))).toEqual({ status: 403, body: { error: 'No permission' } });
+      expect(previewEnrichment).not.toHaveBeenCalled();
+    });
+
+    it('returns preview data and maps a zero-progress safety stop to stable 429', async () => {
+      const ok = { entries: [], errors: [], processed: 2, stopped: null, usage: [] };
+      const previewEnrichment = vi.fn().mockResolvedValue(ok);
+      expect(await new PlacesController(svc({ previewEnrichment } as Partial<PlacesService>))
+        .previewEnrichment(user, '5', { lang: 'ko' })).toBe(ok);
+
+      const stopped = {
+        entries: [], errors: [], processed: 0,
+        stopped: { code: 'GOOGLE_API_MONTHLY_CAP_REACHED', error: 'cap reached', sku: 'text_search_pro', usage: { used: 4000, cap: 4000 } },
+        usage: [],
+      };
+      const blocked = svc({ previewEnrichment: vi.fn().mockResolvedValue(stopped) } as Partial<PlacesService>);
+      expect(await thrownAsync(() => new PlacesController(blocked).previewEnrichment(user, '5', {}))).toEqual({
+        status: 429,
+        body: expect.objectContaining({ error: 'cap reached', code: 'GOOGLE_API_MONTHLY_CAP_REACHED' }),
+      });
+    });
+
+    it('applies selected matches, fires hooks, and broadcasts each updated place', async () => {
+      const updated = [{ id: 3 }, { id: 4 }];
+      const applyEnrichment = vi.fn().mockResolvedValue({ updated, errors: [], skipped: 0, processed: 2, stopped: null, usage: [] });
+      const broadcast = vi.fn();
+      const onUpdated = vi.fn();
+      const controller = new PlacesController(svc({ applyEnrichment, broadcast, onUpdated } as Partial<PlacesService>));
+      const body = { matches: [{ place_id: 3, google_place_id: 'g3' }] };
+
+      const result = await controller.applyEnrichment(user, '5', body, 'socket');
+
+      expect(result.updated).toEqual(updated);
+      expect(applyEnrichment).toHaveBeenCalledWith('5', user.id, body.matches, undefined);
+      expect(onUpdated).toHaveBeenCalledTimes(2);
+      expect(broadcast).toHaveBeenCalledWith('5', 'place:updated', { place: { id: 3 } }, 'socket');
+    });
+  });
+
   it('GET /:id returns the place when found, 404 when missing', () => {
     expect(thrown(() => new PlacesController(svc({ get: vi.fn().mockReturnValue(undefined) } as Partial<PlacesService>)).get(user, '5', '9'))).toEqual({ status: 404, body: { error: 'Place not found' } });
     const s = svc({ get: vi.fn().mockReturnValue({ id: 9 }) } as Partial<PlacesService>);

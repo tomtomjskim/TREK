@@ -189,6 +189,10 @@ describe('migration hygiene — full chain smoke', () => {
     try {
       const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
       expect(row.version).toBeGreaterThan(0);
+      const usageTable = db.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'google_api_usage'",
+      ).get();
+      expect(usageTable).toEqual({ name: 'google_api_usage' });
     } finally {
       db.close();
     }

@@ -27,7 +27,7 @@ const env = {
   TREK_DB_FILE: dbFile,
   ADMIN_EMAIL: 'e2e@trek.local',
   ADMIN_PASSWORD: 'E2eTest12345!',
-  PORT: '3001',
+  PORT: process.env.TREK_E2E_BACKEND_PORT || '3001',
   NODE_ENV: 'development',
 }
 

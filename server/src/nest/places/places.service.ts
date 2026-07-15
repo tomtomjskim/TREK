@@ -5,6 +5,7 @@ import { checkPermission } from '../../services/permissions';
 import type { User } from '../../types';
 import * as svc from '../../services/placeService';
 import { onPlaceCreated, onPlaceUpdated, onPlaceDeleted } from '../../services/journeyService';
+import { previewTripPlaceEnrichment, applyTripPlaceEnrichment } from '../../services/placeEnrichment';
 
 type Trip = { user_id: number };
 
@@ -74,6 +75,14 @@ export class PlacesService {
 
   importNaverList(tripId: string, url: string, opts?: Parameters<typeof svc.importNaverList>[2]) {
     return svc.importNaverList(tripId, url, opts);
+  }
+
+  previewEnrichment(tripId: string, userId: number, options: Parameters<typeof previewTripPlaceEnrichment>[2]) {
+    return previewTripPlaceEnrichment(tripId, userId, options);
+  }
+
+  applyEnrichment(tripId: string, userId: number, matches: Parameters<typeof applyTripPlaceEnrichment>[2], lang?: string) {
+    return applyTripPlaceEnrichment(tripId, userId, matches, lang);
   }
 
   searchImage(tripId: string, id: string, userId: number) {

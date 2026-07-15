@@ -17,10 +17,17 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import type { User } from '../../types';
+import {
+  placeEnrichmentApplyRequestSchema,
+  placeEnrichmentPreviewRequestSchema,
+  type PlaceEnrichmentApplyRequest,
+  type PlaceEnrichmentPreviewRequest,
+} from '@trek/shared';
 import { PlacesService } from './places.service';
 import { isUpdateConflict } from '../../services/conflictResult';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { ZodValidationPipe } from '../common/zod-validation.pipe';
 
 const STRING_LIMITS: Record<string, number> = { name: 200, description: 2000, address: 500, notes: 2000 };
 const UPLOAD = { storage: memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } };
@@ -254,6 +261,53 @@ export class PlacesController {
       this.places.onUpdated(place.id);
     }
     return { updated: updated.map((p) => p.id), count: updated.length };
+  }
+
+  @Post('enrichment/preview')
+  @HttpCode(200)
+  async previewEnrichment(
+    @CurrentUser() user: User,
+    @Param('tripId') tripId: string,
+    @Body(new ZodValidationPipe(placeEnrichmentPreviewRequestSchema)) body: PlaceEnrichmentPreviewRequest,
+  ) {
+    const trip = this.requireTrip(tripId, user);
+    this.requireEdit(trip, user);
+    const result = await this.places.previewEnrichment(tripId, user.id, body);
+    if (result.stopped && result.processed === 0) {
+      throw new HttpException({
+        error: result.stopped.error,
+        code: result.stopped.code,
+        sku: result.stopped.sku,
+        usage: result.stopped.usage,
+      }, 429);
+    }
+    return result;
+  }
+
+  @Post('enrichment/apply')
+  @HttpCode(200)
+  async applyEnrichment(
+    @CurrentUser() user: User,
+    @Param('tripId') tripId: string,
+    @Body(new ZodValidationPipe(placeEnrichmentApplyRequestSchema)) body: PlaceEnrichmentApplyRequest,
+    @Headers('x-socket-id') socketId?: string,
+  ) {
+    const trip = this.requireTrip(tripId, user);
+    this.requireEdit(trip, user);
+    const result = await this.places.applyEnrichment(tripId, user.id, body.matches, body.lang);
+    if (result.stopped && result.processed === 0) {
+      throw new HttpException({
+        error: result.stopped.error,
+        code: result.stopped.code,
+        sku: result.stopped.sku,
+        usage: result.stopped.usage,
+      }, 429);
+    }
+    for (const place of result.updated) {
+      this.places.onUpdated(place.id);
+      this.places.broadcast(tripId, 'place:updated', { place }, socketId);
+    }
+    return result;
   }
 
   @Get(':id')

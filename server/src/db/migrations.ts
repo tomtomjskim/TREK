@@ -3626,6 +3626,21 @@ function runMigrations(db: Database.Database): void {
         );
       `);
     },
+
+    // Durable, process-independent reservations for Google Places usage. Calls
+    // reserve an attempt before network I/O, so restarts and provider failures
+    // cannot accidentally reset or refund the monthly safety budget.
+    () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS google_api_usage (
+          period TEXT NOT NULL,
+          sku TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (period, sku)
+        );
+      `);
+    },
   ];
 
   if (currentVersion < migrations.length) {

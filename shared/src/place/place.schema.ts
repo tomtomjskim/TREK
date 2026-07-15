@@ -129,6 +129,95 @@ export const placeImportListRequestSchema = z.object({
 });
 export type PlaceImportListRequest = z.infer<typeof placeImportListRequestSchema>;
 
+const placeEnrichmentLanguageSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(20)
+  .regex(/^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$/, 'Invalid language tag');
+
+export const placeEnrichmentPreviewRequestSchema = z.object({
+  place_ids: z.array(z.number().int().positive()).max(100).optional(),
+  lang: placeEnrichmentLanguageSchema.optional(),
+});
+export type PlaceEnrichmentPreviewRequest = z.infer<typeof placeEnrichmentPreviewRequestSchema>;
+
+const googlePlaceIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(256)
+  .regex(/^[A-Za-z0-9_-]+$/, 'Invalid Google place ID');
+
+export const placeEnrichmentApplyRequestSchema = z.object({
+  matches: z
+    .array(
+      z.object({
+        place_id: z.number().int().positive(),
+        google_place_id: googlePlaceIdSchema,
+      }),
+    )
+    .min(1)
+    .max(100),
+  lang: placeEnrichmentLanguageSchema.optional(),
+});
+export type PlaceEnrichmentApplyRequest = z.infer<typeof placeEnrichmentApplyRequestSchema>;
+
+export interface PlaceEnrichmentCandidate {
+  google_place_id: string;
+  google_ftid: string | null;
+  name: string;
+  address: string | null;
+  lat: number;
+  lng: number;
+  types: string[];
+  distance_meters: number;
+  confidence: 'safe' | 'review';
+}
+
+export interface PlaceEnrichmentUsage {
+  period: string;
+  timezone: string;
+  sku: string;
+  used: number;
+  cap: number;
+  remaining: number;
+  official_free_cap: number | null;
+  exhausted: boolean;
+}
+
+export interface PlaceEnrichmentStop {
+  code: string;
+  error: string;
+  sku?: string;
+  usage?: unknown;
+}
+
+export interface PlaceEnrichmentPreviewResult {
+  entries: Array<{
+    place_id: number;
+    place_name: string;
+    current_address: string | null;
+    candidates: PlaceEnrichmentCandidate[];
+  }>;
+  errors: Array<{ place_id: number; place_name: string; code: string; error: string }>;
+  requested: number;
+  processed: number;
+  skipped: number;
+  stopped: PlaceEnrichmentStop | null;
+  usage: PlaceEnrichmentUsage[];
+}
+
+export interface PlaceEnrichmentApplyResult {
+  updated: Place[];
+  errors: Array<{ place_id: number; code: string; error: string }>;
+  requested: number;
+  processed: number;
+  skipped: number;
+  stopped: PlaceEnrichmentStop | null;
+  usage: PlaceEnrichmentUsage[];
+}
+
 /** Query filters for the place list. */
 export const placeListQuerySchema = z.object({
   search: z.string().optional(),

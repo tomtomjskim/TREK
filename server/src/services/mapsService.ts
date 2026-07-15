@@ -2,12 +2,16 @@ import { db } from '../db/database';
 import { decrypt_api_key } from './apiKeyCrypto';
 import { safeFetchFollow, SsrfBlockedError } from '../utils/ssrfGuard';
 import { getAppUrl } from './notifications';
+import { reserveGoogleApiCall, type GoogleApiSku } from './googleApiUsageService';
 
 // ── Google API call counter ───────────────────────────────────────────────────
 
 let googleApiCallCount = 0;
 
-function googleFetch(endpoint: string, label: string, init?: RequestInit): Promise<Response> {
+function googleFetch(sku: GoogleApiSku, endpoint: string, label: string, init?: RequestInit): Promise<Response> {
+  // Reserve durably before network I/O. Failed provider/network calls are not
+  // refunded: conservative accounting is safer than crossing the free budget.
+  reserveGoogleApiCall(sku);
   googleApiCallCount++;
   console.debug(`[Google API] #${googleApiCallCount} ${label} → ${endpoint}`);
   const referer = process.env.APP_URL ? getAppUrl() : undefined;
@@ -627,7 +631,7 @@ export async function searchPlaces(userId: number, query: string, lang?: string,
     };
   }
 
-  const response = await googleFetch('https://places.googleapis.com/v1/places:searchText', 'searchText', {
+  const response = await googleFetch('text_search_enterprise', 'https://places.googleapis.com/v1/places:searchText', 'searchText', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -662,6 +666,69 @@ export async function searchPlaces(userId: number, query: string, lang?: string,
   return { places, source: 'google' };
 }
 
+/**
+ * Cost-lean Google candidate lookup for refresh previews. Unlike the general
+ * search endpoint this deliberately omits rating, website and phone fields, so
+ * the request stays on Text Search Pro instead of Enterprise.
+ */
+export async function searchPlaceCandidates(
+  userId: number,
+  query: string,
+  lang?: string,
+  locationBias?: { lat: number; lng: number; radius?: number },
+): Promise<{ places: Record<string, unknown>[]; source: 'google' }> {
+  const apiKey = getMapsKey(userId);
+  if (!apiKey) {
+    throw Object.assign(new Error('Google Maps API key not configured'), { status: 400 });
+  }
+
+  const searchBody: Record<string, unknown> = { textQuery: query, languageCode: toApiLang(lang) };
+  if (locationBias) {
+    searchBody.locationBias = {
+      circle: {
+        center: { latitude: locationBias.lat, longitude: locationBias.lng },
+        radius: locationBias.radius ?? 2_000,
+      },
+    };
+  }
+
+  const response = await googleFetch(
+    'text_search_pro',
+    'https://places.googleapis.com/v1/places:searchText',
+    'searchText/enrichmentPreview',
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Goog-Api-Key': apiKey,
+        'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.types,places.googleMapsUri',
+      },
+      body: JSON.stringify(searchBody),
+    },
+  );
+
+  const data = await response.json() as { places?: GooglePlaceResult[]; error?: { message?: string } };
+  if (!response.ok) {
+    const err = new Error(data.error?.message || 'Google Places API error') as Error & { status: number };
+    err.status = response.status;
+    throw err;
+  }
+
+  return {
+    source: 'google',
+    places: (data.places || []).map((place) => ({
+      google_place_id: place.id,
+      google_ftid: googleFtidFromMapsUrl(place.googleMapsUri),
+      name: place.displayName?.text || '',
+      address: place.formattedAddress || '',
+      lat: place.location?.latitude ?? null,
+      lng: place.location?.longitude ?? null,
+      types: place.types || [],
+      source: 'google',
+    })),
+  };
+}
+
 // ── Autocomplete (Google or Nominatim fallback) ─────────────────────────────
 
 export async function autocompletePlaces(
@@ -689,7 +756,7 @@ export async function autocompletePlaces(
     };
   }
 
-  const response = await googleFetch('https://places.googleapis.com/v1/places:autocomplete', 'autocomplete', {
+  const response = await googleFetch('autocomplete', 'https://places.googleapis.com/v1/places:autocomplete', 'autocomplete', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -744,7 +811,12 @@ async function autocompleteNominatim(
 
 // ── Place details (Google or OSM) ────────────────────────────────────────────
 
-export async function getPlaceDetails(userId: number, placeId: string, lang?: string): Promise<{ place: Record<string, unknown> }> {
+export async function getPlaceDetails(
+  userId: number,
+  placeId: string,
+  lang?: string,
+  refresh = false,
+): Promise<{ place: Record<string, unknown> }> {
   // OSM details: placeId is "node:123456" or "way:123456" etc.
   if (placeId.includes(':')) {
     const [osmType, osmId] = placeId.split(':');
@@ -777,12 +849,14 @@ export async function getPlaceDetails(userId: number, placeId: string, lang?: st
 
   // Check DB cache first (lean mask, expanded=0) — 7-day TTL
   const DETAILS_TTL = 7 * 24 * 60 * 60 * 1000;
-  const cached = db.prepare(
-    'SELECT payload_json, fetched_at FROM place_details_cache WHERE place_id = ? AND lang = ? AND expanded = 0'
-  ).get(placeId, langKey) as { payload_json: string; fetched_at: number } | undefined;
-  if (cached && Date.now() - cached.fetched_at < DETAILS_TTL) return { place: JSON.parse(cached.payload_json) };
+  if (!refresh) {
+    const cached = db.prepare(
+      'SELECT payload_json, fetched_at FROM place_details_cache WHERE place_id = ? AND lang = ? AND expanded = 0'
+    ).get(placeId, langKey) as { payload_json: string; fetched_at: number } | undefined;
+    if (cached && Date.now() - cached.fetched_at < DETAILS_TTL) return { place: JSON.parse(cached.payload_json) };
+  }
 
-  const response = await googleFetch(`https://places.googleapis.com/v1/places/${placeId}?languageCode=${langKey}`, `getPlaceDetails(${placeId})`, {
+  const response = await googleFetch('place_details_enterprise', `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?languageCode=${langKey}`, `getPlaceDetails(${placeId})`, {
     method: 'GET',
     headers: {
       'X-Goog-Api-Key': apiKey,
@@ -842,7 +916,7 @@ export async function getPlaceDetailsExpanded(userId: number, placeId: string, l
     if (cached) return { place: JSON.parse(cached.payload_json) };
   }
 
-  const response = await googleFetch(`https://places.googleapis.com/v1/places/${placeId}?languageCode=${langKey}`, `getPlaceDetailsExpanded(${placeId})`, {
+  const response = await googleFetch('place_details_atmosphere', `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}?languageCode=${langKey}`, `getPlaceDetailsExpanded(${placeId})`, {
     method: 'GET',
     headers: {
       'X-Goog-Api-Key': apiKey,
@@ -956,7 +1030,7 @@ export async function getPlacePhoto(
       if (!apiKey || /^https?:\/\//i.test(placeId)) return null;
 
       // Fetch details to get the photo name
-      const detailsRes = await googleFetch(`https://places.googleapis.com/v1/places/${placeId}`, `getPlacePhoto/details(${placeId})`, {
+      const detailsRes = await googleFetch('place_details_ids_only', `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, `getPlacePhoto/details(${placeId})`, {
         headers: {
           'X-Goog-Api-Key': apiKey,
           'X-Goog-FieldMask': 'photos',
@@ -978,6 +1052,7 @@ export async function getPlacePhoto(
 
       // Fetch actual image bytes
       const mediaRes = await googleFetch(
+        'place_photos',
         `https://places.googleapis.com/v1/${photoName}/media?maxHeightPx=400`,
         `getPlacePhoto/media(${placeId})`,
         { headers: { 'X-Goog-Api-Key': apiKey } }

@@ -319,6 +319,11 @@ describe('validateKeys', () => {
     const result = await validateKeys(user.id);
     expect(result.maps).toBe(true);
     expect(result.maps_details?.ok).toBe(true);
+    const request = fetchSpy.mock.calls[0]?.[1] as RequestInit;
+    expect((request.headers as Record<string, string>)['X-Goog-FieldMask']).toBe('places.id');
+    expect(testDb.prepare(
+      "SELECT attempts FROM google_api_usage WHERE sku = 'text_search_ids_only'",
+    ).get()).toEqual({ attempts: 1 });
 
     fetchSpy.mockRestore();
   });

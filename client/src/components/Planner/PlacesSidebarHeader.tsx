@@ -1,4 +1,4 @@
-import { Search, Plus, X, Upload, ChevronDown, Check, MapPin } from 'lucide-react'
+import { Search, Plus, X, Upload, ChevronDown, Check, MapPin, RefreshCw } from 'lucide-react'
 import { getCategoryIcon } from '../shared/categoryIcons'
 import Tooltip from '../shared/Tooltip'
 import type { SidebarState } from './usePlacesSidebar'
@@ -21,7 +21,8 @@ export function PlacesDropOverlay({ t }: SidebarState) {
 
 export function PlacesHeader(S: SidebarState) {
   const {
-    canEditPlaces, onAddPlace, t, setFileImportOpen, setListImportOpen, hasMultipleListImportProviders,
+    canEditPlaces, onAddPlace, t, setFileImportOpen, setListImportOpen, setEnrichmentOpen,
+    hasMultipleListImportProviders, canEnrichImport,
     places, categories, categoryFilters, search, setSearch, plannedIds, hasTracks,
     filter, setFilter, onPlacesFilterChange, setSelectedIds, selectMode, setSelectMode,
     catDropOpen, setCatDropOpen, toggleCategoryFilter, setCategoryFiltersLocal, onCategoryFilterChange,
@@ -66,6 +67,24 @@ export function PlacesHeader(S: SidebarState) {
         >
           <MapPin size={11} strokeWidth={2} /> {t(hasMultipleListImportProviders ? 'places.importList' : 'places.importGoogleList')}
         </button>
+        {canEnrichImport && (
+          <button
+            onClick={() => setEnrichmentOpen(true)}
+            aria-label={t('places.enrichmentAction')}
+            className="border border-dashed border-edge text-content-faint"
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+              flex: 1, minWidth: 0, padding: '5px 8px', borderRadius: 8,
+              background: 'none', fontSize: 'calc(11px * var(--fs-scale-caption, 1))', fontWeight: 500,
+              cursor: 'pointer', fontFamily: 'inherit',
+            }}
+          >
+            <RefreshCw size={11} strokeWidth={2} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {t('places.enrichmentAction')}
+            </span>
+          </button>
+        )}
       </div>
       <div className="bg-edge" style={{ height: 1, margin: '2px 0 10px' }} />
       </>}

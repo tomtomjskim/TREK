@@ -56,6 +56,14 @@ vi.mock('../../src/services/placeService', async (importOriginal) => {
     searchPlaceImage: vi.fn(),
   };
 });
+vi.mock('../../src/services/placeEnrichment', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/services/placeEnrichment')>();
+  return {
+    ...actual,
+    previewTripPlaceEnrichment: vi.fn(),
+    applyTripPlaceEnrichment: vi.fn(),
+  };
+});
 
 import { buildApp } from '../../src/bootstrap';
 import { createTables } from '../../src/db/schema';
@@ -64,6 +72,7 @@ import { resetTestDb, resetRateLimits } from '../helpers/test-db';
 import { createUser, createAdmin, createTrip, createPlace, addTripMember } from '../helpers/factories';
 import { authCookie } from '../helpers/auth';
 import * as placeService from '../../src/services/placeService';
+import * as placeEnrichment from '../../src/services/placeEnrichment';
 import { invalidatePermissionsCache } from '../../src/services/permissions';
 
 let nestApp: INestApplication;
@@ -85,6 +94,8 @@ beforeEach(() => {
   resetTestDb(testDb);
   resetRateLimits(nestApp);
   invalidatePermissionsCache();
+  vi.mocked(placeEnrichment.previewTripPlaceEnrichment).mockReset();
+  vi.mocked(placeEnrichment.applyTripPlaceEnrichment).mockReset();
 });
 
 afterAll(async () => {
@@ -220,6 +231,75 @@ describe('List places', () => {
     expect(res.status).toBe(200);
     expect(res.body.places).toHaveLength(2);
     expect(res.body.places.every((p: any) => p.category?.id === cats[0].id)).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Preview-first Google enrichment
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Place enrichment', () => {
+  it('PLACE-ENRICH-001 — preview requires trip access before provider work', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: outsider } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/places/enrichment/preview`)
+      .set('Cookie', authCookie(outsider.id))
+      .send({});
+
+    expect(res.status).toBe(404);
+    expect(placeEnrichment.previewTripPlaceEnrichment).not.toHaveBeenCalled();
+  });
+
+  it('PLACE-ENRICH-002 — preview forwards a validated batch and returns usage', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const payload = { entries: [], errors: [], requested: 0, processed: 0, skipped: 0, stopped: null, usage: [] };
+    vi.mocked(placeEnrichment.previewTripPlaceEnrichment).mockResolvedValueOnce(payload);
+
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/places/enrichment/preview`)
+      .set('Cookie', authCookie(user.id))
+      .send({ place_ids: [1, 2], lang: 'ko' });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(payload);
+    expect(placeEnrichment.previewTripPlaceEnrichment).toHaveBeenCalledWith(
+      String(trip.id), user.id, { place_ids: [1, 2], lang: 'ko' },
+    );
+  });
+
+  it('PLACE-ENRICH-003 — apply rejects malformed Google IDs before provider work', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/places/enrichment/apply`)
+      .set('Cookie', authCookie(user.id))
+      .send({ matches: [{ place_id: 1, google_place_id: '../../bad?key=x' }] });
+
+    expect(res.status).toBe(400);
+    expect(placeEnrichment.applyTripPlaceEnrichment).not.toHaveBeenCalled();
+  });
+
+  it('PLACE-ENRICH-004 — apply maps a no-progress hard stop to 429', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    vi.mocked(placeEnrichment.applyTripPlaceEnrichment).mockResolvedValueOnce({
+      updated: [], errors: [], requested: 1, processed: 0, skipped: 0,
+      stopped: { code: 'GOOGLE_API_MONTHLY_CAP_REACHED', error: 'cap reached', sku: 'place_details_enterprise' },
+      usage: [],
+    });
+
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/places/enrichment/apply`)
+      .set('Cookie', authCookie(user.id))
+      .send({ matches: [{ place_id: 1, google_place_id: 'ChIJValid_123' }] });
+
+    expect(res.status).toBe(429);
+    expect(res.body).toMatchObject({ error: 'cap reached', code: 'GOOGLE_API_MONTHLY_CAP_REACHED' });
   });
 });
 

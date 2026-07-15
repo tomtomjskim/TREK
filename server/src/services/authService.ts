@@ -25,6 +25,7 @@ import { DEMO_EMAIL_PRIMARY, isDemoEmail } from './demo';
 import { avatarUrl } from './avatarUrl';
 import { joinTripAsMember } from './tripMembership';
 import { isPasskeyConfigured } from './webauthnConfig';
+import { reserveGoogleApiCall } from './googleApiUsageService';
 
 export { avatarUrl };
 
@@ -785,6 +786,7 @@ export async function validateKeys(userId: number): Promise<{ error?: string; st
   const maps_api_key = decrypt_api_key(user.maps_api_key);
   if (maps_api_key) {
     try {
+      reserveGoogleApiCall('text_search_ids_only');
       const mapsRes = await fetch(
         `https://places.googleapis.com/v1/places:searchText`,
         {
@@ -792,7 +794,7 @@ export async function validateKeys(userId: number): Promise<{ error?: string; st
           headers: {
             'Content-Type': 'application/json',
             'X-Goog-Api-Key': maps_api_key,
-            'X-Goog-FieldMask': 'places.displayName',
+            'X-Goog-FieldMask': 'places.id',
           },
           body: JSON.stringify({ textQuery: 'test' }),
         }
