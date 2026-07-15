@@ -152,6 +152,9 @@ case "\${1:-}" in
     printf '%s\n' '--- docker run ---' "$@" >> '${dockerLog}'
     [ "\${TREK_FAKE_DOCKER_FAIL:-0}" != 1 ] || exit 42
     case " $* " in
+      *trek-android-build-sign-*)
+        [ "\${TREK_FAKE_SIGN_FAIL:-0}" != 1 ] || exit 44
+        ;;
       *trek-android-build-aab-verify-*)
         [ "\${TREK_FAKE_AAB_VERIFY_FAIL:-0}" != 1 ] || exit 43
         printf '%s\n' 'jar verified.'
@@ -211,6 +214,34 @@ function run(action, record, env, extra = {}) {
 
 test("controller pins the isolated amd64 Gradle build and secret-safe mounts", async () => {
   const source = await readFile(scriptPath, "utf8");
+  const buildRunStart = source.indexOf('--name "trek-android-build-$$"');
+  const signingRunStart = source.indexOf('--name "trek-android-build-sign-$$"');
+  const aabVerifyRunStart = source.indexOf(
+    '--name "trek-android-build-aab-verify-$$"',
+  );
+
+  assert.ok(
+    buildRunStart >= 0,
+    "the unsigned Gradle build container is missing",
+  );
+  assert.ok(
+    signingRunStart > buildRunStart,
+    "signing must run after the unsigned Gradle build",
+  );
+  assert.ok(
+    aabVerifyRunStart > signingRunStart,
+    "AAB verification must run after signing",
+  );
+
+  const unsignedBuildRun = source.slice(buildRunStart, signingRunStart);
+  const signingRun = source.slice(signingRunStart, aabVerifyRunStart);
+  assert.doesNotMatch(
+    unsignedBuildRun,
+    /SIGNING_ROOT|trek-release[.]keystore|keystore[.]password/,
+    "Gradle must not receive release signing material",
+  );
+  assert.match(signingRun, /--network none/);
+  assert.match(signingRun, /SIGNING_ROOT/);
   assert.match(
     source,
     new RegExp(image.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
@@ -262,6 +293,15 @@ test("controller pins the isolated amd64 Gradle build and secret-safe mounts", a
     source,
     /--key-pass file:\/tmp\/trek-keystore[.]password/,
     "apksigner must open the one-line password through a second bind path",
+  );
+});
+
+test("containers retain write access to the owner-only host build record", async () => {
+  const source = await readFile(scriptPath, "utf8");
+  assert.doesNotMatch(
+    source,
+    /--cap-drop ALL/,
+    "container root needs DAC override for the host-UID-owned record mount",
   );
 });
 
@@ -366,6 +406,23 @@ test("failed build removes its temporary binfmt registration and publishes no su
       TREK_FAKE_DOCKER_FAIL: "1",
     });
     assert.notEqual(result.status, 0);
+    await assert.rejects(stat(join(f.binfmt, "qemu-x86_64")), /ENOENT/);
+    await assert.rejects(readFile(join(record, "build.json")), /ENOENT/);
+  } finally {
+    await rm(f.root, { recursive: true, force: true });
+  }
+});
+
+test("failed isolated signing removes binfmt and publishes no success record", async () => {
+  const f = await fixture();
+  try {
+    const record = join(f.records, "change-1");
+    const result = run("build", record, f.env, {
+      TREK_ANDROID_CONFIRM_BUILD: "build-trek-android-release",
+      TREK_FAKE_SIGN_FAIL: "1",
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /isolated signing verification failed/);
     await assert.rejects(stat(join(f.binfmt, "qemu-x86_64")), /ENOENT/);
     await assert.rejects(readFile(join(record, "build.json")), /ENOENT/);
   } finally {

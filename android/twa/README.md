@@ -70,11 +70,13 @@ uses the digest-pinned Bubblewrap image as an isolated JDK/Android SDK build
 environment, and removes a registration that it created. License and build
 actions hold an exclusive lock under the owner-only cache so concurrent jobs
 cannot remove each other's host-wide binfmt registration. The controller mounts
-only the keystore and password files it needs, each read-only; the one-line
-password file is exposed through separate container paths for the keystore and
-key password readers. Each build writes to a new mode `0700` record under the
-block-volume cache. A successful record has a mode `0600` `build.json` with
-`published=false`; publishing is deliberately a separate reviewed operation.
+no signing material into the network-enabled Gradle container. A second
+network-disabled container mounts only the keystore and password files it
+needs, each read-only; the one-line password file is exposed through separate
+container paths for the keystore and key password readers. Each build writes to
+a new mode `0700` record under the block-volume cache. A successful record has
+a mode `0600` `build.json` with `published=false`; publishing is deliberately a
+separate reviewed operation.
 
 Before publishing, verify all of the following:
 

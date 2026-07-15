@@ -38,10 +38,11 @@ must be treated as separate concerns.
 - Android SDK and Gradle caches remain under the OCI build-cache volume.
 - SDK license acceptance is a separate confirmation-gated action. Build never
   accepts legal terms implicitly.
-- Only the keystore and password files are mounted read-only. The same one-line
-  password file is exposed through distinct container paths so keystore and key
-  readers get independent streams without putting the value in an argument,
-  environment variable, log, Git, or release evidence.
+- The network-enabled Gradle container receives no signing material. A separate
+  `--network none` signer mounts only the keystore and password files read-only.
+  The same one-line password file is exposed through distinct container paths
+  so keystore and key readers get independent streams without putting the value
+  in an argument, environment variable, log, Git, or release evidence.
 - Mutating actions hold an exclusive cache-local lock for the entire QEMU,
   Docker, signing, and cleanup interval.
 - Every build uses a new owner-only record directory. It cannot publish to the
@@ -62,8 +63,9 @@ database, runtime container, or production data rollback is involved.
 
 ## Evidence
 
-- RED/GREEN tests for confirmation gates, path confinement, QEMU cleanup, and
-  secret-safe Docker arguments.
+- RED/GREEN tests for confirmation gates, path confinement, QEMU cleanup,
+  Gradle/signing isolation, signing failure cleanup, and secret-safe Docker
+  arguments.
 - Source verifier and full TREK tests.
 - One isolated build from a clean record with final APK/AAB verification.
 - No remaining build container or temporary binfmt registration.

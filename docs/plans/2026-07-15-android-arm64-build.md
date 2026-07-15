@@ -55,8 +55,9 @@
    absence before registering binfmt.
 3. Acquire the cache-local controller lock, register only the pinned QEMU
    interpreter, and remove only a registration the controller created.
-4. Run Gradle, align/sign the APK, sign the AAB, verify both, and publish them
-   only into a new owner-only build record.
+4. Run Gradle without signing material, then align/sign the APK and sign the AAB
+   in a separate network-disabled container. Verify both and publish them only
+   into a new owner-only build record.
 5. Run focused tests and `bash -n` until GREEN.
 
 ### Task 4: Rebuild And Close Out

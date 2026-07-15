@@ -256,6 +256,19 @@ mkdir -p "$output"
 "$build_tools/zipalign" -p -f 4 \
   app/build/outputs/apk/release/app-release-unsigned.apk \
   "$output/app-release-unsigned-aligned.apk"
+cp app/build/outputs/bundle/release/app-release.aab "$output/app-release-unsigned.aab"
+chmod 0600 "$output/app-release-unsigned-aligned.apk" "$output/app-release-unsigned.aab" /work/build.log
+chown -R "$HOST_UID:$HOST_GID" "$output" /work/build.log
+rm -rf -- "$project"
+CONTAINER_SCRIPT
+)
+
+signing_container_script=$(cat <<'CONTAINER_SCRIPT'
+set -Eeuo pipefail
+
+output=/work/output
+build_tools=/root/.bubblewrap/android_sdk/build-tools/35.0.0
+
 "$build_tools/apksigner" sign \
   --ks /tmp/trek-release.keystore \
   --ks-key-alias trek \
@@ -264,7 +277,7 @@ mkdir -p "$output"
   --v4-signing-enabled false \
   --out "$output/app-release-signed.apk" \
   "$output/app-release-unsigned-aligned.apk"
-cp app/build/outputs/bundle/release/app-release.aab "$output/app-release-bundle.aab"
+cp "$output/app-release-unsigned.aab" "$output/app-release-bundle.aab"
 jarsigner \
   -keystore /tmp/trek-release.keystore \
   -storepass:file /tmp/trek-keystore.password \
@@ -291,7 +304,10 @@ if printf '%s\n' "$permissions" | grep -Eq "^uses-permission[^:]*: name='android
   exit 1
 fi
 
-rm -f "$output/app-release-unsigned-aligned.apk" "$output/app-release-signed.apk.idsig"
+rm -f \
+  "$output/app-release-unsigned-aligned.apk" \
+  "$output/app-release-unsigned.aab" \
+  "$output/app-release-signed.apk.idsig"
 printf '%s\n' \
   'package=com.jsnetworkcorp.trek' \
   'version_name=3.3.0' \
@@ -305,9 +321,8 @@ printf '%s\n' \
   'apk_signature_v3=pass' \
   'certificate_binding=pass' > "$output/verification.txt"
 chmod 0600 "$output/app-release-signed.apk" "$output/app-release-bundle.aab" "$output/verification.txt" \
-  /work/build.log /work/jarsigner.log
-chown -R "$HOST_UID:$HOST_GID" "$output" /work/build.log /work/jarsigner.log
-rm -rf -- "$project"
+  /work/jarsigner.log
+chown -R "$HOST_UID:$HOST_GID" "$output" /work/jarsigner.log
 CONTAINER_SCRIPT
 )
 
@@ -354,23 +369,40 @@ build_release() {
   docker run --rm \
     --name "trek-android-build-$$" \
     --platform linux/amd64 \
+    --security-opt no-new-privileges \
     --mount "type=bind,src=$SOURCE,dst=/source,readonly" \
     --mount "type=bind,src=$record,dst=/work" \
     --mount "type=bind,src=$BUBBLEWRAP_HOME,dst=/root/.bubblewrap,readonly" \
     --mount "type=bind,src=$GRADLE_HOME,dst=/root/.gradle" \
-    --mount "type=bind,src=$SIGNING_ROOT/trek-release.keystore,dst=/tmp/trek-release.keystore,readonly" \
-    --mount "type=bind,src=$SIGNING_ROOT/keystore.password,dst=/tmp/trek-keystore.password,readonly" \
-    --mount "type=bind,src=$SIGNING_ROOT/keystore.password,dst=/tmp/trek-key.password,readonly" \
     --env "ANDROID_HOME=/root/.bubblewrap/android_sdk" \
     --env "GRADLE_USER_HOME=/root/.gradle" \
     --env "HOST_UID=$host_uid" \
     --env "HOST_GID=$host_gid" \
     --entrypoint /bin/bash \
-    "$IMAGE" -lc "$build_container_script" || fail 'isolated Gradle build or signing verification failed'
+    "$IMAGE" -lc "$build_container_script" || fail 'isolated unsigned Gradle build failed'
+
+  docker run --rm \
+    --name "trek-android-build-sign-$$" \
+    --platform linux/amd64 \
+    --network none \
+    --security-opt no-new-privileges \
+    --mount "type=bind,src=$SOURCE/twa-manifest.json,dst=/source/twa-manifest.json,readonly" \
+    --mount "type=bind,src=$record,dst=/work" \
+    --mount "type=bind,src=$BUBBLEWRAP_HOME,dst=/root/.bubblewrap,readonly" \
+    --mount "type=bind,src=$SIGNING_ROOT/trek-release.keystore,dst=/tmp/trek-release.keystore,readonly" \
+    --mount "type=bind,src=$SIGNING_ROOT/keystore.password,dst=/tmp/trek-keystore.password,readonly" \
+    --mount "type=bind,src=$SIGNING_ROOT/keystore.password,dst=/tmp/trek-key.password,readonly" \
+    --env "ANDROID_HOME=/root/.bubblewrap/android_sdk" \
+    --env "HOST_UID=$host_uid" \
+    --env "HOST_GID=$host_gid" \
+    --entrypoint /bin/bash \
+    "$IMAGE" -lc "$signing_container_script" || fail 'isolated signing verification failed'
 
   docker run --rm \
     --name "trek-android-build-aab-verify-$$" \
     --platform linux/amd64 \
+    --network none \
+    --security-opt no-new-privileges \
     --mount "type=bind,src=$record/output,dst=/output,readonly" \
     --entrypoint /bin/bash \
     "$IMAGE" -lc 'exec jarsigner -verify /output/app-release-bundle.aab' \
