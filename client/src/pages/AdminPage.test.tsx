@@ -1406,4 +1406,53 @@ describe('AdminPage', () => {
       expect((clientIdInput as HTMLInputElement).value).toBe('my-client-id');
     });
   });
+
+  describe('FE-PAGE-ADMIN-054: Place enrichment safety switch', () => {
+    it('updates the server policy and current client policy together', async () => {
+      let capturedBody: Record<string, unknown> | null = null;
+      server.use(
+        http.get('/api/admin/places-enrichment', () => HttpResponse.json({ enabled: true })),
+        http.put('/api/admin/places-enrichment', async ({ request }) => {
+          capturedBody = (await request.json()) as Record<string, unknown>;
+          return HttpResponse.json({ enabled: false });
+        }),
+      );
+
+      seedStore(useAuthStore, { isAuthenticated: true, user: buildAdmin(), placesEnrichmentEnabled: true });
+      render(<AdminPage />);
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /^users$/i })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /settings/i }));
+
+      const toggle = await screen.findByRole('button', { name: /place detail refresh & import enrichment/i });
+      expect(toggle).toHaveAttribute('aria-pressed', 'true');
+      fireEvent.click(toggle);
+
+      await waitFor(() => {
+        expect(capturedBody).toEqual({ enabled: false });
+        expect(toggle).toHaveAttribute('aria-pressed', 'false');
+        expect(useAuthStore.getState().placesEnrichmentEnabled).toBe(false);
+      });
+    });
+
+    it('rolls the local policy back when the server update fails', async () => {
+      server.use(
+        http.get('/api/admin/places-enrichment', () => HttpResponse.json({ enabled: true })),
+        http.put('/api/admin/places-enrichment', () => HttpResponse.json({ error: 'failed' }, { status: 500 })),
+      );
+
+      seedStore(useAuthStore, { isAuthenticated: true, user: buildAdmin(), placesEnrichmentEnabled: true });
+      render(<AdminPage />);
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /^users$/i })).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: /settings/i }));
+      const toggle = await screen.findByRole('button', { name: /place detail refresh & import enrichment/i });
+      fireEvent.click(toggle);
+
+      await waitFor(() => {
+        expect(toggle).toHaveAttribute('aria-pressed', 'true');
+        expect(useAuthStore.getState().placesEnrichmentEnabled).toBe(true);
+      });
+    });
+  });
 });

@@ -578,7 +578,7 @@ describe('Google Maps list import', () => {
 
 describe('Place detail refresh', () => {
   beforeEach(() => {
-    seedStore(useAuthStore, { hasMapsKey: true });
+    seedStore(useAuthStore, { hasMapsKey: true, placesEnrichmentEnabled: true });
   });
 
   it('FE-PLANNER-ENRICH-001: action is key-gated and opens the cost-aware dialog', async () => {
@@ -595,6 +595,12 @@ describe('Place detail refresh', () => {
 
   it('FE-PLANNER-ENRICH-002: action stays hidden when no Maps key is configured', () => {
     seedStore(useAuthStore, { hasMapsKey: false });
+    render(<PlacesSidebar {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: /Refresh details/i })).not.toBeInTheDocument();
+  });
+
+  it('FE-PLANNER-ENRICH-002a: action stays hidden when an administrator disables enrichment', () => {
+    seedStore(useAuthStore, { placesEnrichmentEnabled: false });
     render(<PlacesSidebar {...defaultProps} />);
     expect(screen.queryByRole('button', { name: /Refresh details/i })).not.toBeInTheDocument();
   });

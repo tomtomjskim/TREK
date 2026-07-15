@@ -56,8 +56,9 @@ export function usePlacesSidebar(props: PlacesSidebarProps) {
   const can = useCanDo()
   const canEditPlaces = can('place_edit', trip)
   const collectionsEnabled = useAddonStore((s) => s.isEnabled('collections'))
-  // Places-API enrichment (#886) needs a Google Maps key; gate the toggle on it.
-  const canEnrichImport = useAuthStore((s) => s.hasMapsKey)
+  // Places-API enrichment (#886) needs a Google Maps key and remains subject to
+  // the instance-wide operator switch. The server enforces the same policy.
+  const canEnrichImport = useAuthStore((s) => s.hasMapsKey && s.placesEnrichmentEnabled)
   const isNaverListImportEnabled = true
 
   const [fileImportOpen, setFileImportOpen] = useState(false)

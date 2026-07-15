@@ -44,6 +44,7 @@ interface AuthState {
   placesPhotosEnabled: boolean
   placesAutocompleteEnabled: boolean
   placesDetailsEnabled: boolean
+  placesEnrichmentEnabled: boolean
 
   login: (email: string, password: string, rememberMe?: boolean) => Promise<LoginResult>
   completeMfaLogin: (mfaToken: string, code: string, rememberMe?: boolean) => Promise<AuthResponse>
@@ -67,6 +68,7 @@ interface AuthState {
   setPlacesPhotosEnabled: (val: boolean) => void
   setPlacesAutocompleteEnabled: (val: boolean) => void
   setPlacesDetailsEnabled: (val: boolean) => void
+  setPlacesEnrichmentEnabled: (val: boolean) => void
   demoLogin: () => Promise<AuthResponse>
 }
 
@@ -105,6 +107,7 @@ export const useAuthStore = create<AuthState>()(
   placesPhotosEnabled: true,
   placesAutocompleteEnabled: true,
   placesDetailsEnabled: true,
+  placesEnrichmentEnabled: true,
 
   login: async (email: string, password: string, rememberMe?: boolean) => {
     authSequence++
@@ -319,6 +322,7 @@ export const useAuthStore = create<AuthState>()(
   setPlacesPhotosEnabled: (val: boolean) => set({ placesPhotosEnabled: val }),
   setPlacesAutocompleteEnabled: (val: boolean) => set({ placesAutocompleteEnabled: val }),
   setPlacesDetailsEnabled: (val: boolean) => set({ placesDetailsEnabled: val }),
+  setPlacesEnrichmentEnabled: (val: boolean) => set({ placesEnrichmentEnabled: val }),
 
   demoLogin: async () => {
     authSequence++

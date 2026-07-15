@@ -76,6 +76,19 @@ export const adminHandlers = [
     return HttpResponse.json({ enabled: body.enabled });
   }),
 
+  http.get('/api/admin/places-enrichment', () => {
+    return HttpResponse.json({ enabled: true });
+  }),
+
+  http.put('/api/admin/places-enrichment', async ({ request }) => {
+    const body = await request.json() as Record<string, unknown>;
+    return HttpResponse.json({ enabled: body.enabled });
+  }),
+
+  http.get('/api/admin/google-api-usage', () => {
+    return HttpResponse.json({ usage: [] });
+  }),
+
   http.get('/api/admin/addons', () => {
     return HttpResponse.json({ addons: [] });
   }),

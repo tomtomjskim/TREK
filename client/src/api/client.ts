@@ -488,6 +488,27 @@ export const categoriesApi = {
   delete: (id: number) => apiClient.delete(`/categories/${id}`).then(r => r.data),
 }
 
+export type GoogleApiSku =
+  | 'autocomplete'
+  | 'text_search_ids_only'
+  | 'text_search_pro'
+  | 'text_search_enterprise'
+  | 'place_details_ids_only'
+  | 'place_details_enterprise'
+  | 'place_details_atmosphere'
+  | 'place_photos'
+
+export interface GoogleApiUsage {
+  period: string
+  timezone: string
+  sku: GoogleApiSku
+  used: number
+  cap: number
+  remaining: number
+  official_free_cap: number | null
+  exhausted: boolean
+}
+
 export const adminApi = {
   users: () => apiClient.get('/admin/users').then(r => r.data),
   createUser: (data: Record<string, unknown>) => apiClient.post('/admin/users', data).then(r => r.data),
@@ -567,6 +588,9 @@ export const adminApi = {
   updatePlacesAutocomplete: (enabled: boolean) => apiClient.put('/admin/places-autocomplete', { enabled }).then(r => r.data),
   getPlacesDetails: () => apiClient.get('/admin/places-details').then(r => r.data),
   updatePlacesDetails: (enabled: boolean) => apiClient.put('/admin/places-details', { enabled }).then(r => r.data),
+  getPlacesEnrichment: (): Promise<{ enabled: boolean }> => apiClient.get('/admin/places-enrichment').then(r => r.data),
+  updatePlacesEnrichment: (enabled: boolean): Promise<{ enabled: boolean }> => apiClient.put('/admin/places-enrichment', { enabled }).then(r => r.data),
+  getGoogleApiUsage: (): Promise<{ usage: GoogleApiUsage[] }> => apiClient.get('/admin/google-api-usage').then(r => r.data),
   getCollabFeatures: () => apiClient.get('/admin/collab-features').then(r => r.data),
   updateCollabFeatures: (features: Record<string, boolean>) => apiClient.put('/admin/collab-features', features).then(r => r.data),
   packingTemplates: () => apiClient.get('/admin/packing-templates').then(r => r.data),

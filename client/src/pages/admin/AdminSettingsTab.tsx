@@ -4,6 +4,7 @@ import { getApiErrorMessage } from '../../types'
 import { Eye, EyeOff, Save, CheckCircle, XCircle, Loader2, Sun, RefreshCw, AlertTriangle } from 'lucide-react'
 import type { TranslationFn } from '../../types'
 import type { useAdmin } from './useAdmin'
+import GoogleApiUsagePanel from '../../components/Admin/GoogleApiUsagePanel'
 
 interface AdminSettingsTabProps {
   admin: ReturnType<typeof useAdmin>
@@ -15,10 +16,11 @@ interface AdminSettingsTabProps {
 export default function AdminSettingsTab({ admin, t }: AdminSettingsTabProps): React.ReactElement {
   const {
     toast,
-    setPlacesPhotosEnabled, setPlacesAutocompleteEnabled, setPlacesDetailsEnabled,
+    setPlacesPhotosEnabled, setPlacesAutocompleteEnabled, setPlacesDetailsEnabled, setPlacesEnrichmentEnabled,
     placesPhotosEnabled, setPlacesPhotosEnabledState,
     placesAutocompleteEnabled, setPlacesAutocompleteEnabledState,
     placesDetailsEnabled, setPlacesDetailsEnabledState,
+    placesEnrichmentEnabled, setPlacesEnrichmentEnabledState,
     oidcConfig, setOidcConfig, savingOidc, setSavingOidc,
     passwordLogin, setPasswordLogin, passwordRegistration, setPasswordRegistration,
     oidcLogin, setOidcLogin, oidcRegistration, setOidcRegistration,
@@ -385,6 +387,34 @@ export default function AdminSettingsTab({ admin, t }: AdminSettingsTabProps): R
             </button>
           </div>
 
+          {/* Batch Place Enrichment Toggle */}
+          <div className="flex items-center justify-between gap-4 py-3 border-t border-slate-100">
+            <div>
+              <p className="text-sm font-medium text-slate-700">{t('admin.placesEnrichment.title')}</p>
+              <p className="text-xs text-slate-400 mt-0.5">{t('admin.placesEnrichment.subtitle')}</p>
+            </div>
+            <button
+              type="button"
+              aria-label={t('admin.placesEnrichment.title')}
+              aria-pressed={placesEnrichmentEnabled}
+              onClick={async () => {
+                const next = !placesEnrichmentEnabled
+                setPlacesEnrichmentEnabledState(next)
+                setPlacesEnrichmentEnabled(next)
+                try {
+                  await adminApi.updatePlacesEnrichment(next)
+                } catch {
+                  setPlacesEnrichmentEnabledState(!next)
+                  setPlacesEnrichmentEnabled(!next)
+                  toast.error(t('common.error'))
+                }
+              }}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 items-center rounded-full transition-colors ${placesEnrichmentEnabled ? 'bg-content' : 'bg-edge'}`}
+            >
+              <span className="absolute left-0.5 h-5 w-5 rounded-full bg-white transition-transform duration-200" style={{ transform: placesEnrichmentEnabled ? 'translateX(20px)' : 'translateX(0)' }} />
+            </button>
+          </div>
+
           {/* Open-Meteo Weather Info */}
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/30 dark:border-emerald-800 overflow-hidden">
             <div className="px-4 py-3 flex items-center justify-between">
@@ -426,6 +456,8 @@ export default function AdminSettingsTab({ admin, t }: AdminSettingsTabProps): R
           </button>
         </div>
       </div>
+
+      <GoogleApiUsagePanel />
 
       {/* OIDC / SSO Configuration */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">

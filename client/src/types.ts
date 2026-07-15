@@ -239,6 +239,10 @@ export interface AppConfig {
   oidc_login?: boolean
   oidc_registration?: boolean
   env_override_oidc_only?: boolean
+  places_photos_enabled?: boolean
+  places_autocomplete_enabled?: boolean
+  places_details_enabled?: boolean
+  places_enrichment_enabled?: boolean
 }
 
 // Translation function type
