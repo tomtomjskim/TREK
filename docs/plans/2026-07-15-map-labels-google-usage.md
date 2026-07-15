@@ -13,6 +13,7 @@
 ### Task 1: Add the MapLibre localization contract
 
 **Files:**
+
 - Modify: `client/src/components/Map/glProviders.ts`
 - Modify: `client/src/components/Map/glProviders.test.ts`
 - Modify: `client/src/types.ts`
@@ -26,6 +27,7 @@
 ### Task 2: Wire both GL maps and the settings UI
 
 **Files:**
+
 - Modify: `client/src/components/Map/MapViewGL.tsx`
 - Modify: `client/src/components/Map/JourneyMapGL.tsx`
 - Modify: `client/src/components/Settings/MapSettingsTab.tsx`
@@ -43,6 +45,7 @@
 ### Task 3: Expose protected local usage and enrichment control APIs
 
 **Files:**
+
 - Modify: `server/src/nest/admin/admin.controller.ts`
 - Modify: `server/src/nest/admin/admin.service.ts`
 - Modify: `server/src/services/adminService.ts`
@@ -62,6 +65,7 @@
 ### Task 4: Add the admin usage panel and switch wiring
 
 **Files:**
+
 - Create: `client/src/components/Admin/GoogleApiUsagePanel.tsx`
 - Create: `client/src/components/Admin/GoogleApiUsagePanel.test.tsx`
 - Modify: `client/src/pages/admin/AdminSettingsTab.tsx`
@@ -82,6 +86,7 @@
 ### Task 5: Verify, review, deploy, and document
 
 **Files:**
+
 - Modify: generated TREK deployment/operations wiki documentation
 - Modify: deployment Compose override only after backup and image verification
 

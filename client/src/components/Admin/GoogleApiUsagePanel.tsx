@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, Gauge, Loader2, RefreshCw } from 'lucide-react'
-import { adminApi, type GoogleApiSku, type GoogleApiUsage } from '../../api/client'
-import { useTranslation } from '../../i18n'
+import { AlertTriangle, Gauge, Loader2, RefreshCw } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { adminApi, type GoogleApiSku, type GoogleApiUsage } from '../../api/client';
+import { useTranslation } from '../../i18n';
 
 const SKU_LABEL_KEYS: Record<GoogleApiSku, string> = {
   autocomplete: 'admin.googleUsage.sku.autocomplete',
@@ -12,41 +12,48 @@ const SKU_LABEL_KEYS: Record<GoogleApiSku, string> = {
   place_details_enterprise: 'admin.googleUsage.sku.placeDetailsEnterprise',
   place_details_atmosphere: 'admin.googleUsage.sku.placeDetailsAtmosphere',
   place_photos: 'admin.googleUsage.sku.placePhotos',
-}
+};
 
 export default function GoogleApiUsagePanel() {
-  const { t, locale } = useTranslation()
-  const [usage, setUsage] = useState<GoogleApiUsage[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(false)
-  const numberFormat = useMemo(() => new Intl.NumberFormat(locale), [locale])
+  const { t, locale } = useTranslation();
+  const [usage, setUsage] = useState<GoogleApiUsage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const numberFormat = useMemo(() => new Intl.NumberFormat(locale), [locale]);
 
   const load = useCallback(async () => {
-    setLoading(true)
-    setError(false)
+    setLoading(true);
+    setError(false);
     try {
-      const data = await adminApi.getGoogleApiUsage()
-      setUsage(Array.isArray(data.usage) ? data.usage : [])
+      const data = await adminApi.getGoogleApiUsage();
+      setUsage(Array.isArray(data.usage) ? data.usage : []);
     } catch {
-      setError(true)
+      setError(true);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
-  }, [])
+  }, []);
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    void load();
+  }, [load]);
 
-  const period = usage[0]
+  const period = usage[0];
 
   return (
-    <section className="rounded-xl border border-edge bg-surface-card overflow-hidden" aria-labelledby="google-api-usage-title">
-      <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-edge">
+    <section
+      className="overflow-hidden rounded-xl border border-edge bg-surface-card"
+      aria-labelledby="google-api-usage-title"
+    >
+      <div className="flex items-start justify-between gap-4 border-b border-edge px-6 py-4">
         <div className="flex items-start gap-3">
           <span className="mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-surface-secondary text-content-secondary">
             <Gauge className="h-4 w-4" aria-hidden="true" />
           </span>
           <div>
-            <h2 id="google-api-usage-title" className="font-semibold text-content">{t('admin.googleUsage.title')}</h2>
+            <h2 id="google-api-usage-title" className="font-semibold text-content">
+              {t('admin.googleUsage.title')}
+            </h2>
             <p className="mt-1 text-xs leading-relaxed text-content-faint">{t('admin.googleUsage.scope')}</p>
           </div>
         </div>
@@ -63,7 +70,11 @@ export default function GoogleApiUsagePanel() {
       </div>
 
       {loading && usage.length === 0 ? (
-        <div className="flex items-center justify-center gap-2 px-6 py-12 text-sm text-content-faint" role="status" aria-label={t('admin.googleUsage.loading')}>
+        <div
+          className="flex items-center justify-center gap-2 px-6 py-12 text-sm text-content-faint"
+          role="status"
+          aria-label={t('admin.googleUsage.loading')}
+        >
           <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
           <span>{t('admin.googleUsage.loading')}</span>
         </div>
@@ -83,16 +94,21 @@ export default function GoogleApiUsagePanel() {
         <div className="p-6">
           {period && (
             <p className="mb-4 text-xs text-content-faint">
-              {t('admin.googleUsage.period')}: <span className="font-medium text-content-secondary">{period.period}</span>
-              {' · '}{period.timezone}
+              {t('admin.googleUsage.period')}:{' '}
+              <span className="font-medium text-content-secondary">{period.period}</span>
+              {' · '}
+              {period.timezone}
             </p>
           )}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {usage.map((item) => {
-              const percentage = item.cap <= 0 ? 100 : Math.min(100, Math.round((item.used / item.cap) * 100))
-              const label = t(SKU_LABEL_KEYS[item.sku])
+              const percentage = item.cap <= 0 ? 100 : Math.min(100, Math.round((item.used / item.cap) * 100));
+              const label = t(SKU_LABEL_KEYS[item.sku]);
               return (
-                <article key={item.sku} className={`rounded-lg border p-4 ${item.exhausted ? 'border-red-200 bg-red-50/60 dark:border-red-900 dark:bg-red-950/20' : 'border-edge bg-surface-secondary/50'}`}>
+                <article
+                  key={item.sku}
+                  className={`rounded-lg border p-4 ${item.exhausted ? 'border-red-200 bg-red-50/60 dark:border-red-900 dark:bg-red-950/20' : 'bg-surface-secondary/50 border-edge'}`}
+                >
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h3 className="text-sm font-medium text-content">{label}</h3>
@@ -130,7 +146,7 @@ export default function GoogleApiUsagePanel() {
                     </span>
                   </div>
                 </article>
-              )
+              );
             })}
           </div>
           <p className="mt-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800 dark:border-amber-900 dark:bg-amber-950/20 dark:text-amber-300">
@@ -140,5 +156,5 @@ export default function GoogleApiUsagePanel() {
         </div>
       )}
     </section>
-  )
+  );
 }
