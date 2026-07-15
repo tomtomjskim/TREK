@@ -5,7 +5,13 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useSettingsStore } from '../../store/settingsStore'
 import { isStandardFamily, supportsCustom3d, wantsTerrain, addCustom3dBuildings, addTerrainAndSky } from '../Map/mapboxSetup'
-import { MAPBOX_DEFAULT_STYLE, styleForActiveProvider, basemapLanguage, type GlMapProvider } from '../Map/glProviders'
+import {
+  MAPBOX_DEFAULT_STYLE,
+  styleForActiveProvider,
+  resolveMapLabelLanguage,
+  applyMapLibreLabelLanguage,
+  type GlMapProvider,
+} from '../Map/glProviders'
 
 export interface JourneyMapGLHandle {
   highlightMarker: (id: string | null) => void
@@ -216,6 +222,7 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
   const mapbox3d = useSettingsStore(s => s.settings.mapbox_3d_enabled !== false)
   const mapboxQuality = useSettingsStore(s => s.settings.mapbox_quality_mode === true)
   const mapLang = useSettingsStore(s => s.settings.language)
+  const mapLabelLanguage = useSettingsStore(s => s.settings.map_label_language || 'auto')
   const isMapLibre = glProvider === 'maplibre-gl'
   const gl = (isMapLibre ? maplibregl : mapboxgl) as any
   const glStyle = styleForActiveProvider(glProvider, rawMapboxStyle, rawMaplibreStyle)
@@ -376,10 +383,11 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
       if (glStyle === MAPBOX_DEFAULT_STYLE) {
         try { map.setTerrain(null) } catch { /* noop */ }
       }
-      // Pin the basemap label language to the UI language so labels don't fall back to the
-      // browser/OS locale and stack multiple scripts per place (#1299).
-      if (!isMapLibre && isStandardFamily(glStyle)) {
-        try { map.setConfigProperty('basemap', 'language', basemapLanguage(mapLang)) } catch { /* style/SDK may not support it */ }
+      const labelLanguage = resolveMapLabelLanguage(mapLabelLanguage, mapLang)
+      if (isMapLibre) {
+        applyMapLibreLabelLanguage(map, labelLanguage)
+      } else if (labelLanguage && isStandardFamily(glStyle)) {
+        try { map.setConfigProperty('basemap', 'language', labelLanguage) } catch { /* style/SDK may not support it */ }
       }
 
       // route trail — dashed line connecting entries in time order
@@ -446,7 +454,7 @@ const JourneyMapGL = forwardRef<JourneyMapGLHandle, Props>(function JourneyMapGL
       try { map.remove() } catch { /* noop */ }
       mapRef.current = null
     }
-  }, [entries, stableTrail, glProvider, glStyle, mapboxToken, enableMapbox3d, mapboxQuality, fullScreen, paddingBottom])
+  }, [entries, stableTrail, glProvider, glStyle, mapboxToken, enableMapbox3d, mapboxQuality, fullScreen, paddingBottom, mapLang, mapLabelLanguage])
 
   // external activeMarkerId → highlight + flyTo
   useEffect(() => {

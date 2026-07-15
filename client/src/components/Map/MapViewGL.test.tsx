@@ -26,6 +26,8 @@ const glMap = vi.hoisted(() => ({
   getSource: vi.fn().mockReturnValue(null),
   addLayer: vi.fn(),
   setLayoutProperty: vi.fn(),
+  getLayoutProperty: vi.fn(),
+  setConfigProperty: vi.fn(),
   getStyle: vi.fn().mockReturnValue({ layers: [] }),
   isStyleLoaded: vi.fn().mockReturnValue(true),
   getCanvasContainer: vi.fn(() => glCanvasContainer),
@@ -152,6 +154,8 @@ beforeEach(() => {
   glMap.getLayer.mockReturnValue(null)
   glMap.queryRenderedFeatures.mockReturnValue([])
   glMap.querySourceFeatures.mockReturnValue([])
+  glMap.getStyle.mockReturnValue({ layers: [] })
+  glMap.getLayoutProperty.mockReturnValue(undefined)
   useSettingsStore.setState({
     settings: {
       ...useSettingsStore.getState().settings,
@@ -269,6 +273,53 @@ describe('MapViewGL', () => {
     }))
     expect(glMap.addLayer).toHaveBeenCalledWith(expect.objectContaining({ id: 'trip-place-clusters-circle' }))
     expect(glMap.addLayer).toHaveBeenCalledWith(expect.objectContaining({ id: 'trip-place-clusters-count' }))
+  })
+
+  it('FE-COMP-MAPVIEWGL-014: applies Korean name fallbacks to an OpenFreeMap style', async () => {
+    const original = ['coalesce', ['get', 'name_en'], ['get', 'name']]
+    glMap.getStyle.mockReturnValue({ layers: [{ id: 'settlement-label', type: 'symbol' }] })
+    glMap.getLayoutProperty.mockReturnValue(original)
+    glMap.on.mockImplementation((event: string, handlerOrLayer: unknown) => {
+      if (event === 'load' && typeof handlerOrLayer === 'function') (handlerOrLayer as () => void)()
+      return glMap
+    })
+    useSettingsStore.setState({ settings: {
+      ...useSettingsStore.getState().settings,
+      language: 'ko',
+      map_label_language: 'auto',
+      map_provider: 'maplibre-gl',
+      mapbox_access_token: '',
+      maplibre_style: 'https://tiles.openfreemap.org/styles/liberty',
+    } } as any)
+
+    render(<MapViewGL places={[]} fitKey={1} glProvider="maplibre-gl" />)
+    await act(async () => {})
+
+    expect(glMap.setLayoutProperty).toHaveBeenCalledWith('settlement-label', 'text-field', [
+      'coalesce', ['get', 'name:ko'], ['get', 'name_ko'], original,
+    ])
+  })
+
+  it('FE-COMP-MAPVIEWGL-015: uses the explicit label preference for Mapbox Standard', async () => {
+    const { isStandardFamily } = await import('./mapboxSetup')
+    vi.mocked(isStandardFamily).mockReturnValue(true)
+    glMap.on.mockImplementation((event: string, handlerOrLayer: unknown) => {
+      if (event === 'load' && typeof handlerOrLayer === 'function') (handlerOrLayer as () => void)()
+      return glMap
+    })
+    useSettingsStore.setState({ settings: {
+      ...useSettingsStore.getState().settings,
+      language: 'en',
+      map_label_language: 'ko',
+      map_provider: 'mapbox-gl',
+      mapbox_access_token: 'pk.test_token',
+      mapbox_style: 'mapbox://styles/mapbox/standard',
+    } } as any)
+
+    render(<MapViewGL places={[]} fitKey={1} glProvider="mapbox-gl" />)
+    await act(async () => {})
+
+    expect(glMap.setConfigProperty).toHaveBeenCalledWith('basemap', 'language', 'ko')
   })
 
   function touchEvent(type: string, touches: Array<{ clientX: number; clientY: number }>) {

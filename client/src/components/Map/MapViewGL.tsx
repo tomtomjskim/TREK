@@ -12,7 +12,13 @@ import { isStandardFamily, supportsCustom3d, wantsTerrain, addCustom3dBuildings,
 import { attachLocationMarker, type LocationMarkerHandle } from './locationMarkerMapbox'
 import { ReservationMapboxOverlay } from './reservationsMapbox'
 import { useTransportRoutes } from '../../hooks/useTransportRoutes'
-import { MAPBOX_DEFAULT_STYLE, styleForActiveProvider, basemapLanguage, type GlMapProvider } from './glProviders'
+import {
+  MAPBOX_DEFAULT_STYLE,
+  styleForActiveProvider,
+  resolveMapLabelLanguage,
+  applyMapLibreLabelLanguage,
+  type GlMapProvider,
+} from './glProviders'
 import LocationButton from './LocationButton'
 import { useGeolocation } from '../../hooks/useGeolocation'
 import type { Place, Reservation } from '../../types'
@@ -217,6 +223,7 @@ export function MapViewGL({
   const mapboxQuality = useSettingsStore(s => s.settings.mapbox_quality_mode === true)
   const showEndpointLabels = useSettingsStore(s => s.settings.map_booking_labels) === true
   const mapLang = useSettingsStore(s => s.settings.language)
+  const mapLabelLanguage = useSettingsStore(s => s.settings.map_label_language || 'auto')
   const isMapLibre = glProvider === 'maplibre-gl'
   const gl = (isMapLibre ? maplibregl : mapboxgl) as any
   const glStyle = styleForActiveProvider(glProvider, rawMapboxStyle, rawMaplibreStyle)
@@ -645,17 +652,23 @@ export function MapViewGL({
       mapRef.current = null
       setMapReady(false)
     }
-  }, [glProvider, glStyle, mapboxToken, enableMapbox3d, mapboxQuality]) // rebuild on provider/style changes only
+  }, [glProvider, glStyle, mapboxToken, enableMapbox3d, mapboxQuality, mapLabelLanguage])
 
   // Pin the basemap label language to the UI language so labels don't fall back to the
   // browser/OS locale and stack multiple scripts per place (e.g. "India/भारत/India", #1299).
-  // Mapbox Standard exposes this via a basemap config property; classic and MapLibre styles
-  // are left as-is. Runs on load (mapReady) and whenever the UI language changes.
+  // Mapbox Standard exposes a basemap config property. MapLibre name-bearing symbol layers
+  // are given translated-name fallbacks while their original provider expression is retained.
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !mapReady || isMapLibre || !isStandardFamily(glStyle)) return
-    try { map.setConfigProperty('basemap', 'language', basemapLanguage(mapLang)) } catch { /* style/SDK may not support the basemap language property */ }
-  }, [mapLang, mapReady, isMapLibre, glStyle])
+    if (!map || !mapReady) return
+    const language = resolveMapLabelLanguage(mapLabelLanguage, mapLang)
+    if (isMapLibre) {
+      applyMapLibreLabelLanguage(map, language)
+      return
+    }
+    if (!language || !isStandardFamily(glStyle)) return
+    try { map.setConfigProperty('basemap', 'language', language) } catch { /* style/SDK may not support the basemap language property */ }
+  }, [mapLang, mapLabelLanguage, mapReady, isMapLibre, glStyle])
 
   // Photo loading — mirrors the Leaflet MapView. Updates via RAF to batch
   // simultaneous thumb arrivals into one re-render.

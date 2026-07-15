@@ -9,6 +9,7 @@ import GlMapPreview from './MapboxPreview'
 import Section from './Section'
 import ToggleSwitch from './ToggleSwitch'
 import type { Place } from '../../types'
+import type { MapLabelLanguage } from '../../types'
 import { NumericInput } from '../shared/NumericInput'
 import {
   MAPBOX_DEFAULT_STYLE,
@@ -131,6 +132,10 @@ function normalizeProvider(value: unknown): Provider {
   return value === 'mapbox-gl' || value === 'maplibre-gl' ? value : 'leaflet'
 }
 
+function normalizeLabelLanguage(value: unknown): MapLabelLanguage {
+  return value === 'local' || value === 'ko' || value === 'en' ? value : 'auto'
+}
+
 function styleForProvider(provider: Provider, style?: string | null): string {
   if (provider === 'leaflet') return style || MAPBOX_DEFAULT_STYLE
   if (provider === 'mapbox-gl' && isOpenFreeMapStyle(style)) return MAPBOX_DEFAULT_STYLE
@@ -150,6 +155,7 @@ export default function MapSettingsTab(): React.ReactElement {
   const initialProvider = normalizeProvider(settings.map_provider)
   const [saving, setSaving] = useState(false)
   const [provider, setProvider] = useState<Provider>(initialProvider)
+  const [mapLabelLanguage, setMapLabelLanguage] = useState<MapLabelLanguage>(normalizeLabelLanguage(settings.map_label_language))
   const [mapTileUrl, setMapTileUrl] = useState<string>(settings.map_tile_url || '')
   const [mapboxToken, setMapboxToken] = useState<string>(settings.mapbox_access_token || '')
   const [mapboxStyle, setMapboxStyle] = useState<string>(styleForProvider(initialProvider, slotStyle(initialProvider, settings)))
@@ -162,6 +168,7 @@ export default function MapSettingsTab(): React.ReactElement {
   useEffect(() => {
     const nextProvider = normalizeProvider(settings.map_provider)
     setProvider(nextProvider)
+    setMapLabelLanguage(normalizeLabelLanguage(settings.map_label_language))
     setMapTileUrl(settings.map_tile_url || '')
     setMapboxToken(settings.mapbox_access_token || '')
     setMapboxStyle(styleForProvider(nextProvider, slotStyle(nextProvider, settings)))
@@ -205,6 +212,7 @@ export default function MapSettingsTab(): React.ReactElement {
       const stylePatch = provider === 'maplibre-gl' ? { maplibre_style: glStyle } : { mapbox_style: glStyle }
       await updateSettings({
         map_provider: provider,
+        map_label_language: mapLabelLanguage,
         map_tile_url: mapTileUrl,
         mapbox_access_token: mapboxToken,
         ...stylePatch,
@@ -294,6 +302,28 @@ export default function MapSettingsTab(): React.ReactElement {
         </div>
         <p className="text-xs text-slate-400 mt-2">
           {t('settings.mapProviderHint')}
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
+          {t('settings.mapLabelLanguage')}
+        </label>
+        <CustomSelect
+          value={mapLabelLanguage}
+          onChange={(value) => setMapLabelLanguage(normalizeLabelLanguage(value))}
+          options={[
+            { value: 'auto', label: t('settings.mapLabelLanguageAuto') },
+            { value: 'local', label: t('settings.mapLabelLanguageLocal') },
+            { value: 'ko', label: t('settings.mapLabelLanguageKorean') },
+            { value: 'en', label: t('settings.mapLabelLanguageEnglish') },
+          ]}
+          size="sm"
+        />
+        <p className="text-xs text-slate-400 mt-1">
+          {provider === 'leaflet'
+            ? t('settings.mapLabelLanguageRasterHint')
+            : t('settings.mapLabelLanguageVectorHint')}
         </p>
       </div>
 

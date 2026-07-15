@@ -1,4 +1,4 @@
-// FE-COMP-MAP-001 to FE-COMP-MAP-017
+// FE-COMP-MAP-001 to FE-COMP-MAP-020
 import { render, screen, waitFor } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import { useAuthStore } from '../../store/authStore';
@@ -183,5 +183,40 @@ describe('MapSettingsTab', () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue('40')).toBeInTheDocument();
     });
+  });
+
+  it('FE-COMP-MAP-018: shows the default map label language and raster limitation', () => {
+    render(<MapSettingsTab />);
+
+    expect(screen.getByText('Map label language')).toBeInTheDocument();
+    expect(screen.getByText('Follow app language')).toBeInTheDocument();
+    expect(screen.getByText(/Raster tile labels cannot be changed by TREK/i)).toBeInTheDocument();
+  });
+
+  it('FE-COMP-MAP-019: saves an explicit Korean map label preference', async () => {
+    const user = userEvent.setup();
+    const updateSettings = vi.fn().mockResolvedValue(undefined);
+    seedStore(useSettingsStore, {
+      settings: buildSettings({ map_label_language: 'auto' }),
+      updateSettings,
+    });
+    render(<MapSettingsTab />);
+
+    await user.click(screen.getByText('Follow app language'));
+    await user.click(screen.getByText('Korean'));
+    await user.click(screen.getByText('Save Map'));
+
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      map_label_language: 'ko',
+    }));
+  });
+
+  it('FE-COMP-MAP-020: keeps the native-label preference in sync with the store', async () => {
+    seedStore(useSettingsStore, {
+      settings: buildSettings({ map_label_language: 'local' }),
+    });
+    render(<MapSettingsTab />);
+
+    expect(screen.getByText('Local / native names')).toBeInTheDocument();
   });
 });
