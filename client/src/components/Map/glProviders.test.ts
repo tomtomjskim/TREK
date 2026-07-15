@@ -6,6 +6,8 @@ import {
   normalizeStyleForProvider,
   styleForActiveProvider,
   basemapLanguage,
+  resolveMapLabelLanguage,
+  applyMapLibreLabelLanguage,
 } from './glProviders'
 
 describe('glProviders', () => {
@@ -68,5 +70,79 @@ describe('glProviders', () => {
     // Falls back to English when unset.
     expect(basemapLanguage(undefined)).toBe('en')
     expect(basemapLanguage('')).toBe('en')
+  })
+
+  it('resolves the saved label preference without depending on browser locale', () => {
+    expect(resolveMapLabelLanguage('auto', 'ko')).toBe('ko')
+    expect(resolveMapLabelLanguage(undefined, 'ko')).toBe('ko')
+    expect(resolveMapLabelLanguage('ko', 'en')).toBe('ko')
+    expect(resolveMapLabelLanguage('en', 'ko')).toBe('en')
+    expect(resolveMapLabelLanguage('local', 'ko')).toBeNull()
+  })
+
+  it('localizes only MapLibre name layers and preserves provider fallbacks', () => {
+    const originalName = ['case', ['has', 'name:latin'], ['get', 'name:latin'], ['get', 'name']]
+    const fields: Record<string, unknown> = {
+      places: originalName,
+      shields: ['get', 'ref'],
+      clusters: ['get', 'point_count_abbreviated'],
+    }
+    const map = {
+      getStyle: () => ({
+        layers: [
+          { id: 'places', type: 'symbol' },
+          { id: 'shields', type: 'symbol' },
+          { id: 'clusters', type: 'symbol' },
+          { id: 'roads', type: 'line' },
+        ],
+      }),
+      getLayoutProperty: vi.fn((id: string) => fields[id]),
+      setLayoutProperty: vi.fn((id: string, _property: string, value: unknown) => { fields[id] = value }),
+    }
+
+    expect(applyMapLibreLabelLanguage(map, 'ko')).toBe(1)
+    expect(fields.places).toEqual([
+      'coalesce',
+      ['get', 'name:ko'],
+      ['get', 'name_ko'],
+      originalName,
+    ])
+    expect(fields.shields).toEqual(['get', 'ref'])
+    expect(fields.clusters).toEqual(['get', 'point_count_abbreviated'])
+    expect(map.setLayoutProperty).toHaveBeenCalledTimes(1)
+  })
+
+  it('switches languages from the original MapLibre expression and restores native labels', () => {
+    const original = ['coalesce', ['get', 'name_en'], ['get', 'name']]
+    let field: unknown = original
+    const map = {
+      getStyle: () => ({ layers: [{ id: 'settlement', type: 'symbol' }] }),
+      getLayoutProperty: vi.fn(() => field),
+      setLayoutProperty: vi.fn((_id: string, _property: string, value: unknown) => { field = value }),
+    }
+
+    applyMapLibreLabelLanguage(map, 'ko')
+    applyMapLibreLabelLanguage(map, 'en')
+    expect(field).toEqual(['coalesce', ['get', 'name:en'], ['get', 'name_en'], original])
+    expect(JSON.stringify(field)).not.toContain('name:ko')
+
+    applyMapLibreLabelLanguage(map, null)
+    expect(field).toEqual(original)
+  })
+
+  it('supports token-style name fields while leaving unrelated text untouched', () => {
+    const fields: Record<string, unknown> = { label: '{name}', ref: '{ref}' }
+    const map = {
+      getStyle: () => ({ layers: [
+        { id: 'label', type: 'symbol' },
+        { id: 'ref', type: 'symbol' },
+      ] }),
+      getLayoutProperty: vi.fn((id: string) => fields[id]),
+      setLayoutProperty: vi.fn((id: string, _property: string, value: unknown) => { fields[id] = value }),
+    }
+
+    expect(applyMapLibreLabelLanguage(map, 'ko')).toBe(1)
+    expect(fields.label).toEqual(['coalesce', ['get', 'name:ko'], ['get', 'name_ko'], '{name}'])
+    expect(fields.ref).toBe('{ref}')
   })
 })
