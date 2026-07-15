@@ -1,0 +1,48 @@
+{
+  "packageId": "com.jsnetworkcorp.trek",
+  "host": "trek.jsnetworkcorp.com",
+  "name": "TREK — Travel Planner",
+  "launcherName": "TREK",
+  "display": "standalone",
+  "themeColor": "#111827",
+  "themeColorDark": "#111827",
+  "navigationColor": "#0f172a",
+  "navigationColorDark": "#0f172a",
+  "navigationDividerColor": "#00000000",
+  "navigationDividerColorDark": "#00000000",
+  "backgroundColor": "#0f172a",
+  "enableNotifications": false,
+  "startUrl": "/",
+  "iconUrl": "https://trek.jsnetworkcorp.com/icons/icon-512x512.png",
+  "maskableIconUrl": "https://trek.jsnetworkcorp.com/icons/icon-512x512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "release.keystore",
+    "alias": "trek"
+  },
+  "appVersion": "3.3.0",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://trek.jsnetworkcorp.com/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://trek.jsnetworkcorp.com/",
+  "minSdkVersion": 21,
+  "orientation": "default",
+  "fingerprints": [
+    {
+      "name": "release",
+      "value": "78:23:DB:7D:61:7A:1C:E5:62:FD:A9:2B:79:DD:78:60:2A:0F:5F:20:62:DE:3D:30:56:89:B9:6C:B6:DE:56:74"
+    }
+  ],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": [],
+  "displayOverride": []
+}

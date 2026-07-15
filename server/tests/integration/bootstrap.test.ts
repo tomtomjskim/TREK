@@ -6,9 +6,19 @@
  * platform/inline endpoints, and (in production) HSTS. This is the test that proves
  * server/src/bootstrap.ts + index.ts serve everything correctly without the legacy app.
  */
-import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import request from 'supertest';
+import { buildApp } from '../../src/bootstrap';
+import { runMigrations } from '../../src/db/migrations';
+import { createTables } from '../../src/db/schema';
+import { authCookie } from '../helpers/auth';
+import { createUser } from '../helpers/factories';
+import { resetTestDb } from '../helpers/test-db';
 import type { INestApplication } from '@nestjs/common';
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import request from 'supertest';
+import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
 const { testDb, dbMock } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -28,7 +38,8 @@ const { testDb, dbMock } = vi.hoisted(() => {
           `SELECT t.id, t.user_id FROM trips t LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = ? WHERE t.id = ? AND (t.user_id = ? OR m.user_id IS NOT NULL)`,
         )
         .get(userId, tripId, userId),
-    isOwner: (tripId: any, userId: number) => !!db.prepare('SELECT id FROM trips WHERE id = ? AND user_id = ?').get(tripId, userId),
+    isOwner: (tripId: any, userId: number) =>
+      !!db.prepare('SELECT id FROM trips WHERE id = ? AND user_id = ?').get(tripId, userId),
   };
   return { testDb: db, dbMock: mock };
 });
@@ -45,18 +56,31 @@ vi.mock('../../src/config', () => ({
 }));
 vi.mock('../../src/websocket', () => ({ broadcast: vi.fn(), broadcastToUser: vi.fn() }));
 
-import { createTables } from '../../src/db/schema';
-import { runMigrations } from '../../src/db/migrations';
-import { resetTestDb } from '../helpers/test-db';
-import { createUser } from '../helpers/factories';
-import { authCookie } from '../helpers/auth';
-import { buildApp } from '../../src/bootstrap';
-
 describe('BOOTSTRAP (F6) — unified NestJS app serves the whole surface', () => {
   let app: INestApplication;
   let instance: import('express').Application;
+  let androidReleaseDir: string;
+  const originalAndroidReleaseDir = process.env.TREK_ANDROID_RELEASE_DIR;
 
   beforeAll(async () => {
+    androidReleaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-bootstrap-android-'));
+    process.env.TREK_ANDROID_RELEASE_DIR = androidReleaseDir;
+    fs.writeFileSync(
+      path.join(androidReleaseDir, 'assetlinks.json'),
+      JSON.stringify([
+        {
+          relation: ['delegate_permission/common.handle_all_urls'],
+          target: {
+            namespace: 'android_app',
+            package_name: 'com.jsnetworkcorp.trek',
+            sha256_cert_fingerprints: [
+              '78:23:DB:7D:61:7A:1C:E5:62:FD:A9:2B:79:DD:78:60:2A:0F:5F:20:62:DE:3D:30:56:89:B9:6C:B6:DE:56:74',
+            ],
+          },
+        },
+      ]),
+    );
+    fs.writeFileSync(path.join(androidReleaseDir, 'trek-android.apk'), Buffer.from('bootstrap-signed-apk'));
     createTables(testDb);
     runMigrations(testDb);
     resetTestDb(testDb);
@@ -67,6 +91,9 @@ describe('BOOTSTRAP (F6) — unified NestJS app serves the whole surface', () =>
   afterAll(async () => {
     await app.close();
     testDb.close();
+    fs.rmSync(androidReleaseDir, { recursive: true, force: true });
+    if (originalAndroidReleaseDir === undefined) delete process.env.TREK_ANDROID_RELEASE_DIR;
+    else process.env.TREK_ANDROID_RELEASE_DIR = originalAndroidReleaseDir;
   });
 
   it('BOOT-001 — GET /api/health returns 200 { status: ok } (platform transport on Nest)', async () => {
@@ -134,5 +161,36 @@ describe('BOOTSTRAP (F6) — unified NestJS app serves the whole surface', () =>
       .set('Cookie', authCookie(user.id));
     expect(res.status).toBe(200);
     expect(res.headers['content-encoding']).toBe('gzip');
+  });
+
+  it('BOOT-009 — Digital Asset Links bypasses the generic well-known middleware', async () => {
+    const res = await request(instance).get('/.well-known/assetlinks.json');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/^application\/json/);
+    expect(res.body[0].target.package_name).toBe('com.jsnetworkcorp.trek');
+  });
+
+  it('BOOT-010 — the fixed Android APK is public and does not fall through to SPA HTML', async () => {
+    const res = await request(instance)
+      .get('/downloads/trek-android.apk')
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toBe('application/vnd.android.package-archive');
+    expect(res.headers['content-disposition']).toBe('attachment; filename="trek-android.apk"');
+    expect(res.body).toEqual(Buffer.from('bootstrap-signed-apk'));
+  });
+
+  it('BOOT-011 — unknown well-known paths keep the existing non-SPA 404 contract', async () => {
+    const res = await request(instance).get('/.well-known/not-a-real-document');
+
+    expect(res.status).toBe(404);
+    expect(res.headers['content-type'] || '').not.toMatch(/text\/html/);
   });
 });

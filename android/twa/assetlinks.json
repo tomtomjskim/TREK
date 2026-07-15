@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.jsnetworkcorp.trek",
+      "sha256_cert_fingerprints": [
+        "78:23:DB:7D:61:7A:1C:E5:62:FD:A9:2B:79:DD:78:60:2A:0F:5F:20:62:DE:3D:30:56:89:B9:6C:B6:DE:56:74"
+      ]
+    }
+  }
+]

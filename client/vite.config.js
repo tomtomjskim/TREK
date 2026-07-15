@@ -1,6 +1,7 @@
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
+import { pwaManifest, pwaNavigateFallbackDenylist } from './pwa-manifest.js';
 
 const proxyTarget = process.env.VITE_PROXY_TARGET || 'http://localhost:3001';
 
@@ -13,14 +14,7 @@ export default defineConfig({
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
         globPatterns: ['**/*.{js,css,html,svg,png,woff,woff2,ttf}'],
         navigateFallback: 'index.html',
-        navigateFallbackDenylist: [
-          /^\/api/,
-          /^\/uploads/,
-          /^\/mcp/,
-          /^\/oauth\//,
-          /^\/.well-known\//,
-          /^\/plugin-frame\//,
-        ],
+        navigateFallbackDenylist: pwaNavigateFallbackDenylist,
         runtimeCaching: [
           {
             // Carto map tiles (default provider)
@@ -97,24 +91,7 @@ export default defineConfig({
           },
         ],
       },
-      manifest: {
-        name: 'TREK \u2014 Travel Planner',
-        short_name: 'TREK',
-        description: 'Travel Resource & Exploration Kit',
-        theme_color: '#111827',
-        background_color: '#0f172a',
-        display: 'standalone',
-        scope: '/',
-        start_url: '/',
-        categories: ['travel', 'navigation'],
-        icons: [
-          { src: 'icons/apple-touch-icon-180x180.png', sizes: '180x180', type: 'image/png' },
-          { src: 'icons/icon-192x192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icons/icon-512x512.png', sizes: '512x512', type: 'image/png' },
-          { src: 'icons/icon-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-          { src: 'icons/icon.svg', sizes: 'any', type: 'image/svg+xml' },
-        ],
-      },
+      manifest: pwaManifest,
     }),
   ],
   build: {

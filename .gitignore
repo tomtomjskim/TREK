@@ -68,3 +68,19 @@ test-data
 .full-review
 # Wiki offline snapshot is baked in at build, not committed (duplicates wiki/)
 server/assets/wiki/
+
+# Android TWA local toolchain, signing material, and generated release outputs
+android/twa/.gradle/
+android/twa/build/
+android/twa/app/build/
+android/twa/local.properties
+android/twa/*.apk
+android/twa/*.aab
+android/twa/*.keystore
+android/twa/*.jks
+android/twa/*password*
+android/twa/**/*.apk
+android/twa/**/*.aab
+android/twa/**/*.keystore
+android/twa/**/*.jks
+android/twa/**/*password*
