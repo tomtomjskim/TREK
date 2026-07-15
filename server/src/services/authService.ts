@@ -306,6 +306,8 @@ export function getAppConfig(authenticatedUser: { id: number } | null) {
   const placesAutocompleteEnabled = placesAutocompleteSetting !== 'false';
   const placesDetailsSetting = (db.prepare("SELECT value FROM app_settings WHERE key = 'places_details_enabled'").get() as { value: string } | undefined)?.value;
   const placesDetailsEnabled = placesDetailsSetting !== 'false';
+  const placesEnrichmentSetting = (db.prepare("SELECT value FROM app_settings WHERE key = 'places_enrichment_enabled'").get() as { value: string } | undefined)?.value;
+  const placesEnrichmentEnabled = placesEnrichmentSetting !== 'false';
   const setupComplete = userCount > 0 && !(db.prepare("SELECT id FROM users WHERE role = 'admin' AND must_change_password = 1 LIMIT 1").get());
 
   return {
@@ -344,6 +346,7 @@ export function getAppConfig(authenticatedUser: { id: number } | null) {
     places_photos_enabled: placesPhotosEnabled,
     places_autocomplete_enabled: placesAutocompleteEnabled,
     places_details_enabled: placesDetailsEnabled,
+    places_enrichment_enabled: placesEnrichmentEnabled,
     permissions: authenticatedUser ? getAllPermissions() : undefined,
     dev_mode: process.env.NODE_ENV === 'development',
   };

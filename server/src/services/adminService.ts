@@ -536,6 +536,18 @@ export function updatePlacesDetails(enabled: boolean) {
   return { enabled: !!enabled };
 }
 
+// ── Places Enrichment ────────────────────────────────────────────────────────
+
+export function getPlacesEnrichment() {
+  const row = db.prepare("SELECT value FROM app_settings WHERE key = 'places_enrichment_enabled'").get() as { value: string } | undefined;
+  return { enabled: row?.value !== 'false' };
+}
+
+export function updatePlacesEnrichment(enabled: boolean) {
+  db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('places_enrichment_enabled', ?)").run(enabled ? 'true' : 'false');
+  return { enabled: !!enabled };
+}
+
 // ── Collab Features ───────────────────────────────────────────────────────
 
 const COLLAB_FEATURE_KEYS = ['collab_chat_enabled', 'collab_notes_enabled', 'collab_polls_enabled', 'collab_whatsnext_enabled'] as const;

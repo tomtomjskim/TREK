@@ -611,6 +611,55 @@ describe('Bag tracking', () => {
   });
 });
 
+describe('Google usage and place enrichment administration', () => {
+  it('ADMIN-036 — only an administrator can read the local Google usage ledger', async () => {
+    const { user } = createUser(testDb);
+    const forbidden = await request(app)
+      .get('/api/admin/google-api-usage')
+      .set('Cookie', authCookie(user.id));
+    expect(forbidden.status).toBe(403);
+
+    const { user: admin } = createAdmin(testDb);
+    const res = await request(app)
+      .get('/api/admin/google-api-usage')
+      .set('Cookie', authCookie(admin.id));
+    expect(res.status).toBe(200);
+    expect(res.body.usage).toHaveLength(8);
+    expect(res.body.usage.every((row: { used: number }) => row.used === 0)).toBe(true);
+    expect(JSON.stringify(res.body)).not.toContain('api_key');
+  });
+
+  it('ADMIN-037 — persists the enrichment switch and exposes only its public boolean', async () => {
+    const { user: admin } = createAdmin(testDb);
+    const initial = await request(app)
+      .get('/api/admin/places-enrichment')
+      .set('Cookie', authCookie(admin.id));
+    expect(initial.status).toBe(200);
+    expect(initial.body).toEqual({ enabled: true });
+
+    const changed = await request(app)
+      .put('/api/admin/places-enrichment')
+      .set('Cookie', authCookie(admin.id))
+      .send({ enabled: false });
+    expect(changed.status).toBe(200);
+    expect(changed.body).toEqual({ enabled: false });
+
+    const publicConfig = await request(app).get('/api/auth/app-config');
+    expect(publicConfig.status).toBe(200);
+    expect(publicConfig.body.places_enrichment_enabled).toBe(false);
+    expect(publicConfig.body.google_api_usage).toBeUndefined();
+  });
+
+  it('ADMIN-038 — rejects malformed enrichment switch bodies', async () => {
+    const { user: admin } = createAdmin(testDb);
+    const res = await request(app)
+      .put('/api/admin/places-enrichment')
+      .set('Cookie', authCookie(admin.id))
+      .send({ enabled: 'false' });
+    expect(res.status).toBe(400);
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // JWT rotation
 // ─────────────────────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import { getAdminUserDefaults, setAdminUserDefaults } from '../../services/setti
 import { invalidateMcpSessions } from '../../mcp';
 import { getPreferencesMatrix, setAdminPreferences } from '../../services/notificationPreferencesService';
 import { adminResetPasskeys } from '../../services/passkeyService';
+import { getGoogleApiUsageSnapshot } from '../../services/googleApiUsageService';
 
 /**
  * Thin Nest wrapper around the existing admin service (+ the settings,
@@ -47,6 +48,9 @@ export class AdminService {
   updatePlacesAutocomplete(enabled: boolean) { return svc.updatePlacesAutocomplete(enabled); }
   getPlacesDetails() { return svc.getPlacesDetails(); }
   updatePlacesDetails(enabled: boolean) { return svc.updatePlacesDetails(enabled); }
+  getPlacesEnrichment() { return svc.getPlacesEnrichment(); }
+  updatePlacesEnrichment(enabled: boolean) { return svc.updatePlacesEnrichment(enabled); }
+  getGoogleApiUsage() { return getGoogleApiUsageSnapshot(); }
   getCollabFeatures() { return svc.getCollabFeatures(); }
   updateCollabFeatures(body: unknown) { return svc.updateCollabFeatures(body as Parameters<typeof svc.updateCollabFeatures>[0]); }
 

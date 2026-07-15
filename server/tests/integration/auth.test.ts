@@ -318,6 +318,7 @@ describe('App config', () => {
     expect(res.body).toHaveProperty('demo_mode');
     expect(res.body).toHaveProperty('has_users');
     expect(res.body).toHaveProperty('setup_complete');
+    expect(res.body).toHaveProperty('places_enrichment_enabled', true);
   });
 
   it('AUTH-028 — allow_registration is false after admin disables it', async () => {
@@ -326,6 +327,13 @@ describe('App config', () => {
     const res = await request(app).get('/api/auth/app-config');
     expect(res.status).toBe(200);
     expect(res.body.allow_registration).toBe(false);
+  });
+
+  it('AUTH-028 — app-config exposes the administrator enrichment switch', async () => {
+    testDb.prepare("INSERT INTO app_settings (key, value) VALUES ('places_enrichment_enabled', 'false')").run();
+    const res = await request(app).get('/api/auth/app-config');
+    expect(res.status).toBe(200);
+    expect(res.body.places_enrichment_enabled).toBe(false);
   });
 });
 

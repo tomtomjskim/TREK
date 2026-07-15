@@ -83,6 +83,12 @@ describe('AdminController invites + feature toggles', () => {
     expect(new AdminController(svc({ updatePlacesPhotos: vi.fn().mockReturnValue({ enabled: true }) } as Partial<AdminService>)).updatePlacesPhotos(user, { enabled: true }, req)).toEqual({ enabled: true });
   });
 
+  it('places-enrichment: 400 on a non-boolean, else updates + audits', () => {
+    expect(thrown(() => new AdminController(svc()).updatePlacesEnrichment(user, { enabled: 'yes' }, req))).toEqual({ status: 400, body: { error: 'enabled must be a boolean' } });
+    expect(new AdminController(svc({ updatePlacesEnrichment: vi.fn().mockReturnValue({ enabled: false }) } as Partial<AdminService>)).updatePlacesEnrichment(user, { enabled: false }, req)).toEqual({ enabled: false });
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'admin.places_enrichment', details: { enabled: false } }));
+  });
+
   it('collab-features update invalidates MCP sessions only when a flag actually flipped (#1414)', () => {
     const invalidateMcpSessions = vi.fn();
     const c = new AdminController(svc({ updateCollabFeatures: vi.fn().mockReturnValue({ features: { chat: true }, changed: true }), invalidateMcpSessions } as Partial<AdminService>));
@@ -171,6 +177,9 @@ describe('AdminController read-only getters', () => {
     expect(new AdminController(svc({ getPlacesPhotos: vi.fn().mockReturnValue({ enabled: true }) } as Partial<AdminService>)).getPlacesPhotos()).toEqual({ enabled: true });
     expect(new AdminController(svc({ getPlacesAutocomplete: vi.fn().mockReturnValue({ enabled: true }) } as Partial<AdminService>)).getPlacesAutocomplete()).toEqual({ enabled: true });
     expect(new AdminController(svc({ getPlacesDetails: vi.fn().mockReturnValue({ enabled: true }) } as Partial<AdminService>)).getPlacesDetails()).toEqual({ enabled: true });
+    expect(new AdminController(svc({ getPlacesEnrichment: vi.fn().mockReturnValue({ enabled: true }) } as Partial<AdminService>)).getPlacesEnrichment()).toEqual({ enabled: true });
+    const usage = [{ period: '2026-07', sku: 'autocomplete', used: 0, cap: 8000 }];
+    expect(new AdminController(svc({ getGoogleApiUsage: vi.fn().mockReturnValue(usage) } as Partial<AdminService>)).getGoogleApiUsage()).toEqual({ usage });
     expect(new AdminController(svc({ getCollabFeatures: vi.fn().mockReturnValue({ chat: false }) } as Partial<AdminService>)).getCollabFeatures()).toEqual({ chat: false });
     expect(new AdminController(svc({ listPackingTemplates: vi.fn().mockReturnValue([{ id: 1 }]) } as Partial<AdminService>)).listPackingTemplates()).toEqual({ templates: [{ id: 1 }] });
     expect(new AdminController(svc({ listAddons: vi.fn().mockReturnValue([{ id: 'mcp' }]) } as Partial<AdminService>)).listAddons()).toEqual({ addons: [{ id: 'mcp' }] });

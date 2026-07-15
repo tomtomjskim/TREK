@@ -10,6 +10,7 @@ const trip = { user_id: 1 };
 function svc(o: Partial<PlacesService> = {}): PlacesService {
   return {
     verifyTripAccess: vi.fn().mockReturnValue(trip), canEdit: vi.fn().mockReturnValue(true), broadcast: vi.fn(),
+    isEnrichmentEnabled: vi.fn().mockReturnValue(true),
     onCreated: vi.fn(), onUpdated: vi.fn(), onDeleted: vi.fn(),
     ...o,
   } as unknown as PlacesService;
@@ -158,6 +159,26 @@ describe('PlacesController (parity with the legacy /api/trips/:tripId/places rou
       expect(importGoogleList).toHaveBeenCalledWith('5', 'http://x', { enrich: true, userId: 1 });
       expect(broadcast).toHaveBeenCalledTimes(2);
     });
+    it('blocks only the paid enrichment part when the administrator switch is off', async () => {
+      const importGoogleList = vi.fn();
+      const blocked = new PlacesController(svc({
+        isEnrichmentEnabled: vi.fn().mockReturnValue(false),
+        importGoogleList,
+      } as Partial<PlacesService>));
+      expect(await thrownAsync(() => blocked.importGoogle(user, '5', 'http://x', true))).toEqual({
+        status: 403,
+        body: { error: 'Place enrichment is disabled by an administrator', code: 'PLACE_ENRICHMENT_DISABLED' },
+      });
+      expect(importGoogleList).not.toHaveBeenCalled();
+
+      const plainImport = vi.fn().mockResolvedValue({ places: [], listName: 'L', skipped: 0 });
+      const allowed = new PlacesController(svc({
+        isEnrichmentEnabled: vi.fn().mockReturnValue(false),
+        importGoogleList: plainImport,
+      } as Partial<PlacesService>));
+      await allowed.importGoogle(user, '5', 'http://x', false);
+      expect(plainImport).toHaveBeenCalledWith('5', 'http://x', { enrich: false, userId: 1 });
+    });
     it('wraps a thrown Error in the provider-specific 400 (Google)', async () => {
       const s = svc({ importGoogleList: vi.fn().mockRejectedValue(new Error('network down')) } as Partial<PlacesService>);
       expect(await thrownAsync(() => new PlacesController(s).importGoogle(user, '5', 'http://x'))).toEqual({
@@ -232,6 +253,27 @@ describe('PlacesController (parity with the legacy /api/trips/:tripId/places rou
         canEdit: vi.fn().mockReturnValue(false), previewEnrichment,
       } as Partial<PlacesService>)).previewEnrichment(user, '5', {}))).toEqual({ status: 403, body: { error: 'No permission' } });
       expect(previewEnrichment).not.toHaveBeenCalled();
+    });
+
+    it('403s preview and apply with a stable code when enrichment is disabled', async () => {
+      const previewEnrichment = vi.fn();
+      const applyEnrichment = vi.fn();
+      const controller = new PlacesController(svc({
+        isEnrichmentEnabled: vi.fn().mockReturnValue(false),
+        previewEnrichment,
+        applyEnrichment,
+      } as Partial<PlacesService>));
+
+      expect(await thrownAsync(() => controller.previewEnrichment(user, '5', {}))).toEqual({
+        status: 403,
+        body: { error: 'Place enrichment is disabled by an administrator', code: 'PLACE_ENRICHMENT_DISABLED' },
+      });
+      expect(await thrownAsync(() => controller.applyEnrichment(user, '5', { matches: [] }))).toEqual({
+        status: 403,
+        body: { error: 'Place enrichment is disabled by an administrator', code: 'PLACE_ENRICHMENT_DISABLED' },
+      });
+      expect(previewEnrichment).not.toHaveBeenCalled();
+      expect(applyEnrichment).not.toHaveBeenCalled();
     });
 
     it('returns preview data and maps a zero-progress safety stop to stable 429', async () => {

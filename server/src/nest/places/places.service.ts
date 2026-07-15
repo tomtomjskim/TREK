@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { broadcast } from '../../websocket';
-import { canAccessTrip } from '../../db/database';
+import { canAccessTrip, db } from '../../db/database';
 import { checkPermission } from '../../services/permissions';
 import type { User } from '../../types';
 import * as svc from '../../services/placeService';
@@ -23,6 +23,11 @@ export class PlacesService {
 
   canEdit(trip: Trip, user: User): boolean {
     return checkPermission('place_edit', user.role, trip.user_id, user.id, trip.user_id !== user.id);
+  }
+
+  isEnrichmentEnabled(): boolean {
+    const row = db.prepare("SELECT value FROM app_settings WHERE key = 'places_enrichment_enabled'").get() as { value: string } | undefined;
+    return row?.value !== 'false';
   }
 
   broadcast(tripId: string, event: string, payload: Record<string, unknown>, socketId: string | undefined): void {

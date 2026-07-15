@@ -60,6 +60,8 @@ import {
   deleteInvite,
   getBagTracking,
   updateBagTracking,
+  getPlacesEnrichment,
+  updatePlacesEnrichment,
   listPackingTemplates,
   createPackingTemplate,
   updatePackingTemplate,
@@ -322,6 +324,19 @@ describe('Bag tracking', () => {
     expect((getBagTracking() as any).enabled).toBe(true);
     updateBagTracking(false);
     expect((getBagTracking() as any).enabled).toBe(false);
+  });
+});
+
+describe('Places enrichment toggle', () => {
+  it('ADMIN-SVC-031 — defaults to enabled when no setting exists', () => {
+    expect(getPlacesEnrichment()).toEqual({ enabled: true });
+  });
+
+  it('ADMIN-SVC-032 — persists both disabled and enabled values', () => {
+    updatePlacesEnrichment(false);
+    expect(getPlacesEnrichment()).toEqual({ enabled: false });
+    updatePlacesEnrichment(true);
+    expect(getPlacesEnrichment()).toEqual({ enabled: true });
   });
 });
 

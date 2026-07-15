@@ -74,6 +74,15 @@ export class PlacesController {
     }
   }
 
+  private requireEnrichmentEnabled(): void {
+    if (!this.places.isEnrichmentEnabled()) {
+      throw new HttpException({
+        error: 'Place enrichment is disabled by an administrator',
+        code: 'PLACE_ENRICHMENT_DISABLED',
+      }, 403);
+    }
+  }
+
   @Get()
   list(
     @CurrentUser() user: User,
@@ -190,6 +199,7 @@ export class PlacesController {
     // Opt-in: re-resolve each imported place via the Places API to fill in
     // photo / address / website / phone and persist a google_place_id (#886).
     const opts = { enrich: parseBool(enrich, false), userId: user.id };
+    if (opts.enrich) this.requireEnrichmentEnabled();
     const label = provider === 'google' ? 'Google' : 'Naver';
     try {
       const result = provider === 'google'
@@ -272,6 +282,7 @@ export class PlacesController {
   ) {
     const trip = this.requireTrip(tripId, user);
     this.requireEdit(trip, user);
+    this.requireEnrichmentEnabled();
     const result = await this.places.previewEnrichment(tripId, user.id, body);
     if (result.stopped && result.processed === 0) {
       throw new HttpException({
@@ -294,6 +305,7 @@ export class PlacesController {
   ) {
     const trip = this.requireTrip(tripId, user);
     this.requireEdit(trip, user);
+    this.requireEnrichmentEnabled();
     const result = await this.places.applyEnrichment(tripId, user.id, body.matches, body.lang);
     if (result.stopped && result.processed === 0) {
       throw new HttpException({

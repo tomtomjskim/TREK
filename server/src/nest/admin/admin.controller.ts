@@ -202,6 +202,20 @@ export class AdminController {
     return result;
   }
 
+  @Get('places-enrichment')
+  getPlacesEnrichment() { return this.admin.getPlacesEnrichment(); }
+
+  @Put('places-enrichment')
+  updatePlacesEnrichment(@CurrentUser() user: User, @Body() body: { enabled?: unknown }, @Req() req: Request) {
+    if (typeof body.enabled !== 'boolean') throw new HttpException({ error: 'enabled must be a boolean' }, 400);
+    const result = this.admin.updatePlacesEnrichment(body.enabled);
+    writeAudit({ userId: user.id, action: 'admin.places_enrichment', ip: getClientIp(req), details: { enabled: result.enabled } });
+    return result;
+  }
+
+  @Get('google-api-usage')
+  getGoogleApiUsage() { return { usage: this.admin.getGoogleApiUsage() }; }
+
   @Get('collab-features')
   getCollabFeatures() { return this.admin.getCollabFeatures(); }
 
