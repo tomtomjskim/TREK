@@ -52,9 +52,33 @@ app-release-signed.apk
 app-release-bundle.aab
 ```
 
+Run the guarded controller from the repository root. `preflight` is read-only;
+license acceptance and release builds require explicit confirmation tokens:
+
+```bash
+android/twa/scripts/build-release.sh preflight
+
+TREK_ANDROID_CONFIRM_ACCEPT_LICENSES=accept-trek-android-sdk-licenses \
+  android/twa/scripts/build-release.sh accept-licenses
+
+TREK_ANDROID_CONFIRM_BUILD=build-trek-android-release \
+  android/twa/scripts/build-release.sh build
+```
+
+The controller temporarily registers only the pinned x86_64 QEMU interpreter,
+uses the digest-pinned Bubblewrap image as an isolated JDK/Android SDK build
+environment, and removes a registration that it created. License and build
+actions hold an exclusive lock under the owner-only cache so concurrent jobs
+cannot remove each other's host-wide binfmt registration. The controller mounts
+only the keystore and password files it needs, each read-only; the one-line
+password file is exposed through separate container paths for the keystore and
+key password readers. Each build writes to a new mode `0700` record under the
+block-volume cache. A successful record has a mode `0600` `build.json` with
+`published=false`; publishing is deliberately a separate reviewed operation.
+
 Before publishing, verify all of the following:
 
-1. APK signature schemes v2 and v3 pass.
+1. APK signature schemes v1, v2, and v3 pass.
 2. The signing certificate SHA-256 matches `twa-manifest.json` and
    `assetlinks.json`.
 3. Package, version, and target SDK are
@@ -65,6 +89,11 @@ Before publishing, verify all of the following:
 5. `jarsigner -verify` accepts the AAB. A self-signed release certificate and
    absence of a timestamp produce expected trust-chain warnings; they do not
    invalidate Android app signing.
+
+The controller disables the optional APK v4 `.idsig` sidecar because the direct
+download contract publishes only the signed APK. AAB verification runs in a
+separate digest-pinned container and persists its owner-only log in the build
+record.
 
 Publish only the signed APK and `assetlinks.json` to the TREK runtime release
 directory:
