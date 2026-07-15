@@ -181,14 +181,16 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': '查看错误日志',
   'admin.plugins.errorLog': '错误日志',
   'admin.plugins.allowedHosts': '允许的主机',
-  'admin.plugins.allowedHosts.hint': '此插件会连接一个只有你才知道地址的服务（自托管服务器）。请添加它可以访问的主机 —— 其他主机一概无法访问。',
+  'admin.plugins.allowedHosts.hint':
+    '此插件会连接一个只有你才知道地址的服务（自托管服务器）。请添加它可以访问的主机 —— 其他主机一概无法访问。',
   'admin.plugins.allowedHosts.none': '尚未添加主机。',
   'admin.plugins.allowedHosts.unsupported': '此插件不使用运营者提供的主机。其允许的主机已在清单中固定。',
   'admin.plugins.allowedHosts.restartNote': '保存会重启插件，以便应用新的列表。',
   'admin.plugins.allowedHosts.add': '添加允许的主机',
   'admin.plugins.allowedHosts.count': '{n} 个允许的主机',
   'admin.plugins.operatorEgressPill': '+ 你添加的主机',
-  'admin.plugins.operatorEgressHint': '此插件会连接一个只有你才知道地址的服务（自托管服务器）。安装后请在 ⋯ → 允许的主机 中添加。其他主机一概无法访问。',
+  'admin.plugins.operatorEgressHint':
+    '此插件会连接一个只有你才知道地址的服务（自托管服务器）。安装后请在 ⋯ → 允许的主机 中添加。其他主机一概无法访问。',
   'admin.plugins.noErrors': '暂无错误记录。',
   'admin.plugins.uninstalled': '插件已卸载',
   'admin.plugins.uninstallTitle': '卸载插件？',
@@ -577,5 +579,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripNone': '不选择行程',
   'admin.invite.tripHint': '新用户通过链接注册时会自动加入此行程。',
   'admin.invite.boundTo': '加入 {trip}',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

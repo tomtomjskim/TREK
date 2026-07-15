@@ -188,14 +188,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': 'Показать журнал ошибок',
   'admin.plugins.errorLog': 'Журнал ошибок',
   'admin.plugins.allowedHosts': 'Разрешённые хосты',
-  'admin.plugins.allowedHosts.hint': 'Этот плагин обращается к сервису, который можете указать только вы (self-hosted сервер). Добавьте хосты, к которым он может обращаться — к другим он не сможет.',
+  'admin.plugins.allowedHosts.hint':
+    'Этот плагин обращается к сервису, который можете указать только вы (self-hosted сервер). Добавьте хосты, к которым он может обращаться — к другим он не сможет.',
   'admin.plugins.allowedHosts.none': 'Хосты пока не добавлены.',
-  'admin.plugins.allowedHosts.unsupported': 'Этот плагин не использует хосты, задаваемые оператором. Его разрешённые хосты зафиксированы в манифесте.',
+  'admin.plugins.allowedHosts.unsupported':
+    'Этот плагин не использует хосты, задаваемые оператором. Его разрешённые хосты зафиксированы в манифесте.',
   'admin.plugins.allowedHosts.restartNote': 'Сохранение перезапускает плагин, чтобы он подхватил новый список.',
   'admin.plugins.allowedHosts.add': 'Добавить разрешённый хост',
   'admin.plugins.allowedHosts.count': 'Разрешённых хостов: {n}',
   'admin.plugins.operatorEgressPill': '+ добавленные вами хосты',
-  'admin.plugins.operatorEgressHint': 'Этот плагин обращается к сервису, который можете указать только вы (self-hosted сервер). После установки добавьте хосты в ⋯ → Разрешённые хосты. К другим он не сможет обратиться.',
+  'admin.plugins.operatorEgressHint':
+    'Этот плагин обращается к сервису, который можете указать только вы (self-hosted сервер). После установки добавьте хосты в ⋯ → Разрешённые хосты. К другим он не сможет обратиться.',
   'admin.plugins.noErrors': 'Ошибок не зафиксировано.',
   'admin.plugins.uninstalled': 'Плагин удалён',
   'admin.plugins.uninstallTitle': 'Удалить плагин?',
@@ -633,5 +636,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripNone': 'Без поездки',
   'admin.invite.tripHint': 'Новый пользователь автоматически добавляется в эту поездку при регистрации по ссылке.',
   'admin.invite.boundTo': 'добавляет в {trip}',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

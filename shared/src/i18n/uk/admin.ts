@@ -188,14 +188,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': 'Переглянути журнал помилок',
   'admin.plugins.errorLog': 'Журнал помилок',
   'admin.plugins.allowedHosts': 'Дозволені хости',
-  'admin.plugins.allowedHosts.hint': 'Цей плагін звертається до сервісу, який можете вказати лише ви (self-hosted сервер). Додайте хости, до яких він може звертатися — до інших він не зможе.',
+  'admin.plugins.allowedHosts.hint':
+    'Цей плагін звертається до сервісу, який можете вказати лише ви (self-hosted сервер). Додайте хости, до яких він може звертатися — до інших він не зможе.',
   'admin.plugins.allowedHosts.none': 'Хости ще не додано.',
-  'admin.plugins.allowedHosts.unsupported': 'Цей плагін не використовує хости, задані оператором. Його дозволені хости зафіксовані в маніфесті.',
+  'admin.plugins.allowedHosts.unsupported':
+    'Цей плагін не використовує хости, задані оператором. Його дозволені хости зафіксовані в маніфесті.',
   'admin.plugins.allowedHosts.restartNote': 'Збереження перезапускає плагін, щоб він підхопив новий список.',
   'admin.plugins.allowedHosts.add': 'Додати дозволений хост',
   'admin.plugins.allowedHosts.count': 'Дозволених хостів: {n}',
   'admin.plugins.operatorEgressPill': '+ додані вами хости',
-  'admin.plugins.operatorEgressHint': 'Цей плагін звертається до сервісу, який можете вказати лише ви (self-hosted сервер). Після встановлення додайте хости в ⋯ → Дозволені хости. До інших він не зможе звертатися.',
+  'admin.plugins.operatorEgressHint':
+    'Цей плагін звертається до сервісу, який можете вказати лише ви (self-hosted сервер). Після встановлення додайте хости в ⋯ → Дозволені хости. До інших він не зможе звертатися.',
   'admin.plugins.noErrors': 'Помилок не зафіксовано.',
   'admin.plugins.uninstalled': 'Плагін видалено',
   'admin.plugins.uninstallTitle': 'Видалити плагін?',
@@ -630,5 +633,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripNone': 'Без подорожі',
   'admin.invite.tripHint': 'Новий користувач автоматично додається до цієї подорожі, коли реєструється за посиланням.',
   'admin.invite.boundTo': 'додає до {trip}',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

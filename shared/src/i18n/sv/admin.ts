@@ -244,14 +244,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': 'Visa felloggen',
   'admin.plugins.errorLog': 'Fellogg',
   'admin.plugins.allowedHosts': 'Tillåtna värdar',
-  'admin.plugins.allowedHosts.hint': 'Detta plugin pratar med en tjänst som bara du kan namnge (en självhostad server). Lägg till de värdar det får nå — inga andra.',
+  'admin.plugins.allowedHosts.hint':
+    'Detta plugin pratar med en tjänst som bara du kan namnge (en självhostad server). Lägg till de värdar det får nå — inga andra.',
   'admin.plugins.allowedHosts.none': 'Inga värdar tillagda ännu.',
-  'admin.plugins.allowedHosts.unsupported': 'Detta plugin använder inte operatörsangivna värdar. Dess tillåtna värdar är låsta i manifestet.',
+  'admin.plugins.allowedHosts.unsupported':
+    'Detta plugin använder inte operatörsangivna värdar. Dess tillåtna värdar är låsta i manifestet.',
   'admin.plugins.allowedHosts.restartNote': 'Att spara startar om pluginet så att den nya listan används.',
   'admin.plugins.allowedHosts.add': 'Lägg till tillåten värd',
   'admin.plugins.allowedHosts.count': '{n} tillåtna värdar',
   'admin.plugins.operatorEgressPill': '+ värdar du lägger till',
-  'admin.plugins.operatorEgressHint': 'Detta plugin pratar med en tjänst som bara du kan namnge (en självhostad server). Lägg efter installation till värdarna under ⋯ → Tillåtna värdar. Inga andra nås.',
+  'admin.plugins.operatorEgressHint':
+    'Detta plugin pratar med en tjänst som bara du kan namnge (en självhostad server). Lägg efter installation till värdarna under ⋯ → Tillåtna värdar. Inga andra nås.',
   'admin.plugins.noErrors': 'Inga fel loggade.',
   'admin.plugins.uninstalled': 'Pluginet har avinstallerats',
   'admin.plugins.uninstallTitle': 'Avinstallera pluginet?',
@@ -633,5 +636,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripHint':
     'Den nya användaren läggs automatiskt till i den här resan när de registrerar sig via länken.',
   'admin.invite.boundTo': 'läggs till i {trip}',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

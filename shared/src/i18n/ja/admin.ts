@@ -219,14 +219,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': 'エラーログを表示',
   'admin.plugins.errorLog': 'エラーログ',
   'admin.plugins.allowedHosts': '許可するホスト',
-  'admin.plugins.allowedHosts.hint': 'このプラグインは、あなたしか指定できないサービス（セルフホストのサーバー）と通信します。到達を許可するホストを追加してください。それ以外には到達できません。',
+  'admin.plugins.allowedHosts.hint':
+    'このプラグインは、あなたしか指定できないサービス（セルフホストのサーバー）と通信します。到達を許可するホストを追加してください。それ以外には到達できません。',
   'admin.plugins.allowedHosts.none': 'ホストはまだ追加されていません。',
-  'admin.plugins.allowedHosts.unsupported': 'このプラグインは運用者指定のホストを使いません。許可ホストはマニフェストで固定されています。',
+  'admin.plugins.allowedHosts.unsupported':
+    'このプラグインは運用者指定のホストを使いません。許可ホストはマニフェストで固定されています。',
   'admin.plugins.allowedHosts.restartNote': '保存するとプラグインが再起動し、新しい一覧が反映されます。',
   'admin.plugins.allowedHosts.add': '許可ホストを追加',
   'admin.plugins.allowedHosts.count': '許可ホスト {n} 件',
   'admin.plugins.operatorEgressPill': '+ 追加するホスト',
-  'admin.plugins.operatorEgressHint': 'このプラグインは、あなたしか指定できないサービス（セルフホストのサーバー）と通信します。インストール後、⋯ → 許可するホスト から追加してください。それ以外には到達できません。',
+  'admin.plugins.operatorEgressHint':
+    'このプラグインは、あなたしか指定できないサービス（セルフホストのサーバー）と通信します。インストール後、⋯ → 許可するホスト から追加してください。それ以外には到達できません。',
   'admin.plugins.noErrors': '記録されたエラーはありません。',
   'admin.plugins.uninstalled': 'プラグインをアンインストールしました',
   'admin.plugins.uninstallTitle': 'プラグインをアンインストールしますか？',
@@ -600,5 +603,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripNone': '旅行なし',
   'admin.invite.tripHint': '新しいユーザーがリンク経由で登録すると、自動的にこの旅行に追加されます。',
   'admin.invite.boundTo': '{trip}に追加',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

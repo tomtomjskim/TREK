@@ -234,14 +234,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': 'Προβολή αρχείου σφαλμάτων',
   'admin.plugins.errorLog': 'Αρχείο σφαλμάτων',
   'admin.plugins.allowedHosts': 'Επιτρεπόμενοι κόμβοι',
-  'admin.plugins.allowedHosts.hint': 'Αυτό το πρόσθετο επικοινωνεί με μια υπηρεσία που μόνο εσείς μπορείτε να ονομάσετε (αυτο-φιλοξενούμενος διακομιστής). Προσθέστε τους κόμβους που μπορεί να προσεγγίσει — κανέναν άλλον.',
+  'admin.plugins.allowedHosts.hint':
+    'Αυτό το πρόσθετο επικοινωνεί με μια υπηρεσία που μόνο εσείς μπορείτε να ονομάσετε (αυτο-φιλοξενούμενος διακομιστής). Προσθέστε τους κόμβους που μπορεί να προσεγγίσει — κανέναν άλλον.',
   'admin.plugins.allowedHosts.none': 'Δεν έχουν προστεθεί κόμβοι ακόμη.',
-  'admin.plugins.allowedHosts.unsupported': 'Αυτό το πρόσθετο δεν χρησιμοποιεί κόμβους που ορίζει ο διαχειριστής. Οι επιτρεπόμενοι κόμβοι του είναι σταθεροί στο manifest.',
+  'admin.plugins.allowedHosts.unsupported':
+    'Αυτό το πρόσθετο δεν χρησιμοποιεί κόμβους που ορίζει ο διαχειριστής. Οι επιτρεπόμενοι κόμβοι του είναι σταθεροί στο manifest.',
   'admin.plugins.allowedHosts.restartNote': 'Η αποθήκευση επανεκκινεί το πρόσθετο ώστε να λάβει τη νέα λίστα.',
   'admin.plugins.allowedHosts.add': 'Προσθήκη επιτρεπόμενου κόμβου',
   'admin.plugins.allowedHosts.count': '{n} επιτρεπόμενοι κόμβοι',
   'admin.plugins.operatorEgressPill': '+ κόμβοι που προσθέτετε',
-  'admin.plugins.operatorEgressHint': 'Αυτό το πρόσθετο επικοινωνεί με μια υπηρεσία που μόνο εσείς μπορείτε να ονομάσετε (αυτο-φιλοξενούμενος διακομιστής). Μετά την εγκατάσταση προσθέστε τους κόμβους στο ⋯ → Επιτρεπόμενοι κόμβοι. Κανέναν άλλον.',
+  'admin.plugins.operatorEgressHint':
+    'Αυτό το πρόσθετο επικοινωνεί με μια υπηρεσία που μόνο εσείς μπορείτε να ονομάσετε (αυτο-φιλοξενούμενος διακομιστής). Μετά την εγκατάσταση προσθέστε τους κόμβους στο ⋯ → Επιτρεπόμενοι κόμβοι. Κανέναν άλλον.',
   'admin.plugins.noErrors': 'Δεν έχουν καταγραφεί σφάλματα.',
   'admin.plugins.uninstalled': 'Το plugin απεγκαταστάθηκε',
   'admin.plugins.uninstallTitle': 'Απεγκατάσταση plugin;',
@@ -649,5 +652,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripNone': 'Χωρίς ταξίδι',
   'admin.invite.tripHint': 'Ο νέος χρήστης προστίθεται αυτόματα σε αυτό το ταξίδι όταν εγγραφεί μέσω του συνδέσμου.',
   'admin.invite.boundTo': 'προσθήκη στο {trip}',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

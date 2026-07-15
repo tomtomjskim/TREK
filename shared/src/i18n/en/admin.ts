@@ -265,14 +265,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': 'View error log',
   'admin.plugins.errorLog': 'Error log',
   'admin.plugins.allowedHosts': 'Allowed hosts',
-  'admin.plugins.allowedHosts.hint': 'This plugin talks to a service only you can name (a self-hosted server). Add the hosts it may reach — it can reach no others.',
+  'admin.plugins.allowedHosts.hint':
+    'This plugin talks to a service only you can name (a self-hosted server). Add the hosts it may reach — it can reach no others.',
   'admin.plugins.allowedHosts.none': 'No hosts added yet.',
-  'admin.plugins.allowedHosts.unsupported': 'This plugin does not use operator-supplied hosts. Its allowed hosts are fixed in its manifest.',
+  'admin.plugins.allowedHosts.unsupported':
+    'This plugin does not use operator-supplied hosts. Its allowed hosts are fixed in its manifest.',
   'admin.plugins.allowedHosts.restartNote': 'Saving restarts the plugin so it picks up the new list.',
   'admin.plugins.allowedHosts.add': 'Add allowed host',
   'admin.plugins.allowedHosts.count': '{n} allowed host(s)',
   'admin.plugins.operatorEgressPill': '+ hosts you add',
-  'admin.plugins.operatorEgressHint': 'This plugin talks to a service only you can name (a self-hosted server). After installing, add the hosts it may reach under ⋯ → Allowed hosts. It can reach no others.',
+  'admin.plugins.operatorEgressHint':
+    'This plugin talks to a service only you can name (a self-hosted server). After installing, add the hosts it may reach under ⋯ → Allowed hosts. It can reach no others.',
   'admin.plugins.noErrors': 'No errors logged.',
   'admin.plugins.uninstalled': 'Plugin uninstalled',
   'admin.plugins.uninstallTitle': 'Uninstall plugin?',

@@ -232,14 +232,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': 'Hata günlüğünü görüntüle',
   'admin.plugins.errorLog': 'Hata günlüğü',
   'admin.plugins.allowedHosts': 'İzin verilen ana bilgisayarlar',
-  'admin.plugins.allowedHosts.hint': 'Bu eklenti yalnızca sizin adlandırabileceğiniz bir hizmete bağlanır (kendi barındırdığınız sunucu). Erişebileceği ana bilgisayarları ekleyin — başkasına erişemez.',
+  'admin.plugins.allowedHosts.hint':
+    'Bu eklenti yalnızca sizin adlandırabileceğiniz bir hizmete bağlanır (kendi barındırdığınız sunucu). Erişebileceği ana bilgisayarları ekleyin — başkasına erişemez.',
   'admin.plugins.allowedHosts.none': 'Henüz ana bilgisayar eklenmedi.',
-  'admin.plugins.allowedHosts.unsupported': 'Bu eklenti operatör tarafından verilen ana bilgisayarları kullanmaz. İzin verilenler manifestinde sabittir.',
+  'admin.plugins.allowedHosts.unsupported':
+    'Bu eklenti operatör tarafından verilen ana bilgisayarları kullanmaz. İzin verilenler manifestinde sabittir.',
   'admin.plugins.allowedHosts.restartNote': 'Kaydetmek, yeni listeyi alması için eklentiyi yeniden başlatır.',
   'admin.plugins.allowedHosts.add': 'İzin verilen ana bilgisayar ekle',
   'admin.plugins.allowedHosts.count': '{n} izin verilen ana bilgisayar',
   'admin.plugins.operatorEgressPill': '+ eklediğiniz ana bilgisayarlar',
-  'admin.plugins.operatorEgressHint': 'Bu eklenti yalnızca sizin adlandırabileceğiniz bir hizmete bağlanır (kendi barındırdığınız sunucu). Kurulumdan sonra ⋯ → İzin verilen ana bilgisayarlar altından ekleyin. Başkasına erişemez.',
+  'admin.plugins.operatorEgressHint':
+    'Bu eklenti yalnızca sizin adlandırabileceğiniz bir hizmete bağlanır (kendi barındırdığınız sunucu). Kurulumdan sonra ⋯ → İzin verilen ana bilgisayarlar altından ekleyin. Başkasına erişemez.',
   'admin.plugins.noErrors': 'Kayıtlı hata yok.',
   'admin.plugins.uninstalled': 'Eklenti kaldırıldı',
   'admin.plugins.uninstallTitle': 'Eklenti kaldırılsın mı?',
@@ -636,5 +639,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripNone': 'Seyahat yok',
   'admin.invite.tripHint': 'Yeni kullanıcı bağlantı üzerinden kaydolduğunda otomatik olarak bu seyahate eklenir.',
   'admin.invite.boundTo': '{trip} seyahatine ekler',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

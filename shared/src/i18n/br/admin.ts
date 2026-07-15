@@ -185,14 +185,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': 'Ver registro de erros',
   'admin.plugins.errorLog': 'Registro de erros',
   'admin.plugins.allowedHosts': 'Hosts permitidos',
-  'admin.plugins.allowedHosts.hint': 'Este plugin fala com um serviço que só você pode nomear (um servidor auto-hospedado). Adicione os hosts que ele pode alcançar — nenhum outro.',
+  'admin.plugins.allowedHosts.hint':
+    'Este plugin fala com um serviço que só você pode nomear (um servidor auto-hospedado). Adicione os hosts que ele pode alcançar — nenhum outro.',
   'admin.plugins.allowedHosts.none': 'Nenhum host adicionado ainda.',
-  'admin.plugins.allowedHosts.unsupported': 'Este plugin não usa hosts fornecidos pelo operador. Seus hosts permitidos são fixos no manifesto.',
+  'admin.plugins.allowedHosts.unsupported':
+    'Este plugin não usa hosts fornecidos pelo operador. Seus hosts permitidos são fixos no manifesto.',
   'admin.plugins.allowedHosts.restartNote': 'Salvar reinicia o plugin para que ele use a nova lista.',
   'admin.plugins.allowedHosts.add': 'Adicionar host permitido',
   'admin.plugins.allowedHosts.count': '{n} host(s) permitido(s)',
   'admin.plugins.operatorEgressPill': '+ hosts que você adicionar',
-  'admin.plugins.operatorEgressHint': 'Este plugin fala com um serviço que só você pode nomear (um servidor auto-hospedado). Após instalar, adicione os hosts que ele pode alcançar em ⋯ → Hosts permitidos. Nenhum outro.',
+  'admin.plugins.operatorEgressHint':
+    'Este plugin fala com um serviço que só você pode nomear (um servidor auto-hospedado). Após instalar, adicione os hosts que ele pode alcançar em ⋯ → Hosts permitidos. Nenhum outro.',
   'admin.plugins.noErrors': 'Nenhum erro registrado.',
   'admin.plugins.uninstalled': 'Plugin desinstalado',
   'admin.plugins.uninstallTitle': 'Desinstalar plugin?',
@@ -625,5 +628,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripNone': 'Nenhuma viagem',
   'admin.invite.tripHint': 'O novo usuário é adicionado automaticamente a esta viagem ao se registrar pelo link.',
   'admin.invite.boundTo': 'adiciona a {trip}',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

@@ -250,14 +250,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': '오류 로그 보기',
   'admin.plugins.errorLog': '오류 로그',
   'admin.plugins.allowedHosts': '허용된 호스트',
-  'admin.plugins.allowedHosts.hint': '이 플러그인은 관리자만 알 수 있는 서비스(자체 호스팅 서버)와 통신합니다. 접근을 허용할 호스트를 추가하세요 — 그 외에는 접근할 수 없습니다.',
+  'admin.plugins.allowedHosts.hint':
+    '이 플러그인은 관리자만 알 수 있는 서비스(자체 호스팅 서버)와 통신합니다. 접근을 허용할 호스트를 추가하세요 — 그 외에는 접근할 수 없습니다.',
   'admin.plugins.allowedHosts.none': '아직 추가된 호스트가 없습니다.',
-  'admin.plugins.allowedHosts.unsupported': '이 플러그인은 운영자가 지정하는 호스트를 사용하지 않습니다. 허용 호스트는 매니페스트에 고정되어 있습니다.',
+  'admin.plugins.allowedHosts.unsupported':
+    '이 플러그인은 운영자가 지정하는 호스트를 사용하지 않습니다. 허용 호스트는 매니페스트에 고정되어 있습니다.',
   'admin.plugins.allowedHosts.restartNote': '저장하면 플러그인이 재시작되어 새 목록을 적용합니다.',
   'admin.plugins.allowedHosts.add': '허용 호스트 추가',
   'admin.plugins.allowedHosts.count': '허용 호스트 {n}개',
   'admin.plugins.operatorEgressPill': '+ 직접 추가하는 호스트',
-  'admin.plugins.operatorEgressHint': '이 플러그인은 관리자만 알 수 있는 서비스(자체 호스팅 서버)와 통신합니다. 설치 후 ⋯ → 허용된 호스트에서 추가하세요. 그 외에는 접근할 수 없습니다.',
+  'admin.plugins.operatorEgressHint':
+    '이 플러그인은 관리자만 알 수 있는 서비스(자체 호스팅 서버)와 통신합니다. 설치 후 ⋯ → 허용된 호스트에서 추가하세요. 그 외에는 접근할 수 없습니다.',
   'admin.plugins.noErrors': '기록된 오류가 없습니다.',
   'admin.plugins.uninstalled': '플러그인이 제거되었습니다',
   'admin.plugins.uninstallTitle': '플러그인을 제거할까요?',

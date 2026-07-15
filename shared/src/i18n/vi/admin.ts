@@ -243,14 +243,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': 'Xem nhật ký lỗi',
   'admin.plugins.errorLog': 'Nhật ký lỗi',
   'admin.plugins.allowedHosts': 'Máy chủ được phép',
-  'admin.plugins.allowedHosts.hint': 'Plugin này kết nối tới một dịch vụ mà chỉ bạn mới biết tên (máy chủ tự lưu trữ). Hãy thêm các máy chủ mà nó được phép truy cập — ngoài ra không có gì khác.',
+  'admin.plugins.allowedHosts.hint':
+    'Plugin này kết nối tới một dịch vụ mà chỉ bạn mới biết tên (máy chủ tự lưu trữ). Hãy thêm các máy chủ mà nó được phép truy cập — ngoài ra không có gì khác.',
   'admin.plugins.allowedHosts.none': 'Chưa thêm máy chủ nào.',
-  'admin.plugins.allowedHosts.unsupported': 'Plugin này không dùng máy chủ do người vận hành cung cấp. Danh sách được cố định trong manifest.',
+  'admin.plugins.allowedHosts.unsupported':
+    'Plugin này không dùng máy chủ do người vận hành cung cấp. Danh sách được cố định trong manifest.',
   'admin.plugins.allowedHosts.restartNote': 'Lưu sẽ khởi động lại plugin để nó dùng danh sách mới.',
   'admin.plugins.allowedHosts.add': 'Thêm máy chủ được phép',
   'admin.plugins.allowedHosts.count': '{n} máy chủ được phép',
   'admin.plugins.operatorEgressPill': '+ máy chủ bạn thêm',
-  'admin.plugins.operatorEgressHint': 'Plugin này kết nối tới một dịch vụ mà chỉ bạn mới biết tên (máy chủ tự lưu trữ). Sau khi cài, hãy thêm máy chủ tại ⋯ → Máy chủ được phép. Ngoài ra không có gì khác.',
+  'admin.plugins.operatorEgressHint':
+    'Plugin này kết nối tới một dịch vụ mà chỉ bạn mới biết tên (máy chủ tự lưu trữ). Sau khi cài, hãy thêm máy chủ tại ⋯ → Máy chủ được phép. Ngoài ra không có gì khác.',
   'admin.plugins.noErrors': 'Chưa ghi nhận lỗi nào.',
   'admin.plugins.uninstalled': 'Đã gỡ cài đặt plugin',
   'admin.plugins.uninstallTitle': 'Gỡ cài đặt plugin?',
@@ -575,5 +578,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripNone': 'Không có chuyến đi',
   'admin.invite.tripHint': 'Người dùng mới sẽ tự động được thêm vào chuyến đi này khi họ đăng ký qua liên kết.',
   'admin.invite.boundTo': 'thêm vào {trip}',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

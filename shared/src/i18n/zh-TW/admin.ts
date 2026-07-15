@@ -221,14 +221,16 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': '檢視錯誤日誌',
   'admin.plugins.errorLog': '錯誤日誌',
   'admin.plugins.allowedHosts': '允許的主機',
-  'admin.plugins.allowedHosts.hint': '此外掛會連線到只有你才知道位址的服務（自架伺服器）。請新增它可以存取的主機 —— 其他主機一律無法存取。',
+  'admin.plugins.allowedHosts.hint':
+    '此外掛會連線到只有你才知道位址的服務（自架伺服器）。請新增它可以存取的主機 —— 其他主機一律無法存取。',
   'admin.plugins.allowedHosts.none': '尚未新增主機。',
   'admin.plugins.allowedHosts.unsupported': '此外掛不使用營運者提供的主機。其允許的主機已在資訊清單中固定。',
   'admin.plugins.allowedHosts.restartNote': '儲存會重新啟動外掛，以便套用新的清單。',
   'admin.plugins.allowedHosts.add': '新增允許的主機',
   'admin.plugins.allowedHosts.count': '{n} 個允許的主機',
   'admin.plugins.operatorEgressPill': '+ 你新增的主機',
-  'admin.plugins.operatorEgressHint': '此外掛會連線到只有你才知道位址的服務（自架伺服器）。安裝後請在 ⋯ → 允許的主機 中新增。其他主機一律無法存取。',
+  'admin.plugins.operatorEgressHint':
+    '此外掛會連線到只有你才知道位址的服務（自架伺服器）。安裝後請在 ⋯ → 允許的主機 中新增。其他主機一律無法存取。',
   'admin.plugins.noErrors': '沒有錯誤記錄。',
   'admin.plugins.uninstalled': '外掛已解除安裝',
   'admin.plugins.uninstallTitle': '解除安裝外掛？',
@@ -579,5 +581,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripNone': '不指定行程',
   'admin.invite.tripHint': '新使用者透過連結註冊時，會自動加入此行程。',
   'admin.invite.boundTo': '加入 {trip}',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

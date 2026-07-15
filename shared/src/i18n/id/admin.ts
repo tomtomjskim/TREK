@@ -230,14 +230,17 @@ const admin: TranslationStrings = {
   'admin.plugins.viewErrors': 'Lihat log error',
   'admin.plugins.errorLog': 'Log error',
   'admin.plugins.allowedHosts': 'Host yang diizinkan',
-  'admin.plugins.allowedHosts.hint': 'Plugin ini berbicara dengan layanan yang hanya Anda yang tahu namanya (server swakelola). Tambahkan host yang boleh dijangkau — selain itu tidak bisa.',
+  'admin.plugins.allowedHosts.hint':
+    'Plugin ini berbicara dengan layanan yang hanya Anda yang tahu namanya (server swakelola). Tambahkan host yang boleh dijangkau — selain itu tidak bisa.',
   'admin.plugins.allowedHosts.none': 'Belum ada host yang ditambahkan.',
-  'admin.plugins.allowedHosts.unsupported': 'Plugin ini tidak memakai host dari operator. Host yang diizinkan sudah tetap di manifesnya.',
+  'admin.plugins.allowedHosts.unsupported':
+    'Plugin ini tidak memakai host dari operator. Host yang diizinkan sudah tetap di manifesnya.',
   'admin.plugins.allowedHosts.restartNote': 'Menyimpan akan memulai ulang plugin agar memakai daftar baru.',
   'admin.plugins.allowedHosts.add': 'Tambah host yang diizinkan',
   'admin.plugins.allowedHosts.count': '{n} host diizinkan',
   'admin.plugins.operatorEgressPill': '+ host yang Anda tambahkan',
-  'admin.plugins.operatorEgressHint': 'Plugin ini berbicara dengan layanan yang hanya Anda yang tahu namanya (server swakelola). Setelah dipasang, tambahkan host di ⋯ → Host yang diizinkan. Selain itu tidak bisa.',
+  'admin.plugins.operatorEgressHint':
+    'Plugin ini berbicara dengan layanan yang hanya Anda yang tahu namanya (server swakelola). Setelah dipasang, tambahkan host di ⋯ → Host yang diizinkan. Selain itu tidak bisa.',
   'admin.plugins.noErrors': 'Tidak ada error yang tercatat.',
   'admin.plugins.uninstalled': 'Plugin dihapus',
   'admin.plugins.uninstallTitle': 'Hapus plugin?',
@@ -635,5 +638,32 @@ const admin: TranslationStrings = {
   'admin.invite.tripNone': 'Tanpa perjalanan',
   'admin.invite.tripHint': 'Pengguna baru otomatis ditambahkan ke perjalanan ini saat mereka mendaftar melalui tautan.',
   'admin.invite.boundTo': 'menambahkan ke {trip}',
+  // English fallback until this feature receives a locale-specific translation.
+  'admin.placesEnrichment.title': 'Place detail refresh & import enrichment',
+  'admin.placesEnrichment.subtitle':
+    'Allow users to enrich imported places and refresh saved place details through Google Places. Disable this first if usage is higher than expected.',
+  'admin.googleUsage.title': 'Google Places usage',
+  'admin.googleUsage.scope':
+    'TREK requests only. This local safety ledger is not your Google Cloud billing total; compare it with Google Cloud Billing for final cost verification.',
+  'admin.googleUsage.refresh': 'Refresh usage',
+  'admin.googleUsage.refreshShort': 'Refresh',
+  'admin.googleUsage.loading': 'Loading Google Places usage',
+  'admin.googleUsage.loadError': 'Could not load Google Places usage.',
+  'admin.googleUsage.retry': 'Retry',
+  'admin.googleUsage.period': 'Billing period',
+  'admin.googleUsage.remaining': '{count} remaining',
+  'admin.googleUsage.exhausted': 'Limit reached',
+  'admin.googleUsage.officialCap': 'Google free-use reference: {count}',
+  'admin.googleUsage.officialUnlimited': 'Google free-use reference: unlimited',
+  'admin.googleUsage.failedCalls':
+    'TREK reserves usage before calling Google, so failed provider calls can also count here. Google may meter requests differently; this is a conservative operational guard, not a billing guarantee.',
+  'admin.googleUsage.sku.autocomplete': 'Autocomplete',
+  'admin.googleUsage.sku.textSearchIdsOnly': 'Text Search (IDs only)',
+  'admin.googleUsage.sku.textSearchPro': 'Text Search Pro',
+  'admin.googleUsage.sku.textSearchEnterprise': 'Text Search Enterprise',
+  'admin.googleUsage.sku.placeDetailsIdsOnly': 'Place Details (IDs only)',
+  'admin.googleUsage.sku.placeDetailsEnterprise': 'Place Details Enterprise',
+  'admin.googleUsage.sku.placeDetailsAtmosphere': 'Place Details + Atmosphere',
+  'admin.googleUsage.sku.placePhotos': 'Place Photos',
 };
 export default admin;

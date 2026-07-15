@@ -41,8 +41,10 @@ const settings: TranslationStrings = {
   'settings.mapLabelLanguageLocal': 'Local / native names',
   'settings.mapLabelLanguageKorean': 'Korean',
   'settings.mapLabelLanguageEnglish': 'English',
-  'settings.mapLabelLanguageRasterHint': 'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
-  'settings.mapLabelLanguageVectorHint': 'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
+  'settings.mapLabelLanguageRasterHint':
+    'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
+  'settings.mapLabelLanguageVectorHint':
+    'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
   'settings.mapLeafletSubtitle': 'Classic 2D, any raster tiles',
   'settings.mapMapboxSubtitle': 'Vector tiles, 3D buildings & terrain',
   'settings.mapMapLibreSubtitle': 'OpenFreeMap vector tiles, no token',

@@ -104,7 +104,8 @@ const settings: TranslationStrings = {
   'settings.notificationPreferences.configure': 'Ρύθμιση',
   'settings.notificationPreferences.testSuccess': 'Στάλθηκε δοκιμαστική ειδοποίηση.',
   'settings.notificationPreferences.testFailed': 'Η δοκιμή απέτυχε.',
-  'settings.notificationPreferences.pluginConfigured': 'Ρυθμίστηκε. Διαχειριστείτε τα διαπιστευτήρια στη σελίδα ρυθμίσεων του πρόσθετου.',
+  'settings.notificationPreferences.pluginConfigured':
+    'Ρυθμίστηκε. Διαχειριστείτε τα διαπιστευτήρια στη σελίδα ρυθμίσεων του πρόσθετου.',
   'settings.notificationPreferences.ntfy': 'Ntfy',
   'settings.notificationPreferences.noChannels':
     'Δεν έχουν διαμορφωθεί κανάλια ειδοποιήσεων. Ζητήστε από έναν διαχειριστή να ρυθμίσει ειδοποιήσεις email ή webhook.',
@@ -504,6 +505,16 @@ const settings: TranslationStrings = {
   'settings.pluginActivity.columns.resource': 'Πόρος',
   'settings.pluginActivity.columns.when': 'Πότε',
   'settings.pluginActivity.columns.status': 'Αποτέλεσμα',
+  // English fallback until this feature receives a locale-specific translation.
+  'settings.mapLabelLanguage': 'Map label language',
+  'settings.mapLabelLanguageAuto': 'Follow app language',
+  'settings.mapLabelLanguageLocal': 'Local / native names',
+  'settings.mapLabelLanguageKorean': 'Korean',
+  'settings.mapLabelLanguageEnglish': 'English',
+  'settings.mapLabelLanguageRasterHint':
+    'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
+  'settings.mapLabelLanguageVectorHint':
+    'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
 };
 
 export default settings;
