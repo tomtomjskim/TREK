@@ -268,10 +268,16 @@ describe('Admin user management', () => {
       "INSERT INTO visited_regions (user_id, region_code, region_name, country_code) VALUES (?, 'JP-13', 'Tokyo', 'JP')"
     ).run(target.id);
 
-    // packing_templates.created_by (CASCADE): target created a packing template
+    // packing_templates.created_by (SET NULL): instance templates survive creator deletion
     const packTemplateRow = testDb.prepare(
       "INSERT INTO packing_templates (name, created_by) VALUES ('My Template', ?)"
     ).run(target.id);
+    const packTemplateCategoryRow = testDb.prepare(
+      "INSERT INTO packing_template_categories (template_id, name) VALUES (?, 'Essentials')"
+    ).run(packTemplateRow.lastInsertRowid);
+    const packTemplateItemRow = testDb.prepare(
+      "INSERT INTO packing_template_items (category_id, name) VALUES (?, 'Passport')"
+    ).run(packTemplateCategoryRow.lastInsertRowid);
 
     // invite_tokens.created_by (CASCADE): target created an invite token
     createInviteToken(testDb, { created_by: target.id });
@@ -350,8 +356,30 @@ describe('Admin user management', () => {
     // travel history is deleted
     expect(testDb.prepare('SELECT user_id FROM visited_countries WHERE user_id = ? AND country_code = ?').get(target.id, 'JP')).toBeUndefined();
     expect(testDb.prepare('SELECT id FROM visited_regions WHERE user_id = ?').get(target.id)).toBeUndefined();
-    // packing template is deleted
-    expect(testDb.prepare('SELECT id FROM packing_templates WHERE id = ?').get(packTemplateRow.lastInsertRowid)).toBeUndefined();
+    // instance template and children survive; creator attribution is detached
+    expect(testDb.prepare('SELECT id, scope, owner_id, created_by FROM packing_templates WHERE id = ?').get(packTemplateRow.lastInsertRowid)).toEqual({
+      id: Number(packTemplateRow.lastInsertRowid),
+      scope: 'instance',
+      owner_id: null,
+      created_by: null,
+    });
+    expect(testDb.prepare('SELECT id FROM packing_template_categories WHERE id = ?').get(packTemplateCategoryRow.lastInsertRowid)).toEqual({
+      id: Number(packTemplateCategoryRow.lastInsertRowid),
+    });
+    expect(testDb.prepare('SELECT id FROM packing_template_items WHERE id = ?').get(packTemplateItemRow.lastInsertRowid)).toEqual({
+      id: Number(packTemplateItemRow.lastInsertRowid),
+    });
+    const templatesAfterCreatorDelete = await request(app)
+      .get('/api/admin/packing-templates')
+      .set('Cookie', authCookie(admin.id));
+    expect(templatesAfterCreatorDelete.status).toBe(200);
+    expect(templatesAfterCreatorDelete.body.templates).toContainEqual(
+      expect.objectContaining({
+        id: Number(packTemplateRow.lastInsertRowid),
+        created_by: null,
+        created_by_name: null,
+      }),
+    );
     // invite tokens created by target are deleted
     expect(testDb.prepare('SELECT id FROM invite_tokens WHERE created_by = ?').get(target.id)).toBeUndefined();
     // collab content is deleted
@@ -592,6 +620,49 @@ describe('Packing templates', () => {
       .set('Cookie', authCookie(admin.id));
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
+  });
+
+  it('ADMIN-016b — instance administration cannot discover or mutate personal templates or their children', async () => {
+    const { user: admin } = createAdmin(testDb);
+    const { user: owner } = createUser(testDb);
+    const personalId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+        .run('Private template', owner.id, owner.id).lastInsertRowid,
+    );
+    const categoryId = Number(
+      testDb
+        .prepare('INSERT INTO packing_template_categories (template_id, name) VALUES (?, ?)')
+        .run(personalId, 'Private category').lastInsertRowid,
+    );
+    const itemId = Number(
+      testDb
+        .prepare('INSERT INTO packing_template_items (category_id, name) VALUES (?, ?)')
+        .run(categoryId, 'Private item').lastInsertRowid,
+    );
+    const instanceId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'instance', NULL, ?)")
+        .run('Instance template', admin.id).lastInsertRowid,
+    );
+    const cookie = authCookie(admin.id);
+
+    const listed = await request(app).get('/api/admin/packing-templates').set('Cookie', cookie);
+    expect(listed.status).toBe(200);
+    expect(listed.body.templates.some((template: { id: number }) => template.id === personalId)).toBe(false);
+    expect((await request(app).get(`/api/admin/packing-templates/${personalId}`).set('Cookie', cookie)).status).toBe(404);
+    expect((await request(app).put(`/api/admin/packing-templates/${personalId}`).set('Cookie', cookie).send({ name: 'Hacked' })).status).toBe(404);
+    expect((await request(app).delete(`/api/admin/packing-templates/${personalId}`).set('Cookie', cookie)).status).toBe(404);
+    expect((await request(app).post(`/api/admin/packing-templates/${personalId}/categories`).set('Cookie', cookie).send({ name: 'Injected' })).status).toBe(404);
+    expect((await request(app).put(`/api/admin/packing-templates/${personalId}/categories/${categoryId}`).set('Cookie', cookie).send({ name: 'Hacked' })).status).toBe(404);
+    expect((await request(app).delete(`/api/admin/packing-templates/${personalId}/categories/${categoryId}`).set('Cookie', cookie)).status).toBe(404);
+    expect((await request(app).post(`/api/admin/packing-templates/${personalId}/categories/${categoryId}/items`).set('Cookie', cookie).send({ name: 'Injected' })).status).toBe(404);
+    expect((await request(app).put(`/api/admin/packing-templates/${instanceId}/items/${itemId}`).set('Cookie', cookie).send({ name: 'Hacked' })).status).toBe(404);
+    expect((await request(app).delete(`/api/admin/packing-templates/${instanceId}/items/${itemId}`).set('Cookie', cookie)).status).toBe(404);
+
+    expect(testDb.prepare('SELECT name FROM packing_templates WHERE id = ?').get(personalId)).toEqual({ name: 'Private template' });
+    expect(testDb.prepare('SELECT name FROM packing_template_categories WHERE id = ?').get(categoryId)).toEqual({ name: 'Private category' });
+    expect(testDb.prepare('SELECT name FROM packing_template_items WHERE id = ?').get(itemId)).toEqual({ name: 'Private item' });
   });
 });
 

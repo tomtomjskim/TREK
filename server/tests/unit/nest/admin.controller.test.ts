@@ -107,6 +107,12 @@ describe('AdminController packing templates', () => {
     expect(thrown(() => new AdminController(svc({ getPackingTemplate: vi.fn().mockReturnValue({ error: 'not found', status: 404 }) } as Partial<AdminService>)).getPackingTemplate('9'))).toEqual({ status: 404, body: { error: 'not found' } });
     expect(new AdminController(svc({ createPackingTemplate: vi.fn().mockReturnValue({ id: 3, name: 'Beach' }) } as Partial<AdminService>)).createPackingTemplate(user, { name: 'Beach' })).toEqual({ id: 3, name: 'Beach' });
     expect(new AdminController(svc({ deletePackingTemplate: vi.fn().mockReturnValue({ name: 'Beach' }) } as Partial<AdminService>)).deletePackingTemplate(user, '3', req)).toEqual({ success: true });
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'admin.packing_template_delete',
+      resource: '3',
+      details: { scope: 'instance', result: 'deleted' },
+    }));
+    expect(writeAudit).not.toHaveBeenCalledWith(expect.objectContaining({ details: { name: 'Beach' } }));
     expect(new AdminController(svc({ createTemplateItem: vi.fn().mockReturnValue({ id: 7 }) } as Partial<AdminService>)).createTemplateItem('3', '4', { name: 'Towel' })).toEqual({ id: 7 });
   });
 });
@@ -164,13 +170,13 @@ describe('AdminController error envelope fallbacks', () => {
 });
 
 describe('AdminController read-only getters', () => {
-  it('return service values verbatim', () => {
+  it('return service values verbatim', async () => {
     expect(new AdminController(svc({ resetUserPasskeys: vi.fn().mockReturnValue({ email: 'a@b.c', deleted: 2 }) } as Partial<AdminService>)).resetUserPasskeys(user, '4', req)).toEqual({ success: true, deleted: 2 });
     expect(new AdminController(svc({ getStats: vi.fn().mockReturnValue({ users: 3 }) } as Partial<AdminService>)).stats()).toEqual({ users: 3 });
     expect(new AdminController(svc({ getPermissions: vi.fn().mockReturnValue({ a: 1 }) } as Partial<AdminService>)).permissions()).toEqual({ a: 1 });
     expect(new AdminController(svc({ getAuditLog: vi.fn().mockReturnValue({ entries: [] }) } as Partial<AdminService>)).auditLog({})).toEqual({ entries: [] });
     expect(new AdminController(svc({ getOidcSettings: vi.fn().mockReturnValue({ issuer: 'x' }) } as Partial<AdminService>)).getOidc()).toEqual({ issuer: 'x' });
-    expect(new AdminController(svc({ checkVersion: vi.fn().mockResolvedValue({ current: '1' }) } as Partial<AdminService>)).versionCheck()).resolves.toEqual({ current: '1' });
+    await expect(new AdminController(svc({ checkVersion: vi.fn().mockResolvedValue({ current: '1' }) } as Partial<AdminService>)).versionCheck()).resolves.toEqual({ current: '1' });
     expect(new AdminController(svc({ getPreferencesMatrix: vi.fn().mockReturnValue({ rows: [] }) } as Partial<AdminService>)).getNotificationPrefs(user)).toEqual({ rows: [] });
     expect(new AdminController(svc({ listInvites: vi.fn().mockReturnValue([{ id: 1 }]) } as Partial<AdminService>)).listInvites()).toEqual({ invites: [{ id: 1 }] });
     expect(new AdminController(svc({ getBagTracking: vi.fn().mockReturnValue({ enabled: false }) } as Partial<AdminService>)).getBagTracking()).toEqual({ enabled: false });
@@ -229,9 +235,14 @@ describe('AdminController packing template sub-routes', () => {
     expect(new AdminController(svc({ createTemplateCategory: vi.fn().mockReturnValue({ id: 4 }) } as Partial<AdminService>)).createTemplateCategory('3', { name: 'Tops' })).toEqual({ id: 4 });
     expect(new AdminController(svc({ updateTemplateCategory: vi.fn().mockReturnValue({ id: 4 }) } as Partial<AdminService>)).updateTemplateCategory('3', '4', {})).toEqual({ id: 4 });
     expect(new AdminController(svc({ deleteTemplateCategory: vi.fn().mockReturnValue({}) } as Partial<AdminService>)).deleteTemplateCategory('3', '4')).toEqual({ success: true });
-    expect(new AdminController(svc({ updateTemplateItem: vi.fn().mockReturnValue({ id: 7 }) } as Partial<AdminService>)).updateTemplateItem('7', {})).toEqual({ id: 7 });
-    expect(new AdminController(svc({ deleteTemplateItem: vi.fn().mockReturnValue({}) } as Partial<AdminService>)).deleteTemplateItem('7')).toEqual({ success: true });
-    expect(thrown(() => new AdminController(svc({ deleteTemplateItem: vi.fn().mockReturnValue({ error: 'gone', status: 404 }) } as Partial<AdminService>)).deleteTemplateItem('9'))).toEqual({ status: 404, body: { error: 'gone' } });
+    const updateTemplateItem = vi.fn().mockReturnValue({ id: 7 });
+    expect(new AdminController(svc({ updateTemplateItem } as Partial<AdminService>)).updateTemplateItem('3', '7', {})).toEqual({ id: 7 });
+    expect(updateTemplateItem).toHaveBeenCalledWith('3', '7', {});
+
+    const deleteTemplateItem = vi.fn().mockReturnValue({});
+    expect(new AdminController(svc({ deleteTemplateItem } as Partial<AdminService>)).deleteTemplateItem('3', '7')).toEqual({ success: true });
+    expect(deleteTemplateItem).toHaveBeenCalledWith('3', '7');
+    expect(thrown(() => new AdminController(svc({ deleteTemplateItem: vi.fn().mockReturnValue({ error: 'gone', status: 404 }) } as Partial<AdminService>)).deleteTemplateItem('3', '9'))).toEqual({ status: 404, body: { error: 'gone' } });
   });
 });
 

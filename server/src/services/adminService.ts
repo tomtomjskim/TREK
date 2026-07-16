@@ -587,13 +587,14 @@ export function listPackingTemplates() {
       (SELECT COUNT(*) FROM packing_template_items ti JOIN packing_template_categories tc ON ti.category_id = tc.id WHERE tc.template_id = pt.id) as item_count,
       (SELECT COUNT(*) FROM packing_template_categories WHERE template_id = pt.id) as category_count
     FROM packing_templates pt
-    JOIN users u ON pt.created_by = u.id
+    LEFT JOIN users u ON pt.created_by = u.id
+    WHERE pt.scope = 'instance'
     ORDER BY pt.created_at DESC
   `).all();
 }
 
 export function getPackingTemplate(id: string) {
-  const template = db.prepare('SELECT * FROM packing_templates WHERE id = ?').get(id);
+  const template = db.prepare("SELECT * FROM packing_templates WHERE id = ? AND scope = 'instance'").get(id);
   if (!template) return { error: 'Template not found', status: 404 };
   const categories = db.prepare('SELECT * FROM packing_template_categories WHERE template_id = ? ORDER BY sort_order, id').all(id) as any[];
   const items = db.prepare(`
@@ -606,22 +607,24 @@ export function getPackingTemplate(id: string) {
 
 export function createPackingTemplate(name: string, createdBy: number) {
   if (!name?.trim()) return { error: 'Name is required', status: 400 };
-  const result = db.prepare('INSERT INTO packing_templates (name, created_by) VALUES (?, ?)').run(name.trim(), createdBy);
+  const result = db.prepare(
+    "INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'instance', NULL, ?)",
+  ).run(name.trim(), createdBy);
   const template = db.prepare('SELECT * FROM packing_templates WHERE id = ?').get(result.lastInsertRowid);
   return { template };
 }
 
 export function updatePackingTemplate(id: string, data: { name?: string }) {
-  const template = db.prepare('SELECT * FROM packing_templates WHERE id = ?').get(id);
+  const template = db.prepare("SELECT * FROM packing_templates WHERE id = ? AND scope = 'instance'").get(id);
   if (!template) return { error: 'Template not found', status: 404 };
-  if (data.name?.trim()) db.prepare('UPDATE packing_templates SET name = ? WHERE id = ?').run(data.name.trim(), id);
-  return { template: db.prepare('SELECT * FROM packing_templates WHERE id = ?').get(id) };
+  if (data.name?.trim()) db.prepare("UPDATE packing_templates SET name = ? WHERE id = ? AND scope = 'instance'").run(data.name.trim(), id);
+  return { template: db.prepare("SELECT * FROM packing_templates WHERE id = ? AND scope = 'instance'").get(id) };
 }
 
 export function deletePackingTemplate(id: string) {
-  const template = db.prepare('SELECT * FROM packing_templates WHERE id = ?').get(id) as { name?: string } | undefined;
+  const template = db.prepare("SELECT * FROM packing_templates WHERE id = ? AND scope = 'instance'").get(id) as { name?: string } | undefined;
   if (!template) return { error: 'Template not found', status: 404 };
-  db.prepare('DELETE FROM packing_templates WHERE id = ?').run(id);
+  db.prepare("DELETE FROM packing_templates WHERE id = ? AND scope = 'instance'").run(id);
   return { name: template.name };
 }
 
@@ -629,7 +632,7 @@ export function deletePackingTemplate(id: string) {
 
 export function createTemplateCategory(templateId: string, name: string) {
   if (!name?.trim()) return { error: 'Category name is required', status: 400 };
-  const template = db.prepare('SELECT * FROM packing_templates WHERE id = ?').get(templateId);
+  const template = db.prepare("SELECT * FROM packing_templates WHERE id = ? AND scope = 'instance'").get(templateId);
   if (!template) return { error: 'Template not found', status: 404 };
   const maxOrder = db.prepare('SELECT MAX(sort_order) as max FROM packing_template_categories WHERE template_id = ?').get(templateId) as { max: number | null };
   const result = db.prepare('INSERT INTO packing_template_categories (template_id, name, sort_order) VALUES (?, ?, ?)').run(templateId, name.trim(), (maxOrder.max ?? -1) + 1);
@@ -637,16 +640,36 @@ export function createTemplateCategory(templateId: string, name: string) {
 }
 
 export function updateTemplateCategory(templateId: string, catId: string, data: { name?: string }) {
-  const cat = db.prepare('SELECT * FROM packing_template_categories WHERE id = ? AND template_id = ?').get(catId, templateId);
+  const cat = db.prepare(`
+    SELECT tc.* FROM packing_template_categories tc
+    JOIN packing_templates pt ON pt.id = tc.template_id
+    WHERE tc.id = ? AND tc.template_id = ? AND pt.scope = 'instance'
+  `).get(catId, templateId);
   if (!cat) return { error: 'Category not found', status: 404 };
-  if (data.name?.trim()) db.prepare('UPDATE packing_template_categories SET name = ? WHERE id = ?').run(data.name.trim(), catId);
+  if (data.name?.trim()) {
+    db.prepare(`
+      UPDATE packing_template_categories SET name = ?
+      WHERE id = ? AND template_id IN (
+        SELECT id FROM packing_templates WHERE id = ? AND scope = 'instance'
+      )
+    `).run(data.name.trim(), catId, templateId);
+  }
   return { category: db.prepare('SELECT * FROM packing_template_categories WHERE id = ?').get(catId) };
 }
 
 export function deleteTemplateCategory(templateId: string, catId: string) {
-  const cat = db.prepare('SELECT * FROM packing_template_categories WHERE id = ? AND template_id = ?').get(catId, templateId);
+  const cat = db.prepare(`
+    SELECT tc.* FROM packing_template_categories tc
+    JOIN packing_templates pt ON pt.id = tc.template_id
+    WHERE tc.id = ? AND tc.template_id = ? AND pt.scope = 'instance'
+  `).get(catId, templateId);
   if (!cat) return { error: 'Category not found', status: 404 };
-  db.prepare('DELETE FROM packing_template_categories WHERE id = ?').run(catId);
+  db.prepare(`
+    DELETE FROM packing_template_categories
+    WHERE id = ? AND template_id IN (
+      SELECT id FROM packing_templates WHERE id = ? AND scope = 'instance'
+    )
+  `).run(catId, templateId);
   return {};
 }
 
@@ -654,24 +677,54 @@ export function deleteTemplateCategory(templateId: string, catId: string) {
 
 export function createTemplateItem(templateId: string, catId: string, name: string) {
   if (!name?.trim()) return { error: 'Item name is required', status: 400 };
-  const cat = db.prepare('SELECT * FROM packing_template_categories WHERE id = ? AND template_id = ?').get(catId, templateId);
+  const cat = db.prepare(`
+    SELECT tc.* FROM packing_template_categories tc
+    JOIN packing_templates pt ON pt.id = tc.template_id
+    WHERE tc.id = ? AND tc.template_id = ? AND pt.scope = 'instance'
+  `).get(catId, templateId);
   if (!cat) return { error: 'Category not found', status: 404 };
   const maxOrder = db.prepare('SELECT MAX(sort_order) as max FROM packing_template_items WHERE category_id = ?').get(catId) as { max: number | null };
   const result = db.prepare('INSERT INTO packing_template_items (category_id, name, sort_order) VALUES (?, ?, ?)').run(catId, name.trim(), (maxOrder.max ?? -1) + 1);
   return { item: db.prepare('SELECT * FROM packing_template_items WHERE id = ?').get(result.lastInsertRowid) };
 }
 
-export function updateTemplateItem(itemId: string, data: { name?: string }) {
-  const item = db.prepare('SELECT * FROM packing_template_items WHERE id = ?').get(itemId);
+export function updateTemplateItem(templateId: string, itemId: string, data: { name?: string }) {
+  const item = db.prepare(`
+    SELECT ti.* FROM packing_template_items ti
+    JOIN packing_template_categories tc ON tc.id = ti.category_id
+    JOIN packing_templates pt ON pt.id = tc.template_id
+    WHERE ti.id = ? AND pt.id = ? AND pt.scope = 'instance'
+  `).get(itemId, templateId);
   if (!item) return { error: 'Item not found', status: 404 };
-  if (data.name?.trim()) db.prepare('UPDATE packing_template_items SET name = ? WHERE id = ?').run(data.name.trim(), itemId);
+  if (data.name?.trim()) {
+    db.prepare(`
+      UPDATE packing_template_items SET name = ?
+      WHERE id = ? AND category_id IN (
+        SELECT tc.id FROM packing_template_categories tc
+        JOIN packing_templates pt ON pt.id = tc.template_id
+        WHERE pt.id = ? AND pt.scope = 'instance'
+      )
+    `).run(data.name.trim(), itemId, templateId);
+  }
   return { item: db.prepare('SELECT * FROM packing_template_items WHERE id = ?').get(itemId) };
 }
 
-export function deleteTemplateItem(itemId: string) {
-  const item = db.prepare('SELECT * FROM packing_template_items WHERE id = ?').get(itemId);
+export function deleteTemplateItem(templateId: string, itemId: string) {
+  const item = db.prepare(`
+    SELECT ti.* FROM packing_template_items ti
+    JOIN packing_template_categories tc ON tc.id = ti.category_id
+    JOIN packing_templates pt ON pt.id = tc.template_id
+    WHERE ti.id = ? AND pt.id = ? AND pt.scope = 'instance'
+  `).get(itemId, templateId);
   if (!item) return { error: 'Item not found', status: 404 };
-  db.prepare('DELETE FROM packing_template_items WHERE id = ?').run(itemId);
+  db.prepare(`
+    DELETE FROM packing_template_items
+    WHERE id = ? AND category_id IN (
+      SELECT tc.id FROM packing_template_categories tc
+      JOIN packing_templates pt ON pt.id = tc.template_id
+      WHERE pt.id = ? AND pt.scope = 'instance'
+    )
+  `).run(itemId, templateId);
   return {};
 }
 

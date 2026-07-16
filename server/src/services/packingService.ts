@@ -415,6 +415,7 @@ export function listTemplates() {
     SELECT pt.id, pt.name,
       (SELECT COUNT(*) FROM packing_template_items ti JOIN packing_template_categories tc ON ti.category_id = tc.id WHERE tc.template_id = pt.id) as item_count
     FROM packing_templates pt
+    WHERE pt.scope = 'instance'
     ORDER BY pt.created_at DESC
   `).all() as { id: number; name: string; item_count: number }[];
 }
@@ -426,7 +427,8 @@ export function applyTemplate(tripId: string | number, templateId: string | numb
     SELECT ti.name, tc.name as category
     FROM packing_template_items ti
     JOIN packing_template_categories tc ON ti.category_id = tc.id
-    WHERE tc.template_id = ?
+    JOIN packing_templates pt ON pt.id = tc.template_id
+    WHERE tc.template_id = ? AND pt.scope = 'instance'
     ORDER BY tc.sort_order, ti.sort_order
   `).all(templateId) as { name: string; category: string }[];
 
@@ -457,7 +459,9 @@ export function saveAsTemplate(tripId: string | number, userId: number, template
 
   if (items.length === 0) return null;
 
-  const result = db.prepare('INSERT INTO packing_templates (name, created_by) VALUES (?, ?)').run(templateName, userId);
+  const result = db.prepare(
+    "INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'instance', NULL, ?)",
+  ).run(templateName, userId);
   const templateId = result.lastInsertRowid;
 
   const categories = [...new Set(items.map(i => i.category || 'Other'))];

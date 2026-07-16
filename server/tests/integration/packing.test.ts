@@ -582,6 +582,35 @@ describe('Packing — apply-template, bag members, save-as-template', () => {
     expect(res.body.error).toBeDefined();
   });
 
+  it('PACK-015c — instance list and apply endpoints do not expose a personal template', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const templateId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+        .run('Private template', user.id, user.id).lastInsertRowid,
+    );
+    const categoryId = Number(
+      testDb
+        .prepare('INSERT INTO packing_template_categories (template_id, name) VALUES (?, ?)')
+        .run(templateId, 'Private').lastInsertRowid,
+    );
+    testDb.prepare('INSERT INTO packing_template_items (category_id, name) VALUES (?, ?)').run(categoryId, 'Secret');
+    const cookie = authCookie(user.id);
+
+    const listed = await request(app)
+      .get(`/api/trips/${trip.id}/packing/templates`)
+      .set('Cookie', cookie);
+    expect(listed.status).toBe(200);
+    expect(listed.body.templates).toEqual([]);
+
+    const applied = await request(app)
+      .post(`/api/trips/${trip.id}/packing/apply-template/${templateId}`)
+      .set('Cookie', cookie);
+    expect(applied.status).toBe(404);
+    expect(testDb.prepare('SELECT COUNT(*) AS count FROM packing_items WHERE trip_id = ?').get(trip.id)).toEqual({ count: 0 });
+  });
+
   it('PACK-016 — PUT /bags/:bagId/members sets bag members', async () => {
     const { user } = createUser(testDb);
     const { user: member } = createUser(testDb);

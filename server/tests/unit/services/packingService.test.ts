@@ -90,6 +90,8 @@ describe('saveAsTemplate', () => {
     const template = testDb.prepare('SELECT * FROM packing_templates WHERE id = ?').get(result!.id) as any;
     expect(template).toBeDefined();
     expect(template.name).toBe('My Template');
+    expect(template.scope).toBe('instance');
+    expect(template.owner_id).toBeNull();
     expect(template.created_by).toBe(user.id);
   });
 
@@ -160,6 +162,15 @@ describe('listTemplates', () => {
   it('PACK-SVC-LIST-002: returns an empty array when no templates exist', () => {
     expect(listTemplates()).toEqual([]);
   });
+
+  it('PACK-SVC-LIST-003: excludes personal templates from the instance catalogue', () => {
+    const { user } = createUser(testDb);
+    testDb
+      .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+      .run('Private template', user.id, user.id);
+
+    expect(listTemplates()).toEqual([]);
+  });
 });
 
 // ── applyTemplate ─────────────────────────────────────────────────────────────
@@ -201,6 +212,27 @@ describe('applyTemplate', () => {
     const result = applyTemplate(trip.id, templateId);
 
     expect(result).toBeNull();
+  });
+
+  it('PACK-SVC-004a: refuses to apply a personal template through the instance endpoint', () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const templateId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+        .run('Private template', user.id, user.id).lastInsertRowid,
+    );
+    const categoryId = Number(
+      testDb
+        .prepare('INSERT INTO packing_template_categories (template_id, name) VALUES (?, ?)')
+        .run(templateId, 'Private').lastInsertRowid,
+    );
+    testDb.prepare('INSERT INTO packing_template_items (category_id, name) VALUES (?, ?)').run(categoryId, 'Secret');
+
+    expect(applyTemplate(trip.id, templateId)).toBeNull();
+    expect(testDb.prepare('SELECT COUNT(*) AS count FROM packing_items WHERE trip_id = ?').get(trip.id)).toEqual({
+      count: 0,
+    });
   });
 });
 

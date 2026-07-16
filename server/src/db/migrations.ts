@@ -66,6 +66,108 @@ export function trimUserWhitespace(db: Database.Database): boolean {
   return hadCollision;
 }
 
+const PACKING_TEMPLATE_SCOPE_MIGRATION_VERSION = 173;
+
+function assertPackingTemplateScopeSchema(db: Database.Database): void {
+  type TableColumn = { name: string; notnull: number; dflt_value: string | null };
+  type ForeignKey = { table: string; from: string; to: string; on_delete: string };
+
+  const errors: string[] = [];
+  const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'packing_templates'").get() as
+    | { sql: string }
+    | undefined;
+  if (!table) {
+    throw new Error('packing_templates schema does not match migration 173: table is missing');
+  }
+
+  const columns = db.prepare("PRAGMA table_info('packing_templates')").all() as TableColumn[];
+  const column = (name: string) => columns.find((candidate) => candidate.name === name);
+  const scope = column('scope');
+  const owner = column('owner_id');
+  const creator = column('created_by');
+
+  if (!scope || scope.notnull !== 1 || scope.dflt_value !== "'instance'") {
+    errors.push("scope must be NOT NULL DEFAULT 'instance'");
+  }
+  if (!owner || owner.notnull !== 0) errors.push('owner_id must be nullable');
+  if (!creator || creator.notnull !== 0) errors.push('created_by must be nullable');
+
+  const normalizedSql = table.sql.toLowerCase().replace(/\s+/g, ' ');
+  if (!normalizedSql.includes("check (scope in ('instance', 'personal'))")) {
+    errors.push('scope enum CHECK is missing');
+  }
+  if (
+    !normalizedSql.includes('packing_templates_scope_owner_check') ||
+    !normalizedSql.includes(
+      "(scope = 'instance' and owner_id is null) or (scope = 'personal' and owner_id is not null)",
+    )
+  ) {
+    errors.push('scope/owner CHECK is missing');
+  }
+
+  const foreignKeys = db.prepare("PRAGMA foreign_key_list('packing_templates')").all() as ForeignKey[];
+  const ownerCascade = foreignKeys.some(
+    (foreignKey) =>
+      foreignKey.from === 'owner_id' &&
+      foreignKey.table === 'users' &&
+      foreignKey.to === 'id' &&
+      foreignKey.on_delete === 'CASCADE',
+  );
+  const creatorSetNull = foreignKeys.some(
+    (foreignKey) =>
+      foreignKey.from === 'created_by' &&
+      foreignKey.table === 'users' &&
+      foreignKey.to === 'id' &&
+      foreignKey.on_delete === 'SET NULL',
+  );
+  if (!ownerCascade) errors.push('owner_id must reference users(id) ON DELETE CASCADE');
+  if (!creatorSetNull) errors.push('created_by must reference users(id) ON DELETE SET NULL');
+
+  const index = db
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_packing_templates_scope_owner_created'",
+    )
+    .get();
+  if (!index) errors.push('scope/owner/created index is missing');
+
+  if (scope && owner) {
+    const invalidRows = db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM packing_templates
+         WHERE scope IS NULL
+            OR scope NOT IN ('instance', 'personal')
+            OR (scope = 'instance' AND owner_id IS NOT NULL)
+            OR (scope = 'personal' AND owner_id IS NULL)`,
+      )
+      .get() as { count: number };
+    if (invalidRows.count > 0) errors.push(`${invalidRows.count} row(s) violate the scope/owner contract`);
+  }
+
+  let graphViolations = 0;
+  for (const graphTable of [
+    'packing_templates',
+    'packing_template_categories',
+    'packing_template_items',
+  ] as const) {
+    const exists = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(graphTable);
+    if (!exists) {
+      errors.push(`${graphTable} table is missing`);
+      continue;
+    }
+    graphViolations += db.prepare(`PRAGMA foreign_key_check('${graphTable}')`).all().length;
+  }
+  if (graphViolations > 0) {
+    errors.push(`packing template graph contains ${graphViolations} foreign key violation(s)`);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`packing_templates schema does not match migration 173: ${errors.join('; ')}`);
+  }
+}
+
 function runMigrations(db: Database.Database): void {
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const versionRow = db.prepare('SELECT version FROM schema_version').get() as { version: number } | undefined;
@@ -3647,6 +3749,70 @@ function runMigrations(db: Database.Database): void {
         );
       `);
     },
+
+    // Packing template ownership scopes. Existing templates are instance-wide;
+    // personal templates remain feature-off until the owner-scoped R2 API/UI is
+    // deployed. Attribution is nullable so deleting a creator does not delete an
+    // instance template, while owner_id controls personal-template lifecycle.
+    // This rebuild must run outside the runner transaction because SQLite cannot
+    // toggle foreign_keys while a transaction is active.
+    {
+      raw: () => {
+        const templateColumns = db.prepare("PRAGMA table_info('packing_templates')").all() as Array<{ name: string }>;
+        const hasScope = templateColumns.some((column) => column.name === 'scope');
+        const hasOwner = templateColumns.some((column) => column.name === 'owner_id');
+
+        // The table rebuild commits before the runner advances schema_version. If
+        // the process stops in that narrow window, retry the version marker without
+        // reclassifying already-scoped rows (especially personal rows) as instance.
+        if (hasScope || hasOwner) {
+          assertPackingTemplateScopeSchema(db);
+          return;
+        }
+
+        const foreignKeysEnabled = Number(db.pragma('foreign_keys', { simple: true })) === 1;
+        if (foreignKeysEnabled) db.exec('PRAGMA foreign_keys = OFF');
+        try {
+          db.transaction(() => {
+            const before = db.prepare('SELECT COUNT(*) AS count FROM packing_templates').get() as { count: number };
+            db.exec(`
+              CREATE TABLE packing_templates_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                scope TEXT NOT NULL DEFAULT 'instance'
+                  CHECK (scope IN ('instance', 'personal')),
+                owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT packing_templates_scope_owner_check CHECK (
+                  (scope = 'instance' AND owner_id IS NULL) OR
+                  (scope = 'personal' AND owner_id IS NOT NULL)
+                )
+              );
+              INSERT INTO packing_templates_new
+                (id, name, scope, owner_id, created_by, created_at)
+              SELECT id, name, 'instance', NULL, created_by, created_at
+              FROM packing_templates;
+              DROP TABLE packing_templates;
+              ALTER TABLE packing_templates_new RENAME TO packing_templates;
+              CREATE INDEX idx_packing_templates_scope_owner_created
+                ON packing_templates(scope, owner_id, created_at);
+            `);
+
+            const after = db.prepare('SELECT COUNT(*) AS count FROM packing_templates').get() as { count: number };
+            if (after.count !== before.count) {
+              throw new Error(`packing_templates row count changed during migration: ${before.count} -> ${after.count}`);
+            }
+            const violations = db.prepare('PRAGMA foreign_key_check').all();
+            if (violations.length > 0) {
+              throw new Error(`packing template scope migration produced ${violations.length} foreign key violation(s)`);
+            }
+          })();
+        } finally {
+          if (foreignKeysEnabled) db.exec('PRAGMA foreign_keys = ON');
+        }
+      },
+    },
   ];
 
   if (currentVersion < migrations.length) {
@@ -3666,6 +3832,11 @@ function runMigrations(db: Database.Database): void {
       db.prepare('UPDATE schema_version SET version = ?').run(i + 1);
     }
     console.log(`[DB] Migrations complete — schema version ${migrations.length}`);
+  }
+
+  const finalVersion = db.prepare('SELECT version FROM schema_version').get() as { version: number } | undefined;
+  if ((finalVersion?.version ?? 0) >= PACKING_TEMPLATE_SCOPE_MIGRATION_VERSION) {
+    assertPackingTemplateScopeSchema(db);
   }
 }
 

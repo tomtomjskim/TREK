@@ -247,8 +247,8 @@ export class AdminController {
 
   @Delete('packing-templates/:id')
   deletePackingTemplate(@CurrentUser() user: User, @Param('id') id: string, @Req() req: Request) {
-    const result = ok(this.admin.deletePackingTemplate(id));
-    writeAudit({ userId: user.id, action: 'admin.packing_template_delete', resource: String(id), ip: getClientIp(req), details: { name: result.name } });
+    ok(this.admin.deletePackingTemplate(id));
+    writeAudit({ userId: user.id, action: 'admin.packing_template_delete', resource: String(id), ip: getClientIp(req), details: { scope: 'instance', result: 'deleted' } });
     return { success: true };
   }
 
@@ -276,11 +276,13 @@ export class AdminController {
   }
 
   @Put('packing-templates/:templateId/items/:itemId')
-  updateTemplateItem(@Param('itemId') itemId: string, @Body() body: unknown) { return ok(this.admin.updateTemplateItem(itemId, body)); }
+  updateTemplateItem(@Param('templateId') templateId: string, @Param('itemId') itemId: string, @Body() body: unknown) {
+    return ok(this.admin.updateTemplateItem(templateId, itemId, body));
+  }
 
   @Delete('packing-templates/:templateId/items/:itemId')
-  deleteTemplateItem(@Param('itemId') itemId: string) {
-    ok(this.admin.deleteTemplateItem(itemId));
+  deleteTemplateItem(@Param('templateId') templateId: string, @Param('itemId') itemId: string) {
+    ok(this.admin.deleteTemplateItem(templateId, itemId));
     return { success: true };
   }
 

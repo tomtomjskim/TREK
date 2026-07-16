@@ -64,8 +64,8 @@ export class AdminService {
   updateTemplateCategory(templateId: string, catId: string, body: unknown) { return svc.updateTemplateCategory(templateId, catId, body as Parameters<typeof svc.updateTemplateCategory>[2]); }
   deleteTemplateCategory(templateId: string, catId: string) { return svc.deleteTemplateCategory(templateId, catId); }
   createTemplateItem(templateId: string, catId: string, name: unknown) { return svc.createTemplateItem(templateId, catId, name as string); }
-  updateTemplateItem(itemId: string, body: unknown) { return svc.updateTemplateItem(itemId, body as Parameters<typeof svc.updateTemplateItem>[1]); }
-  deleteTemplateItem(itemId: string) { return svc.deleteTemplateItem(itemId); }
+  updateTemplateItem(templateId: string, itemId: string, body: unknown) { return svc.updateTemplateItem(templateId, itemId, body as Parameters<typeof svc.updateTemplateItem>[2]); }
+  deleteTemplateItem(templateId: string, itemId: string) { return svc.deleteTemplateItem(templateId, itemId); }
 
   // Addons + tokens + sessions
   listAddons() { return svc.listAddons(); }

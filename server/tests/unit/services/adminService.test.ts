@@ -385,6 +385,23 @@ describe('Packing templates', () => {
     const result = deletePackingTemplate('99999') as any;
     expect(result.status).toBe(404);
   });
+
+  it('ADMIN-SVC-037a — instance admin CRUD cannot discover or mutate a personal template', () => {
+    const { user: owner } = createUser(testDb);
+    const personalId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+        .run('Private template', owner.id, owner.id).lastInsertRowid,
+    );
+
+    expect((listPackingTemplates() as any[]).some((template) => template.id === personalId)).toBe(false);
+    expect((getPackingTemplate(String(personalId)) as any).status).toBe(404);
+    expect((updatePackingTemplate(String(personalId), { name: 'Hacked' }) as any).status).toBe(404);
+    expect((deletePackingTemplate(String(personalId)) as any).status).toBe(404);
+    expect(testDb.prepare('SELECT name FROM packing_templates WHERE id = ?').get(personalId)).toEqual({
+      name: 'Private template',
+    });
+  });
 });
 
 // ── Template categories ───────────────────────────────────────────────────────
@@ -437,6 +454,27 @@ describe('Template categories', () => {
     const tpl = createPackingTemplate('Tpl', admin.id) as any;
     const result = deleteTemplateCategory(String(tpl.template.id), '99999') as any;
     expect(result.status).toBe(404);
+  });
+
+  it('ADMIN-SVC-044a — category CRUD cannot cross into a personal template', () => {
+    const { user: owner } = createUser(testDb);
+    const personalId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+        .run('Private template', owner.id, owner.id).lastInsertRowid,
+    );
+    const categoryId = Number(
+      testDb
+        .prepare('INSERT INTO packing_template_categories (template_id, name) VALUES (?, ?)')
+        .run(personalId, 'Private category').lastInsertRowid,
+    );
+
+    expect((createTemplateCategory(String(personalId), 'Injected') as any).status).toBe(404);
+    expect((updateTemplateCategory(String(personalId), String(categoryId), { name: 'Hacked' }) as any).status).toBe(404);
+    expect((deleteTemplateCategory(String(personalId), String(categoryId)) as any).status).toBe(404);
+    expect(testDb.prepare('SELECT name FROM packing_template_categories WHERE id = ?').get(categoryId)).toEqual({
+      name: 'Private category',
+    });
   });
 });
 
@@ -638,12 +676,12 @@ describe('Template items', () => {
     const tpl = createPackingTemplate('Tpl', admin.id) as any;
     const cat = createTemplateCategory(String(tpl.template.id), 'Gear') as any;
     const item = createTemplateItem(String(tpl.template.id), String(cat.category.id), 'Old Item') as any;
-    const result = updateTemplateItem(String(item.item.id), { name: 'New Item' }) as any;
+    const result = updateTemplateItem(String(tpl.template.id), String(item.item.id), { name: 'New Item' }) as any;
     expect(result.item.name).toBe('New Item');
   });
 
   it('ADMIN-SVC-062 — updateTemplateItem returns 404 for non-existent item', () => {
-    const result = updateTemplateItem('99999', { name: 'Ghost' }) as any;
+    const result = updateTemplateItem('99999', '99999', { name: 'Ghost' }) as any;
     expect(result.status).toBe(404);
   });
 
@@ -652,15 +690,65 @@ describe('Template items', () => {
     const tpl = createPackingTemplate('Tpl', admin.id) as any;
     const cat = createTemplateCategory(String(tpl.template.id), 'Gear') as any;
     const item = createTemplateItem(String(tpl.template.id), String(cat.category.id), 'To Delete') as any;
-    const result = deleteTemplateItem(String(item.item.id)) as any;
+    const result = deleteTemplateItem(String(tpl.template.id), String(item.item.id)) as any;
     expect(result.error).toBeUndefined();
     const check = testDb.prepare('SELECT id FROM packing_template_items WHERE id = ?').get(item.item.id);
     expect(check).toBeUndefined();
   });
 
   it('ADMIN-SVC-064 — deleteTemplateItem returns 404 for non-existent item', () => {
-    const result = deleteTemplateItem('99999') as any;
+    const result = deleteTemplateItem('99999', '99999') as any;
     expect(result.status).toBe(404);
+  });
+
+  it('ADMIN-SVC-064a — item update cannot use an instance template id to reach a personal child id', () => {
+    const { user: admin } = createAdmin(testDb);
+    const { user: owner } = createUser(testDb);
+    const instanceId = Number((createPackingTemplate('Instance', admin.id) as any).template.id);
+    const personalId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+        .run('Private template', owner.id, owner.id).lastInsertRowid,
+    );
+    const categoryId = Number(
+      testDb
+        .prepare('INSERT INTO packing_template_categories (template_id, name) VALUES (?, ?)')
+        .run(personalId, 'Private category').lastInsertRowid,
+    );
+    testDb
+      .prepare('INSERT INTO packing_template_items (id, category_id, name) VALUES (?, ?, ?)')
+      .run(instanceId, categoryId, 'Private item');
+
+    const result = updateTemplateItem(String(instanceId), String(instanceId), { name: 'Hacked' }) as any;
+    expect(result.status).toBe(404);
+    expect(testDb.prepare('SELECT name FROM packing_template_items WHERE id = ?').get(instanceId)).toEqual({
+      name: 'Private item',
+    });
+  });
+
+  it('ADMIN-SVC-064b — item delete cannot use an instance template id to reach a personal child id', () => {
+    const { user: admin } = createAdmin(testDb);
+    const { user: owner } = createUser(testDb);
+    const instanceId = Number((createPackingTemplate('Instance', admin.id) as any).template.id);
+    const personalId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+        .run('Private template', owner.id, owner.id).lastInsertRowid,
+    );
+    const categoryId = Number(
+      testDb
+        .prepare('INSERT INTO packing_template_categories (template_id, name) VALUES (?, ?)')
+        .run(personalId, 'Private category').lastInsertRowid,
+    );
+    testDb
+      .prepare('INSERT INTO packing_template_items (id, category_id, name) VALUES (?, ?, ?)')
+      .run(instanceId, categoryId, 'Private item');
+
+    const result = deleteTemplateItem(String(instanceId), String(instanceId)) as any;
+    expect(result.status).toBe(404);
+    expect(testDb.prepare('SELECT id FROM packing_template_items WHERE id = ?').get(instanceId)).toEqual({
+      id: instanceId,
+    });
   });
 });
 

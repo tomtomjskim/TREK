@@ -6,7 +6,7 @@ import { Plus, Trash2, Edit2, Package, X, Check, ChevronDown, ChevronRight, Fold
 
 interface TemplateCategory { id: number; template_id: number; name: string; sort_order: number }
 interface TemplateItem { id: number; category_id: number; name: string; sort_order: number }
-interface Template { id: number; name: string; item_count: number; category_count: number; created_by_name: string }
+interface Template { id: number; name: string; item_count: number; category_count: number; created_by_name: string | null }
 
 export default function PackingTemplateManager() {
   const [templates, setTemplates] = useState<Template[]>([])

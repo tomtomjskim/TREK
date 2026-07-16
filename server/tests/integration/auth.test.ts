@@ -715,7 +715,7 @@ describe('Account deletion', () => {
       "INSERT INTO visited_regions (user_id, region_code, region_name, country_code) VALUES (?, 'JP-13', 'Tokyo', 'JP')"
     ).run(target.id);
 
-    // packing_templates.created_by (CASCADE): target created a packing template
+    // packing_templates.created_by (SET NULL): instance templates survive creator deletion
     const packTemplateRow = testDb.prepare(
       "INSERT INTO packing_templates (name, created_by) VALUES ('My Template', ?)"
     ).run(target.id);
@@ -800,8 +800,13 @@ describe('Account deletion', () => {
     // travel history is deleted
     expect(testDb.prepare('SELECT user_id FROM visited_countries WHERE user_id = ? AND country_code = ?').get(target.id, 'JP')).toBeUndefined();
     expect(testDb.prepare('SELECT id FROM visited_regions WHERE user_id = ?').get(target.id)).toBeUndefined();
-    // packing template is deleted
-    expect(testDb.prepare('SELECT id FROM packing_templates WHERE id = ?').get(packTemplateRow.lastInsertRowid)).toBeUndefined();
+    // instance template survives; creator attribution is detached
+    expect(testDb.prepare('SELECT id, scope, owner_id, created_by FROM packing_templates WHERE id = ?').get(packTemplateRow.lastInsertRowid)).toEqual({
+      id: Number(packTemplateRow.lastInsertRowid),
+      scope: 'instance',
+      owner_id: null,
+      created_by: null,
+    });
     // invite tokens created by target are deleted
     expect(testDb.prepare('SELECT id FROM invite_tokens WHERE created_by = ?').get(target.id)).toBeUndefined();
     // collab content is deleted

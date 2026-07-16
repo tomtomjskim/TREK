@@ -1,7 +1,7 @@
 # 짐 템플릿 프라이버시·개인화 구현 계획
 
 > 작성일: 2026-07-16
-> 상태: Gate 0 보완 및 검증 중, 개인 템플릿 구현은 아직 시작하지 않음
+> 상태: Gate 0 운영 배포 완료, R1 구현·배포 준비 완료, R2 개인 템플릿 기능은 비활성
 
 ## 목표와 결정
 
@@ -125,10 +125,21 @@ Snapshot 생성, category/item 일괄 삽입, apply는 각각 단일 DB transact
 2. 테이블 재구성 migration, 제약, 인덱스, legacy backfill 테스트를 작성한다.
 3. 기존 사용자 목록/apply 쿼리에 `scope = 'instance'`를 강제한다.
 4. 기존 관리자 template/category/item CRUD의 모든 자식 쿼리를 부모까지 JOIN해 `scope = 'instance'`로 제한한다.
-5. 개인 API와 UI는 feature flag OFF 상태로 둔다.
+5. 개인 API와 UI는 코드 표면 자체가 없는 hard-off 상태로 둔다. R2의 첫 단계에서 서버 권위의 default-off flag와 REST/MCP/UI 공통 차단 테스트를 추가한다.
 6. 운영 DB 사본 migration, cross-user negative test, build를 통과한 불변 이미지를 배포한다.
 
 R1이 성공한 뒤 이 이미지를 새 롤백 하한선으로 지정한다. 첫 `personal` 행이 생성된 이후 R1 이전 이미지로 image-only rollback하면 개인 행을 공용으로 노출할 수 있으므로 금지한다. 장애 시 R1 이미지로 롤백하거나 DB 백업을 함께 복원한다.
+
+### R1 구현·배포 전 검증 결과
+
+- migration 173에 `scope`, `owner_id`, nullable `created_by`, 수명주기 FK, scope/owner 제약과 조회 인덱스를 추가했다.
+- migration 173의 stale version 재진입은 기존 scope/owner를 보존한다. version이 앞선 legacy/partial schema, `NULL` scope, 잘못된 FK 계약, template/category/item orphan은 startup postcondition에서 fail-closed한다.
+- 기존 템플릿은 모두 `instance`로 backfill하며 행 수와 자식 category/item 그래프를 보존한다. 공용 템플릿 작성자 삭제는 attribution만 `NULL`로 만들고, 개인 템플릿 소유자 삭제는 자식까지 cascade한다.
+- REST 사용자 목록/apply, 관리자 root/category/item CRUD, MCP 목록/apply/delete가 모두 `instance` 부모까지 검사한다. 개인 범위 또는 다른 부모의 자식 ID는 동일한 `404`/tool error로 처리한다.
+- 개인 템플릿 API와 UI는 추가하지 않아 R2 쓰기·노출 기능은 계속 비활성이다.
+- 운영 DB 온라인 백업 사본에서 `172 → 173` migration을 실행했고 template/category/item 집계 `1/2/3` 보존, 기존 템플릿 instance backfill, FK 위반 0, `integrity_check=ok`, 인덱스 생성과 재실행 안정성을 확인했다. 운영 원본은 이 검증에서 수정하지 않았다.
+- 최종 server 전체 회귀 295개 파일·5,161개 테스트와 R1 집중 회귀 10개 파일·334개 테스트가 통과했다. client 195개 파일·3,240개 테스트와 shared 32개 파일·138개 테스트, server/client/shared typecheck, production build도 통과했다.
+- Nest 11의 legacy wildcard 경고 원인이던 help asset route를 named wildcard(`*path`)로 바꾸고 중첩 asset 회귀 테스트를 추가했다.
 
 ### R2: 개인 템플릿 API
 

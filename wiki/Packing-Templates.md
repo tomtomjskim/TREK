@@ -2,6 +2,8 @@
 
 Reuse packing lists across trips using pre-built templates.
 
+Packing templates are currently instance-wide shared templates. Administrators create and manage them; users with `packing_edit` permission can apply them to trips. Personal templates are not available yet.
+
 <!-- TODO: screenshot: packing template list with categories and items -->
 
 ![Packing Templates](assets/PackingTemplate.png)
@@ -16,13 +18,11 @@ Requires the `packing_edit` permission.
 
 The Apply Template button only appears when at least one template exists and you have edit permission.
 
-## Saving the current list as a template
+## Managing shared templates
 
-In the packing panel toolbar, click the **Save as template** button (folder-plus icon) when items exist in the list. An inline name input appears in the toolbar — type a name and press **Enter** or click the confirm button. The current trip's categories and items are saved as a new reusable template.
+Only administrators can create, edit, and delete the shared templates in [Admin-Packing-Templates](Admin-Packing-Templates). Each template has a three-level structure: template → categories → items.
 
-The Save as Template button only appears when there are items in the list and you have `packing_edit` permission.
-
-> **Admin:** Templates are created and managed in [Admin-Packing-Templates](Admin-Packing-Templates). Each template has a three-level structure: template → categories → items.
+There is currently no **Save as template** action for regular users. Personal packing templates are planned but remain disabled until owner-scoped API and UI protections are complete.
 
 ## See also
 

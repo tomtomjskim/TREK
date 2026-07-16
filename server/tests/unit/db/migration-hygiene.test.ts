@@ -95,6 +95,8 @@ const ALLOWED_DESTRUCTIVE: Record<string, string> = {
     'Make place_id nullable + ON DELETE SET NULL. Rebuild, rows copied.',
   'DROP TABLE schema_version':
     'Add surrogate id PK to schema_version. Rebuild, version row copied.',
+  'DROP TABLE packing_templates':
+    'Migration 173: add scope/owner lifecycle constraints and nullable attribution. Rebuild copies every row as instance scope and verifies row count plus foreign keys before commit.',
 
   // ── photo/journey table rebuilds (data preserved) ────────────────────────
   'DROP TABLE trip_photos':

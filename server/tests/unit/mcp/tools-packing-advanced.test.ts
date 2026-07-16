@@ -381,6 +381,31 @@ describe('Tool: apply_packing_template', () => {
       expect(result.isError).toBe(true);
     });
   });
+
+  it('returns an error for a personal template on the instance tool surface', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const templateId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+        .run('Private template', user.id, user.id).lastInsertRowid,
+    );
+    const categoryId = Number(
+      testDb
+        .prepare('INSERT INTO packing_template_categories (template_id, name) VALUES (?, ?)')
+        .run(templateId, 'Private').lastInsertRowid,
+    );
+    testDb.prepare('INSERT INTO packing_template_items (category_id, name) VALUES (?, ?)').run(categoryId, 'Secret');
+
+    await withHarness(user.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'apply_packing_template',
+        arguments: { tripId: trip.id, templateId },
+      });
+      expect(result.isError).toBe(true);
+      expect(testDb.prepare('SELECT COUNT(*) AS count FROM packing_items WHERE trip_id = ?').get(trip.id)).toEqual({ count: 0 });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -481,6 +506,24 @@ describe('Tool: list_packing_templates', () => {
       expect(Array.isArray(data.templates)).toBe(true);
     });
   });
+
+  it('does not reveal personal templates through the instance catalogue', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const personalId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+        .run('Private template', user.id, user.id).lastInsertRowid,
+    );
+
+    await withHarness(user.id, async (h) => {
+      const data = parseToolResult(await h.client.callTool({
+        name: 'list_packing_templates',
+        arguments: { tripId: trip.id },
+      })) as any;
+      expect(data.templates.some((template: { id: number }) => template.id === personalId)).toBe(false);
+    });
+  });
 });
 
 describe('Tool: delete_packing_template', () => {
@@ -525,6 +568,24 @@ describe('Tool: delete_packing_template', () => {
         arguments: { templateId: 99999 },
       });
       expect(result.isError).toBe(true);
+    });
+  });
+
+  it('cannot delete a personal template through the instance administration tool', async () => {
+    const { user } = createAdmin(testDb);
+    const personalId = Number(
+      testDb
+        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+        .run('Private template', user.id, user.id).lastInsertRowid,
+    );
+
+    await withHarness(user.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'delete_packing_template',
+        arguments: { templateId: personalId },
+      });
+      expect(result.isError).toBe(true);
+      expect(testDb.prepare('SELECT id FROM packing_templates WHERE id = ?').get(personalId)).toEqual({ id: personalId });
     });
   });
 });
