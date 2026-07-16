@@ -531,7 +531,7 @@ describe('PluginRpcHost — capability enforcement', () => {
     expect(ok(await host.dispatch(req('packing.update', { tripId: 1, itemId: 70, input: { checked: true } }), 42))).toBe(true);
     expect(deps.updatePackingItem).toHaveBeenCalledWith(1, 70, expect.objectContaining({ checked: true }), 42);
     expect(ok(await host.dispatch(req('packing.delete', { tripId: 1, itemId: 70 }), 42))).toBe(true);
-    expect(deps.deletePackingItem).toHaveBeenCalledWith(1, 70);
+    expect(deps.deletePackingItem).toHaveBeenCalledWith(1, 70, 42);
     const noGrant = new PluginRpcHost('p', new Set(['db:read:packing']), deps);
     expect((await noGrant.dispatch(req('packing.create', { tripId: 1, input: { name: 'x' } }), 42)).ok).toBe(false);
   });

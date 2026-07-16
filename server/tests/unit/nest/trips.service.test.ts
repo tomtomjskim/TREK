@@ -25,7 +25,8 @@ const { tripSvc } = vi.hoisted(() => ({
 vi.mock('../../../src/services/tripService', () => tripSvc);
 vi.mock('../../../src/services/dayService', () => ({ listDays: () => ({ days: [1] }), listAccommodations: () => [] }));
 vi.mock('../../../src/services/placeService', () => ({ listPlaces: () => [] }));
-vi.mock('../../../src/services/packingService', () => ({ listItems: () => [] }));
+const { listPackingItems } = vi.hoisted(() => ({ listPackingItems: vi.fn(() => []) }));
+vi.mock('../../../src/services/packingService', () => ({ listItems: listPackingItems }));
 vi.mock('../../../src/services/todoService', () => ({ listItems: () => [] }));
 vi.mock('../../../src/services/budgetService', () => ({ listBudgetItems: () => [] }));
 vi.mock('../../../src/services/reservationService', () => ({ listReservations: () => [] }));
@@ -78,13 +79,14 @@ describe('TripsService (wrapper delegation + bundle/copy/notify helpers)', () =>
   });
 
   it('bundle aggregates every sub-collection + the member list', () => {
-    const result = svc().bundle('9', { user_id: 1 });
+    const result = svc().bundle('9', { user_id: 1 }, 7);
     expect(result).toMatchObject({ trip: { user_id: 1 }, days: [1], places: [], members: [{ id: 1 }] });
+    expect(listPackingItems).toHaveBeenCalledWith('9', 7);
   });
 
   it('bundle tolerates a null member list', () => {
     tripSvc.listMembers.mockReturnValueOnce({ owner: { id: 1 }, members: null });
-    const result = svc().bundle('9', { user_id: 1 });
+    const result = svc().bundle('9', { user_id: 1 }, 7);
     expect(result).toMatchObject({ members: [{ id: 1 }] });
   });
 

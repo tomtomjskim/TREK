@@ -17,7 +17,6 @@ interface ArtikelZeileProps {
   item: PackingItem
   tripId: number
   categories: string[]
-  onCategoryChange: () => void
   onDelete?: (item: PackingItem) => Promise<void>
   bagTrackingEnabled?: boolean
   bags?: PackingBag[]
@@ -41,7 +40,7 @@ interface ArtikelZeileProps {
   }
 }
 
-export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDelete, bagTrackingEnabled, bags = [], onCreateBag, canEdit = true, tripMembers = [], currentUserId, onSetSharing, onClone, onJoin, onLeave, drag }: ArtikelZeileProps) {
+export function ArtikelZeile({ item, tripId, categories, onDelete, bagTrackingEnabled, bags = [], onCreateBag, canEdit = true, tripMembers = [], currentUserId, onSetSharing, onClone, onJoin, onLeave, drag }: ArtikelZeileProps) {
   const isPlaceholder = item.name === PACKING_PLACEHOLDER_NAME
   const [editing, setEditing] = useState(false)
   const [editName, setEditName] = useState(isPlaceholder ? '' : item.name)
@@ -60,9 +59,14 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDel
   const sharedByMe = !!item.is_private && item.owner_id === currentUserId && recipients.length > 0
   const broughtBy = !item.is_private && item.owner_username ? item.owner_username : null
   const contributors = item.contributors || []
-  const canShare = canEdit && !isPlaceholder && !!onSetSharing
+  // Trip-level packing_edit is not sufficient for a restricted row: only its
+  // owner may mutate it. Shared recipients intentionally get a read-only row.
+  const canMutate = canEdit && (!item.is_private || item.owner_id === currentUserId)
+  const canShare = canMutate && !isPlaceholder && !!onSetSharing
 
-  const handleToggle = () => togglePackingItem(tripId, item.id, !item.checked)
+  const handleToggle = () => {
+    if (canMutate) togglePackingItem(tripId, item.id, !item.checked)
+  }
 
   const handleSaveName = async () => {
     if (!editName.trim()) { setEditing(false); setEditName(isPlaceholder ? '' : item.name); return }
@@ -85,7 +89,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDel
     catch { toast.error(t('common.error')) }
   }
 
-  const canDrag = canEdit && !isPlaceholder && !!drag
+  const canDrag = canMutate && !isPlaceholder && !!drag
 
   return (
     <div
@@ -115,8 +119,8 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDel
           <GripVertical size={13} />
         </div>
       )}
-      <button onClick={handleToggle} style={{
-        flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', padding: 0, position: 'relative',
+      <button onClick={handleToggle} disabled={!canMutate} style={{
+        flexShrink: 0, background: 'none', border: 'none', cursor: canMutate ? 'pointer' : 'default', padding: 0, position: 'relative',
         width: 18, height: 18,
         color: item.checked ? '#10b981' : 'var(--text-faint)',
         transition: 'color 200ms cubic-bezier(0.23,1,0.32,1)',
@@ -135,7 +139,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDel
         }} />
       </button>
 
-      {editing && canEdit ? (
+      {editing && canMutate ? (
         <input
           type="text" value={editName} autoFocus
           placeholder={isPlaceholder ? '...' : undefined}
@@ -146,11 +150,11 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDel
         />
       ) : (
         <span
-          onClick={() => canEdit && !item.checked && setEditing(true)}
+          onClick={() => canMutate && !item.checked && setEditing(true)}
           style={{
             flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
             fontSize: 'calc(13.5px * var(--fs-scale-body, 1))',
-            cursor: !canEdit || item.checked ? 'default' : 'text',
+            cursor: !canMutate || item.checked ? 'default' : 'text',
             color: isPlaceholder ? 'var(--text-faint)' : (item.checked ? 'var(--text-faint)' : 'var(--text-primary)'),
             transition: 'color 200ms cubic-bezier(0.23,1,0.32,1)',
             textDecoration: item.checked ? 'line-through' : 'none',
@@ -181,7 +185,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDel
       )}
 
       {/* Quantity */}
-      {canEdit && <QuantityInput value={item.quantity || 1} onSave={qty => updatePackingItem(tripId, item.id, { quantity: qty })} />}
+      {canMutate && <QuantityInput value={item.quantity || 1} onSave={qty => updatePackingItem(tripId, item.id, { quantity: qty })} />}
 
       {/* Weight + Bag (when enabled) */}
       {bagTrackingEnabled && (
@@ -189,9 +193,9 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDel
           <div style={{ display: 'flex', alignItems: 'center', gap: 2, border: '1px solid var(--border-primary)', borderRadius: 8, padding: '3px 6px', background: 'transparent' }}>
             <NumericInput
               value={item.weight_grams ?? ''}
-              readOnly={!canEdit}
+              readOnly={!canMutate}
               onValueChange={async raw => {
-                if (!canEdit) return
+                if (!canMutate) return
                 const v = raw === '' ? null : parseInt(raw)
                 try { await updatePackingItem(tripId, item.id, { weight_grams: v }) } catch { toast.error(t('packing.toast.saveError')) }
               }}
@@ -202,9 +206,9 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDel
           </div>
           <div style={{ position: 'relative' }}>
             <button
-              onClick={() => canEdit && setShowBagPicker(p => !p)}
+              onClick={() => canMutate && setShowBagPicker(p => !p)}
               style={{
-                width: 22, height: 22, borderRadius: '50%', cursor: canEdit ? 'pointer' : 'default', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 22, height: 22, borderRadius: '50%', cursor: canMutate ? 'pointer' : 'default', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
                 border: item.bag_id ? `2.5px solid ${bags.find(b => b.id === item.bag_id)?.color || 'var(--border-primary)'}` : '2px dashed var(--border-primary)',
                 background: item.bag_id ? `${bags.find(b => b.id === item.bag_id)?.color || 'var(--border-primary)'}30` : 'transparent',
               }}
@@ -278,7 +282,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange, onDel
         </div>
       )}
 
-      {canEdit && (
+      {canMutate && (
       <div style={{ display: 'flex', gap: 2, alignItems: 'center', flexShrink: 0 }}>
         <div style={{ position: 'relative' }}>
           <button

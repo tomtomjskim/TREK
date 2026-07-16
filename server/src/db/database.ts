@@ -4,6 +4,7 @@ import fs from 'fs';
 import { createTables } from './schema';
 import { runMigrations } from './migrations';
 import { runSeeds } from './seeds';
+import { backfillFlightEndpoints } from '../services/airportService';
 import { Place, Tag } from '../types';
 
 // In test mode each vitest worker gets an isolated in-memory DB so that
@@ -144,8 +145,7 @@ function isOwner(tripId: number | string, userId: number): boolean {
 }
 
 try {
-  const { backfillFlightEndpoints } = require('../services/airportService');
-  backfillFlightEndpoints();
+  backfillFlightEndpoints(db);
 } catch (err) {
   console.error('[DB] Flight endpoint backfill failed:', err);
 }

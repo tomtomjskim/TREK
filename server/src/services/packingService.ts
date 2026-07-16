@@ -51,26 +51,19 @@ function enrichItems(items: any[]): any[] {
   }));
 }
 
-export function listItems(tripId: string | number, userId?: number) {
+export function listItems(tripId: string | number, userId: number) {
   // Three-tier visibility (#858): Common (is_private=0) is visible to everyone;
   // Personal/Shared (is_private=1) only to the owner (bringer) and the recipients
-  // it was explicitly shared with. Without a userId (internal callers such as
-  // trip export) the unfiltered list is returned for back-compat.
-  let rows: any[];
-  if (userId == null) {
-    rows = db.prepare(
-      'SELECT * FROM packing_items WHERE trip_id = ? ORDER BY sort_order ASC, created_at ASC'
-    ).all(tripId) as any[];
-  } else {
-    rows = db.prepare(`
-      SELECT * FROM packing_items
-      WHERE trip_id = ?
-        AND (is_private = 0
-             OR owner_id = ?
-             OR EXISTS (SELECT 1 FROM packing_item_recipients r WHERE r.item_id = packing_items.id AND r.user_id = ?))
-      ORDER BY sort_order ASC, created_at ASC
-    `).all(tripId, userId, userId) as any[];
-  }
+  // it was explicitly shared with. A viewer id is mandatory so a new caller
+  // cannot accidentally receive an unfiltered list.
+  const rows = db.prepare(`
+    SELECT * FROM packing_items
+    WHERE trip_id = ?
+      AND (is_private = 0
+           OR owner_id = ?
+           OR EXISTS (SELECT 1 FROM packing_item_recipients r WHERE r.item_id = packing_items.id AND r.user_id = ?))
+    ORDER BY sort_order ASC, created_at ASC
+  `).all(tripId, userId, userId) as any[];
   return enrichItems(rows);
 }
 
@@ -114,11 +107,28 @@ export function updateItem(
   id: string | number,
   data: { name?: string; checked?: number; category?: string; weight_grams?: number | null; bag_id?: number | null; quantity?: number; is_private?: boolean },
   bodyKeys: string[],
-  ifMatch?: string,
-  actingUserId?: number,
+  ifMatch: string | undefined,
+  actingUserId: number,
 ): unknown | UpdateConflict | null {
-  const item = db.prepare('SELECT * FROM packing_items WHERE id = ? AND trip_id = ?').get(id, tripId) as { updated_at?: string | null; owner_id?: number | null } | undefined;
+  // Row-level mutation policy: Common items may be edited by callers that
+  // already passed packing_edit; restricted items remain owner-only. Keep this
+  // check before the conflict response so an unauthorised caller cannot use a
+  // stale token to retrieve the private server row.
+  const item = db.prepare(`
+    SELECT * FROM packing_items
+    WHERE id = ? AND trip_id = ? AND (is_private = 0 OR owner_id = ?)
+  `).get(id, tripId, actingUserId) as {
+    updated_at?: string | null;
+    owner_id?: number | null;
+    is_private?: number;
+  } | undefined;
   if (!item) return null;
+
+  // Only the item's owner may change visibility. A legacy Common row without
+  // an owner can still be claimed by the first authorised actor.
+  if (bodyKeys.includes('is_private') && item.owner_id != null && item.owner_id !== actingUserId) {
+    return null;
+  }
 
   // Optimistic concurrency (#1135): reject a stale offline overwrite. Absent
   // token => unconditional update (back-compat with older clients).
@@ -141,7 +151,7 @@ export function updateItem(
       is_private = CASE WHEN ? THEN ? ELSE is_private END,
       owner_id = CASE WHEN ? THEN ? ELSE owner_id END,
       updated_at = CURRENT_TIMESTAMP
-    WHERE id = ?
+    WHERE id = ? AND trip_id = ? AND (is_private = 0 OR owner_id = ?)
   `).run(
     data.name || null,
     data.checked !== undefined ? 1 : null,
@@ -157,7 +167,9 @@ export function updateItem(
     data.is_private ? 1 : 0,
     claimOwner ? 1 : 0,
     actingUserId ?? null,
-    id
+    id,
+    tripId,
+    actingUserId,
   );
 
   return enrichItems([db.prepare('SELECT * FROM packing_items WHERE id = ?').get(id)])[0];
@@ -185,7 +197,7 @@ export function setItemSharing(
   const item = getItemInTrip(tripId, id);
   if (!item) return null;
   // The owner controls sharing; an unowned legacy item is claimed by the actor.
-  if (item.owner_id != null && item.owner_id !== actingUserId) return { forbidden: true as const };
+  if (item.owner_id != null && item.owner_id !== actingUserId) return null;
 
   const run = db.transaction(() => {
     db.prepare('UPDATE packing_items SET is_private = ?, owner_id = COALESCE(owner_id, ?), updated_at = CURRENT_TIMESTAMP WHERE id = ?')
@@ -212,9 +224,22 @@ export function addContributor(tripId: string | number, id: string | number, use
   return enrichItems([db.prepare('SELECT * FROM packing_items WHERE id = ?').get(id)])[0];
 }
 
-export function removeContributor(tripId: string | number, id: string | number, userId: number) {
+export function removeContributor(
+  tripId: string | number,
+  id: string | number,
+  userId: number,
+  actingUserId: number,
+) {
   const item = getItemInTrip(tripId, id);
-  if (!item) return null;
+  // Contributions only exist on Common rows. A self-removal request must also
+  // name an existing pledge; otherwise a caller could use their own user id to
+  // retrieve an arbitrary hidden item by id.
+  if (!item || item.is_private !== 0) return null;
+  const contribution = db.prepare(
+    'SELECT 1 FROM packing_item_contributors WHERE item_id = ? AND user_id = ?',
+  ).get(id, userId);
+  if (!contribution) return null;
+  if (actingUserId !== userId && item.owner_id !== actingUserId) return null;
   db.prepare('DELETE FROM packing_item_contributors WHERE item_id = ? AND user_id = ?').run(id, userId);
   return enrichItems([db.prepare('SELECT * FROM packing_items WHERE id = ?').get(id)])[0];
 }
@@ -222,18 +247,24 @@ export function removeContributor(tripId: string | number, id: string | number, 
 /** Clone a (Common) item onto the caller's Personal list as a private starting point. */
 export function cloneItem(tripId: string | number, id: string | number, userId: number) {
   const item = getItemInTrip(tripId, id);
-  if (!item) return null;
+  // The UI exposes clone only for Common items. Enforcing that invariant here
+  // prevents direct-ID cloning of Personal/Shared content.
+  if (!item || item.is_private !== 0) return null;
   return createItem(tripId, { name: item.name, category: item.category || undefined, quantity: item.quantity, visibility: 'personal' }, userId);
 }
 
-export function deleteItem(tripId: string | number, id: string | number) {
+export function deleteItem(tripId: string | number, id: string | number, actingUserId: number) {
   // Return the deleted row (not just a boolean) so callers can target the
   // delete broadcast at the owner when the item was private (#858).
-  const item = db.prepare('SELECT * FROM packing_items WHERE id = ? AND trip_id = ?').get(id, tripId) as { is_private?: number; owner_id?: number | null } | undefined;
+  const item = db.prepare(`
+    SELECT * FROM packing_items
+    WHERE id = ? AND trip_id = ? AND (is_private = 0 OR owner_id = ?)
+  `).get(id, tripId, actingUserId) as { is_private?: number; owner_id?: number | null } | undefined;
   if (!item) return null;
 
-  db.prepare('DELETE FROM packing_items WHERE id = ?').run(id);
-  return item;
+  const enriched = enrichItems([item])[0];
+  db.prepare('DELETE FROM packing_items WHERE id = ? AND trip_id = ?').run(id, tripId);
+  return enriched;
 }
 
 // ── Bulk Import ────────────────────────────────────────────────────────────
@@ -487,7 +518,18 @@ export function updateCategoryAssignees(tripId: string | number, categoryName: s
 
 // ── Reorder ────────────────────────────────────────────────────────────────
 
-export function reorderItems(tripId: string | number, orderedIds: number[]) {
+export function reorderItems(tripId: string | number, orderedIds: number[], actingUserId: number): boolean {
+  const uniqueIds = [...new Set(orderedIds)];
+  if (uniqueIds.length !== orderedIds.length) return false;
+  if (uniqueIds.length > 0) {
+    const placeholders = uniqueIds.map(() => '?').join(',');
+    const allowed = db.prepare(`
+      SELECT id FROM packing_items
+      WHERE trip_id = ? AND id IN (${placeholders})
+        AND (is_private = 0 OR owner_id = ?)
+    `).all(tripId, ...uniqueIds, actingUserId) as { id: number }[];
+    if (allowed.length !== uniqueIds.length) return false;
+  }
   const update = db.prepare('UPDATE packing_items SET sort_order = ? WHERE id = ? AND trip_id = ?');
   const updateMany = db.transaction((ids: number[]) => {
     ids.forEach((id, index) => {
@@ -495,4 +537,5 @@ export function reorderItems(tripId: string | number, orderedIds: number[]) {
     });
   });
   updateMany(orderedIds);
+  return true;
 }

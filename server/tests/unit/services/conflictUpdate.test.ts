@@ -119,10 +119,10 @@ describe('updateItem (packing) — optimistic concurrency', () => {
     const trip = createTrip(testDb, user.id);
     const item = createItem(trip.id, { name: 'Socks' }) as { id: number; updated_at: string };
 
-    const stale = updateItem(trip.id, item.id, { name: 'Mine' }, ['name'], '1999-01-01 00:00:00');
+    const stale = updateItem(trip.id, item.id, { name: 'Mine' }, ['name'], '1999-01-01 00:00:00', user.id);
     expect(isUpdateConflict(stale)).toBe(true);
 
-    const fresh = updateItem(trip.id, item.id, { name: 'Edited' }, ['name'], item.updated_at);
+    const fresh = updateItem(trip.id, item.id, { name: 'Edited' }, ['name'], item.updated_at, user.id);
     expect(isUpdateConflict(fresh)).toBe(false);
     expect((fresh as { name: string }).name).toBe('Edited');
   });

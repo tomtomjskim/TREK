@@ -2,9 +2,16 @@ import { broadcast } from '../../websocket';
 import { db } from '../../db/database';
 import { checkPermission } from '../../services/permissions';
 
-export function safeBroadcast(tripId: number, event: string, payload: Record<string, unknown>): void {
+export function safeBroadcast(
+  tripId: number,
+  event: string,
+  payload: Record<string, unknown>,
+  onlyUserId?: number,
+): void {
   try {
-    broadcast(tripId, event, { ...payload, _source: 'mcp' });
+    const tagged = { ...payload, _source: 'mcp' };
+    if (onlyUserId == null) broadcast(tripId, event, tagged);
+    else broadcast(tripId, event, tagged, undefined, onlyUserId);
   } catch (err) {
     console.error(`[MCP] broadcast failed for ${event}:`, err?.message ?? err);
   }

@@ -79,7 +79,13 @@ describe('Tool: reorder_packing_items', () => {
       });
       const data = parseToolResult(result) as any;
       expect(data.success).toBe(true);
-      expect(broadcastMock).toHaveBeenCalledWith(trip.id, 'packing:reordered', expect.any(Object));
+      expect(broadcastMock).toHaveBeenCalledWith(
+        trip.id,
+        'packing:reordered',
+        expect.any(Object),
+        undefined,
+        user.id,
+      );
     });
   });
 

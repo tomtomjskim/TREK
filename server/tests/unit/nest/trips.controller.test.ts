@@ -330,6 +330,7 @@ describe('TripsController (parity with the legacy /api/trips route)', () => {
     const bundle = vi.fn().mockReturnValue({ trip: { id: 9 }, days: [] });
     const s = svc({ get: vi.fn().mockReturnValue({ user_id: 1 }), bundle } as Partial<TripsService>);
     expect(new TripsController(s).bundle(user, '9')).toEqual({ trip: { id: 9 }, days: [] });
+    expect(bundle).toHaveBeenCalledWith('9', { user_id: 1 }, user.id);
   });
 
   describe('POST /:id/cover', () => {

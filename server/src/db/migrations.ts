@@ -3258,13 +3258,19 @@ function runMigrations(db: Database.Database): void {
 
     // Migration 151: user-added links on collections + saved places (JSON text)
     () => {
-      try { db.exec('ALTER TABLE collections ADD COLUMN links TEXT'); } catch (err) { console.warn('[migrations] Non-fatal migration step failed:', err); }
-      try { db.exec('ALTER TABLE collection_places ADD COLUMN links TEXT'); } catch (err) { console.warn('[migrations] Non-fatal migration step failed:', err); }
+      try { db.exec('ALTER TABLE collections ADD COLUMN links TEXT'); } catch (err) {
+        if (!(err instanceof Error) || !err.message.includes('duplicate column name')) throw err;
+      }
+      try { db.exec('ALTER TABLE collection_places ADD COLUMN links TEXT'); } catch (err) {
+        if (!(err instanceof Error) || !err.message.includes('duplicate column name')) throw err;
+      }
     },
     // Migration 152: per-member permission role on a shared list. Existing
     // accepted members default to 'editor' so nothing regresses.
     () => {
-      try { db.exec("ALTER TABLE collection_members ADD COLUMN role TEXT NOT NULL DEFAULT 'editor'"); } catch (err) { console.warn('[migrations] Non-fatal migration step failed:', err); }
+      try { db.exec("ALTER TABLE collection_members ADD COLUMN role TEXT NOT NULL DEFAULT 'editor'"); } catch (err) {
+        if (!(err instanceof Error) || !err.message.includes('duplicate column name')) throw err;
+      }
     },
     // Migration 153: per-trip invite links (#1143). One rotating token per trip;
     // a logged-in existing user who opens the link joins the trip as a member.

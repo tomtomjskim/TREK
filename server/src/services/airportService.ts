@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { db } from '../db/database';
+import type Database from 'better-sqlite3';
 
 export interface Airport {
   iata: string;
@@ -63,8 +63,8 @@ export function searchAirports(query: string, limit = 12): Airport[] {
   return matches.slice(0, limit).map(m => m.a);
 }
 
-export function backfillFlightEndpoints(): void {
-  const pending = db.prepare(`
+export function backfillFlightEndpoints(database: Database.Database): void {
+  const pending = database.prepare(`
     SELECT r.id, r.metadata, r.reservation_time, r.reservation_end_time
     FROM reservations r
     WHERE r.type = 'flight'
@@ -74,11 +74,11 @@ export function backfillFlightEndpoints(): void {
   if (pending.length === 0) return;
 
   load();
-  const insert = db.prepare(`
+  const insert = database.prepare(`
     INSERT INTO reservation_endpoints (reservation_id, role, sequence, name, code, lat, lng, timezone, local_time, local_date)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
-  const markReview = db.prepare('UPDATE reservations SET needs_review = 1 WHERE id = ?');
+  const markReview = database.prepare('UPDATE reservations SET needs_review = 1 WHERE id = ?');
 
   let filled = 0;
   let flagged = 0;

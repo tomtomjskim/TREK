@@ -114,7 +114,9 @@ export class PackingController {
   ) {
     const trip = this.requireTrip(tripId, user);
     this.requireEdit(trip, user);
-    this.packing.reorderItems(tripId, orderedIds);
+    if (!this.packing.reorderItems(tripId, orderedIds, user.id)) {
+      throw new HttpException({ error: 'Item not found' }, 404);
+    }
     return { success: true };
   }
 
@@ -131,7 +133,7 @@ export class PackingController {
     this.requireEdit(trip, user);
     // Privacy state before the change, so a public↔private toggle (#858) can route
     // the broadcast correctly instead of leaking a freshly-privatized item.
-    const before = this.packing.getItemPrivacy(tripId, id);
+    const before = this.packing.getItemPrivacy(tripId, id, user.id);
     const { name, checked, category, weight_grams, bag_id, quantity, is_private } = body as Record<string, never>;
     const updated = this.packing.updateItem(tripId, id, { name, checked, category, weight_grams, bag_id, quantity, is_private }, Object.keys(body), ifMatch, user.id);
     if (!updated) {
@@ -163,7 +165,7 @@ export class PackingController {
     const nowPrivate = !!item.is_private;
     if (nowPrivate) {
       if (wasPrivate) {
-        this.packing.broadcastItem(tripId, 'packing:updated', { item }, item, socketId);
+        this.emitToViewers(tripId, 'packing:updated', { item }, item, socketId);
       } else {
         this.packing.broadcast(tripId, 'packing:deleted', { itemId: Number(id) }, socketId);
         this.packing.broadcastItem(tripId, 'packing:created', { item }, item, socketId);
@@ -185,7 +187,7 @@ export class PackingController {
   ) {
     const trip = this.requireTrip(tripId, user);
     this.requireEdit(trip, user);
-    const deleted = this.packing.deleteItem(tripId, id);
+    const deleted = this.packing.deleteItem(tripId, id, user.id);
     if (!deleted) {
       throw new HttpException({ error: 'Item not found' }, 404);
     }
@@ -210,9 +212,6 @@ export class PackingController {
     const updated = this.packing.setItemSharing(tripId, id, user.id, body.visibility, Array.isArray(body.recipient_ids) ? body.recipient_ids : []);
     if (!updated) {
       throw new HttpException({ error: 'Item not found' }, 404);
-    }
-    if ((updated as { forbidden?: boolean }).forbidden) {
-      throw new HttpException({ error: 'Only the owner can change sharing' }, 403);
     }
     // The viewer set just changed: drop the item from the whole room, then re-add
     // it for whoever can now see it (owner + recipients, or everyone if Common).
@@ -270,7 +269,7 @@ export class PackingController {
     this.requireEdit(trip, user);
     // You can drop your own pledge; the owner can remove anyone's.
     const target = parseInt(userId);
-    const item = this.packing.removeContributor(tripId, id, target);
+    const item = this.packing.removeContributor(tripId, id, target, user.id);
     if (!item) {
       throw new HttpException({ error: 'Item not found' }, 404);
     }

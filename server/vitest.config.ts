@@ -2,6 +2,10 @@ import { defineConfig } from 'vitest/config';
 import swc from 'unplugin-swc';
 
 export default defineConfig({
+  // unplugin-swc disables Vite's legacy esbuild transform. Vite 8 moved the
+  // default transform to Oxc, so disable that too and let SWC remain the sole
+  // decorator-aware transformer used by the test suite.
+  oxc: false,
   // SWC transform so NestJS decorator metadata is emitted in tests
   // (vitest's default esbuild does not emit it -> type-based DI would break).
   plugins: [

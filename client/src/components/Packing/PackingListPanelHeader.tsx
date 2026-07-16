@@ -5,7 +5,7 @@ import type { PackingState } from './usePackingListPanel'
 
 export function PackingHeader(S: PackingState) {
   const {
-    inlineHeader, t, items, abgehakt, fortschritt, canEdit, isAdmin,
+    inlineHeader, t, items, abgehakt, clearableChecked, fortschritt, canEdit, isAdmin,
     showSaveTemplate, saveTemplateName, setSaveTemplateName, handleSaveAsTemplate, setShowSaveTemplate,
     setShowImportModal, handleClearChecked, availableTemplates, templateDropdownRef,
     showTemplateDropdown, setShowTemplateDropdown, applyingTemplate, handleApplyTemplate,
@@ -49,13 +49,13 @@ export function PackingHeader(S: PackingState) {
               <Upload size={12} /> <span className="hidden sm:inline">{t('packing.import')}</span>
             </button>
           )}
-          {inlineHeader && canEdit && abgehakt > 0 && (
+          {inlineHeader && canEdit && clearableChecked > 0 && (
             <button onClick={handleClearChecked} style={{
               fontSize: 'calc(11.5px * var(--fs-scale-caption, 1))', padding: '5px 10px', borderRadius: 99, border: '1px solid rgba(239,68,68,0.3)',
               background: 'rgba(239,68,68,0.1)', color: '#ef4444', cursor: 'pointer', fontFamily: 'inherit',
             }}>
-              <span className="hidden sm:inline">{t('packing.clearChecked', { count: abgehakt })}</span>
-              <span className="sm:hidden">{t('packing.clearCheckedShort', { count: abgehakt })}</span>
+              <span className="hidden sm:inline">{t('packing.clearChecked', { count: clearableChecked })}</span>
+              <span className="sm:hidden">{t('packing.clearCheckedShort', { count: clearableChecked })}</span>
             </button>
           )}
           {inlineHeader && canEdit && availableTemplates.length > 0 && (

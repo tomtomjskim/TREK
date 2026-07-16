@@ -15,7 +15,7 @@
  * ALLOWED_DESTRUCTIVE below with the reason. Anything not on that list is
  * treated as a regression.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -195,6 +195,20 @@ describe('migration hygiene — full chain smoke', () => {
       expect(usageTable).toEqual({ name: 'google_api_usage' });
     } finally {
       db.close();
+    }
+  });
+
+  it('does not warn for expected duplicate columns on a fresh schema', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const db = createTestDb();
+    try {
+      const migrationWarnings = warn.mock.calls.filter(
+        ([message]) => message === '[migrations] Non-fatal migration step failed:',
+      );
+      expect(migrationWarnings).toEqual([]);
+    } finally {
+      db.close();
+      warn.mockRestore();
     }
   });
 });

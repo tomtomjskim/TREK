@@ -6,7 +6,6 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import 'fake-indexeddb/auto';
-import Dexie from 'dexie';
 
 // Re-import after fake-indexeddb is set up so Dexie picks up the shim.
 // We re-open a clean db in each test to isolate state.
@@ -18,6 +17,7 @@ import {
   upsertDays,
   upsertPlaces,
   upsertPackingItems,
+  replacePackingItemsForTrip,
   upsertTodoItems,
   upsertBudgetItems,
   upsertReservations,
@@ -149,6 +149,18 @@ describe('offlineDb — packing / todo / budget / reservations / files', () => {
     const item: PackingItem = { id: 1, trip_id: 1, name: 'Passport', category: null, checked: 0, sort_order: 0, quantity: 1 };
     await upsertPackingItems([item]);
     expect(await offlineDb.packingItems.count()).toBe(1);
+  });
+
+  it('replaces a trip packing snapshot so stale private rows are removed', async () => {
+    const visible: PackingItem = { id: 1, trip_id: 1, name: 'Visible', category: null, checked: 0, sort_order: 0, quantity: 1 };
+    const stale: PackingItem = { id: 2, trip_id: 1, name: 'Stale private', category: null, checked: 0, sort_order: 1, quantity: 1 };
+    const otherTrip: PackingItem = { id: 3, trip_id: 2, name: 'Other trip', category: null, checked: 0, sort_order: 0, quantity: 1 };
+    await upsertPackingItems([visible, stale, otherTrip]);
+
+    await replacePackingItemsForTrip(1, [visible]);
+
+    expect(await offlineDb.packingItems.where('trip_id').equals(1).toArray()).toEqual([visible]);
+    expect(await offlineDb.packingItems.get(3)).toEqual(otherTrip);
   });
 
   it('upserts todo items', async () => {

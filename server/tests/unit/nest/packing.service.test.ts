@@ -64,19 +64,19 @@ describe('PackingService (wrapper delegation + helpers)', () => {
 
   it('getItemPrivacy reads the privacy fields for an item', () => {
     dbMock._stmt.get.mockReturnValueOnce({ is_private: 1, owner_id: 3 });
-    expect(svc().getItemPrivacy('5', '9')).toEqual({ is_private: 1, owner_id: 3 });
+    expect(svc().getItemPrivacy('5', '9', 3)).toEqual({ is_private: 1, owner_id: 3 });
     expect(dbMock.prepare).toHaveBeenCalledWith(expect.stringContaining('is_private, owner_id'));
   });
 
   it('forwards every item/bag/template/assignee call to the legacy service', () => {
     const s = svc();
     s.verifyTripAccess('5', 1); expect(pk.verifyTripAccess).toHaveBeenCalledWith('5', 1);
-    s.listItems('5'); expect(pk.listItems).toHaveBeenCalledWith('5', undefined);
+    s.listItems('5', 3); expect(pk.listItems).toHaveBeenCalledWith('5', 3);
     s.createItem('5', { name: 'a' }); expect(pk.createItem).toHaveBeenCalledWith('5', { name: 'a' }, undefined);
-    s.updateItem('5', '2', { name: 'b' } as never, ['name']); expect(pk.updateItem).toHaveBeenCalledWith('5', '2', { name: 'b' }, ['name'], undefined, undefined);
-    s.deleteItem('5', '2'); expect(pk.deleteItem).toHaveBeenCalledWith('5', '2');
+    s.updateItem('5', '2', { name: 'b' } as never, ['name'], undefined, 3); expect(pk.updateItem).toHaveBeenCalledWith('5', '2', { name: 'b' }, ['name'], undefined, 3);
+    s.deleteItem('5', '2', 3); expect(pk.deleteItem).toHaveBeenCalledWith('5', '2', 3);
     s.bulkImport('5', [{ name: 'x' }] as never); expect(pk.bulkImport).toHaveBeenCalledWith('5', [{ name: 'x' }], undefined);
-    s.reorderItems('5', [3, 1] as never); expect(pk.reorderItems).toHaveBeenCalledWith('5', [3, 1]);
+    s.reorderItems('5', [3, 1] as never, 3); expect(pk.reorderItems).toHaveBeenCalledWith('5', [3, 1], 3);
     s.listBags('5'); expect(pk.listBags).toHaveBeenCalledWith('5');
     s.createBag('5', { name: 'Bag' }); expect(pk.createBag).toHaveBeenCalledWith('5', { name: 'Bag' });
     s.updateBag('5', '2', { name: 'B' } as never, ['name']); expect(pk.updateBag).toHaveBeenCalledWith('5', '2', { name: 'B' }, ['name']);
@@ -89,7 +89,7 @@ describe('PackingService (wrapper delegation + helpers)', () => {
     s.updateCategoryAssignees('5', 'Clothes', [2]); expect(pk.updateCategoryAssignees).toHaveBeenCalledWith('5', 'Clothes', [2]);
     s.setItemSharing('5', '2', 1, 'shared', [3]); expect(pk.setItemSharing).toHaveBeenCalledWith('5', '2', 1, 'shared', [3]);
     s.addContributor('5', '2', 3); expect(pk.addContributor).toHaveBeenCalledWith('5', '2', 3);
-    s.removeContributor('5', '2', 3); expect(pk.removeContributor).toHaveBeenCalledWith('5', '2', 3);
+    s.removeContributor('5', '2', 3, 4); expect(pk.removeContributor).toHaveBeenCalledWith('5', '2', 3, 4);
     s.cloneItem('5', '2', 7); expect(pk.cloneItem).toHaveBeenCalledWith('5', '2', 7);
   });
 

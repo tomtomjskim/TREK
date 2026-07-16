@@ -1527,4 +1527,44 @@ describe('PackingListPanel', () => {
     // "by Bob" — taken care of by the bringer.
     expect(screen.getByText('by Bob')).toBeInTheDocument();
   });
+
+  it('FE-COMP-PACKING-082: a Shared recipient gets read-only row controls', async () => {
+    seedStore(useAuthStore, { user: buildUser({ id: 1 }), isAuthenticated: true });
+    const items = [
+      buildPackingItem({ name: 'Medication', is_private: 1, owner_id: 2, recipients: [{ user_id: 1, username: 'me' }] }),
+    ];
+    const { container } = render(<PackingListPanel tripId={1} items={items} />);
+    await userEvent.click(screen.getByText('My list'));
+    await screen.findByText('Medication');
+
+    expect(screen.queryByTitle('Rename')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Delete')).not.toBeInTheDocument();
+    const checkbox = container.querySelector('svg.lucide-square')?.closest('button');
+    expect(checkbox).toBeDisabled();
+  });
+
+  it('FE-COMP-PACKING-083: category bulk check skips Shared-to-me rows', async () => {
+    seedStore(useAuthStore, { user: buildUser({ id: 1 }), isAuthenticated: true });
+    const items = [
+      buildPackingItem({ id: 200, name: 'Mine', category: 'Personal', checked: 0, is_private: 1, owner_id: 1 }),
+      buildPackingItem({ id: 201, name: 'Shared to me', category: 'Personal', checked: 0, is_private: 1, owner_id: 2, recipients: [{ user_id: 1, username: 'me' }] }),
+    ];
+    const patchedIds: number[] = [];
+    server.use(
+      http.put('/api/trips/1/packing/:itemId', ({ params }) => {
+        patchedIds.push(Number(params.itemId));
+        return HttpResponse.json({ item: buildPackingItem({ id: Number(params.itemId), checked: 1 }) });
+      }),
+    );
+
+    const user = userEvent.setup();
+    const { container } = render(<PackingListPanel tripId={1} items={items} />);
+    await user.click(screen.getByText('My list'));
+    const moreBtn = container.querySelector('svg.lucide-more-horizontal')?.closest('button');
+    expect(moreBtn).toBeTruthy();
+    await user.click(moreBtn!);
+    await user.click(await screen.findByText('Check All'));
+
+    await waitFor(() => expect(patchedIds).toEqual([200]));
+  });
 });

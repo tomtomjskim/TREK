@@ -40,7 +40,7 @@ export function PackingList(S: PackingState) {
               bagTrackingEnabled={bagTrackingEnabled}
               bags={bags}
               onCreateBag={handleCreateBagByName}
-              canEdit={canEdit}
+              canEdit={canEdit && katItems.some(item => !item.is_private || item.owner_id === currentUserId)}
               allItems={items}
               onReorder={(orderedIds) => reorderPackingItems(tripId, orderedIds)}
               currentUserId={currentUserId}

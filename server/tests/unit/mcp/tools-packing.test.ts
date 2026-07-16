@@ -171,6 +171,46 @@ describe('Tool: update_packing_item', () => {
       expect(result.isError).toBe(true);
     });
   });
+
+  it('does not expose or update another member\'s private item by ID', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    testDb.prepare('INSERT INTO trip_members (trip_id, user_id) VALUES (?, ?)').run(trip.id, member.id);
+    const item = createPackingItem(testDb, trip.id, { name: 'Private medication' });
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ? WHERE id = ?').run(owner.id, item.id);
+
+    await withHarness(member.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'update_packing_item',
+        arguments: { tripId: trip.id, itemId: item.id, name: 'Exposed' },
+      });
+      expect(result.isError).toBe(true);
+      expect(testDb.prepare('SELECT name FROM packing_items WHERE id = ?').get(item.id))
+        .toEqual({ name: 'Private medication' });
+    });
+  });
+
+  it('targets a private-item update only to its owner socket', async () => {
+    const { user: owner } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    const item = createPackingItem(testDb, trip.id, { name: 'Medication' });
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ? WHERE id = ?').run(owner.id, item.id);
+
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({
+        name: 'update_packing_item',
+        arguments: { tripId: trip.id, itemId: item.id, name: 'Updated medication' },
+      });
+      expect(broadcastMock).toHaveBeenCalledWith(
+        trip.id,
+        'packing:updated',
+        expect.objectContaining({ item: expect.objectContaining({ id: item.id }) }),
+        undefined,
+        owner.id,
+      );
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -282,6 +322,25 @@ describe('Tool: delete_packing_item', () => {
     await withHarness(user.id, async (h) => {
       const result = await h.client.callTool({ name: 'delete_packing_item', arguments: { tripId: trip.id, itemId: item.id } });
       expect(result.isError).toBe(true);
+    });
+  });
+
+  it('does not delete another member\'s private item by ID', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    testDb.prepare('INSERT INTO trip_members (trip_id, user_id) VALUES (?, ?)').run(trip.id, member.id);
+    const item = createPackingItem(testDb, trip.id);
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ? WHERE id = ?').run(owner.id, item.id);
+
+    await withHarness(member.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'delete_packing_item',
+        arguments: { tripId: trip.id, itemId: item.id },
+      });
+      expect(result.isError).toBe(true);
+      expect(testDb.prepare('SELECT id FROM packing_items WHERE id = ?').get(item.id))
+        .toEqual({ id: item.id });
     });
   });
 });

@@ -21,6 +21,31 @@ import { canRead, canWrite } from '../scopes';
 import { isAddonEnabled, deletePackingTemplate } from '../../services/adminService';
 import { ADDON_IDS } from '../../addons';
 
+type PackingPrivacy = {
+  is_private?: number;
+  owner_id?: number | null;
+  recipients?: { user_id: number }[];
+};
+
+/** Match the REST/plugin privacy fan-out: Common goes to the trip room;
+ * restricted items go only to owner + current recipients. */
+function broadcastPackingItem(
+  tripId: number,
+  event: string,
+  payload: Record<string, unknown>,
+  item: PackingPrivacy,
+): void {
+  if (!item.is_private) {
+    safeBroadcast(tripId, event, payload);
+    return;
+  }
+  const viewers = [item.owner_id, ...(item.recipients || []).map((recipient) => recipient.user_id)]
+    .filter((id): id is number => id != null);
+  for (const viewerId of new Set(viewers)) {
+    safeBroadcast(tripId, event, payload, viewerId);
+  }
+}
+
 export function registerPackingTools(server: McpServer, userId: number, scopes: string[] | null): void {
   const R = canRead(scopes, 'packing');
   const W = canWrite(scopes, 'packing');
@@ -65,9 +90,9 @@ export function registerPackingTools(server: McpServer, userId: number, scopes: 
       if (isDemoUser(userId)) return demoDenied();
       if (!canAccessTrip(tripId, userId)) return noAccess();
       if (!hasTripPermission('packing_edit', tripId, userId)) return permissionDenied();
-      const item = updatePackingItem(tripId, itemId, { checked: checked ? 1 : 0 }, ['checked']);
+      const item = updatePackingItem(tripId, itemId, { checked: checked ? 1 : 0 }, ['checked'], undefined, userId);
       if (!item) return { content: [{ type: 'text' as const, text: 'Packing item not found.' }], isError: true };
-      safeBroadcast(tripId, 'packing:updated', { item });
+      broadcastPackingItem(tripId, 'packing:updated', { item }, item as PackingPrivacy);
       return ok({ item });
     }
   );
@@ -86,9 +111,9 @@ export function registerPackingTools(server: McpServer, userId: number, scopes: 
       if (isDemoUser(userId)) return demoDenied();
       if (!canAccessTrip(tripId, userId)) return noAccess();
       if (!hasTripPermission('packing_edit', tripId, userId)) return permissionDenied();
-      const deleted = deletePackingItem(tripId, itemId);
+      const deleted = deletePackingItem(tripId, itemId, userId);
       if (!deleted) return { content: [{ type: 'text' as const, text: 'Packing item not found.' }], isError: true };
-      safeBroadcast(tripId, 'packing:deleted', { itemId });
+      broadcastPackingItem(tripId, 'packing:deleted', { itemId }, deleted as PackingPrivacy);
       return ok({ success: true });
     }
   );
@@ -112,9 +137,9 @@ export function registerPackingTools(server: McpServer, userId: number, scopes: 
       if (!canAccessTrip(tripId, userId)) return noAccess();
       if (!hasTripPermission('packing_edit', tripId, userId)) return permissionDenied();
       const bodyKeys = ['name', 'category'].filter(k => k === 'name' ? name !== undefined : category !== undefined);
-      const item = updatePackingItem(tripId, itemId, { name, category }, bodyKeys);
+      const item = updatePackingItem(tripId, itemId, { name, category }, bodyKeys, undefined, userId);
       if (!item) return { content: [{ type: 'text' as const, text: 'Packing item not found.' }], isError: true };
-      safeBroadcast(tripId, 'packing:updated', { item });
+      broadcastPackingItem(tripId, 'packing:updated', { item }, item as PackingPrivacy);
       return ok({ item });
     }
   );
@@ -135,8 +160,12 @@ export function registerPackingTools(server: McpServer, userId: number, scopes: 
       if (isDemoUser(userId)) return demoDenied();
       if (!canAccessTrip(tripId, userId)) return noAccess();
       if (!hasTripPermission('packing_edit', tripId, userId)) return permissionDenied();
-      reorderPackingItems(tripId, orderedIds);
-      safeBroadcast(tripId, 'packing:reordered', { orderedIds });
+      if (!reorderPackingItems(tripId, orderedIds, userId)) {
+        return { content: [{ type: 'text' as const, text: 'Packing item not found.' }], isError: true };
+      }
+      // A list may contain caller-owned Personal ids. Keep the ordering event
+      // on the caller's sockets instead of exposing those ids to the trip room.
+      safeBroadcast(tripId, 'packing:reordered', { orderedIds }, userId);
       return ok({ success: true });
     }
   );

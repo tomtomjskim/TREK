@@ -173,6 +173,14 @@ class TrekOfflineDb extends Dexie {
     this.version(4).stores({
       importFiles: '[jobId+fileName], jobId, createdAt',
     });
+
+    // v5 privacy repair: older bundle responses could contain another trip
+    // member's restricted packing rows. Drop the cached snapshot once on
+    // upgrade; pending mutations remain in their separate queue and the next
+    // authorised list/bundle fetch rebuilds only the current viewer's rows.
+    this.version(5).upgrade(async (tx) => {
+      await tx.table('packingItems').clear();
+    });
   }
 }
 
@@ -240,6 +248,17 @@ export async function upsertPlaces(places: Place[]): Promise<void> {
 
 export async function upsertPackingItems(items: PackingItem[]): Promise<void> {
   await offlineDb.packingItems.bulkPut(items);
+}
+
+/** Replace one trip's authoritative, viewer-scoped packing snapshot. */
+export async function replacePackingItemsForTrip(
+  tripId: number,
+  items: PackingItem[],
+): Promise<void> {
+  await offlineDb.transaction('rw', offlineDb.packingItems, async () => {
+    await offlineDb.packingItems.where('trip_id').equals(tripId).delete();
+    if (items.length > 0) await offlineDb.packingItems.bulkPut(items);
+  });
 }
 
 export async function upsertTodoItems(items: TodoItem[]): Promise<void> {

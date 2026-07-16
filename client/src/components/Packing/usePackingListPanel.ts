@@ -90,6 +90,10 @@ export function usePackingList({ tripId, items, openImportSignal = 0, clearCheck
     () => items.filter(i => (view === 'common' ? !i.is_private : !!i.is_private)),
     [items, view],
   )
+  const mutableViewItems = useMemo(
+    () => viewItems.filter((item) => !item.is_private || item.owner_id === currentUserId),
+    [viewItems, currentUserId],
+  )
 
   const allCategories = useMemo(() => {
     const seen: string[] = []
@@ -116,6 +120,7 @@ export function usePackingList({ tripId, items, openImportSignal = 0, clearCheck
   }, [viewItems, filter, t])
 
   const abgehakt = viewItems.filter(i => i.checked).length
+  const clearableChecked = mutableViewItems.filter(i => i.checked).length
   const fortschritt = viewItems.length > 0 ? Math.round((abgehakt / viewItems.length) * 100) : 0
 
   const handleAddItemToCategory = async (category: string, name: string) => {
@@ -145,7 +150,7 @@ export function usePackingList({ tripId, items, openImportSignal = 0, clearCheck
     const category = item.category
     const isLastInCategory = !!category
       && item.name !== PACKING_PLACEHOLDER_NAME
-      && !items.some(i => i.id !== item.id && i.category === category)
+      && !viewItems.some(i => i.id !== item.id && i.category === category)
     try {
       if (isLastInCategory) {
         if (item.checked) await togglePackingItem(tripId, item.id, false)
@@ -175,7 +180,7 @@ export function usePackingList({ tripId, items, openImportSignal = 0, clearCheck
   }
 
   const handleRenameCategory = async (oldName: string, newName: string) => {
-    const toUpdate = items.filter(i => (i.category || t('packing.defaultCategory')) === oldName)
+    const toUpdate = mutableViewItems.filter(i => (i.category || t('packing.defaultCategory')) === oldName)
     for (const item of toUpdate) {
       await updatePackingItem(tripId, item.id, { category: newName })
     }
@@ -183,16 +188,16 @@ export function usePackingList({ tripId, items, openImportSignal = 0, clearCheck
 
   const handleDeleteCategory = async (catItems: PackingItem[]) => {
     let failed = false
-    for (const item of catItems) {
+    for (const item of catItems.filter(item => !item.is_private || item.owner_id === currentUserId)) {
       try { await deletePackingItem(tripId, item.id) } catch { failed = true }
     }
     if (failed) toast.error(t('packing.toast.deleteError'))
   }
 
   const handleClearChecked = async () => {
-    if (!confirm(t('packing.confirm.clearChecked', { count: abgehakt }))) return
+    if (!confirm(t('packing.confirm.clearChecked', { count: clearableChecked }))) return
     let failed = false
-    for (const item of items.filter(i => i.checked)) {
+    for (const item of mutableViewItems.filter(i => i.checked)) {
       try { await deletePackingItem(tripId, item.id) } catch { failed = true }
     }
     if (failed) toast.error(t('packing.toast.deleteError'))
@@ -364,9 +369,9 @@ export function usePackingList({ tripId, items, openImportSignal = 0, clearCheck
   return {
     view, setView, currentUserId,
     handleSetSharing, handleCloneItem, handleJoinItem, handleLeaveItem,
-    tripId, items, inlineHeader, t, canEdit, isAdmin, font, reorderPackingItems,
+    tripId, items: viewItems, inlineHeader, t, canEdit, isAdmin, font, reorderPackingItems,
     filter, setFilter, addingCategory, setAddingCategory, newCatName, setNewCatName,
-    tripMembers, categoryAssignees, handleSetAssignees, allCategories, gruppiert, abgehakt, fortschritt,
+    tripMembers, categoryAssignees, handleSetAssignees, allCategories, gruppiert, abgehakt, clearableChecked, fortschritt,
     handleAddItemToCategory, handleAddNewCategory, handleRenameCategory, handleDeleteCategory, handleDeleteItem, handleClearChecked,
     bagTrackingEnabled, bags, newBagName, setNewBagName, showAddBag, setShowAddBag, showBagModal, setShowBagModal,
     handleCreateBag, handleCreateBagByName, handleDeleteBag, handleUpdateBag, handleSetBagMembers,

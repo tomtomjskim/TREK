@@ -118,22 +118,16 @@ function emitPackingToViewers(tripId: number, event: string, payload: Record<str
   for (const uid of new Set(viewers)) if (uid != null) broadcast(tripId, event, payload, undefined, uid);
 }
 
-/** An item event delivered owner-only when the item is private (else to the room). */
-function broadcastPackingItem(tripId: number, event: string, payload: Record<string, unknown>, item: PackingPrivacy): void {
-  const onlyUserId = item?.is_private && item.owner_id != null ? item.owner_id : undefined;
-  broadcast(tripId, event, payload, undefined, onlyUserId);
-}
-
 /** The four public<->private transitions (packing.controller.broadcastUpdate). `wasPrivate`
  * is read BEFORE the write — getting this wrong LEAKS a freshly-privatized item. */
 function broadcastPackingUpdate(tripId: number, itemId: number, item: PackingPrivacy, wasPrivate: boolean): void {
   const nowPrivate = !!item.is_private;
   if (nowPrivate) {
     if (wasPrivate) {
-      broadcastPackingItem(tripId, 'packing:updated', { item }, item); // stays private -> owner-only
+      emitPackingToViewers(tripId, 'packing:updated', { item }, item);
     } else {
       broadcast(tripId, 'packing:deleted', { itemId }, undefined); // public->private: drop from the room...
-      broadcastPackingItem(tripId, 'packing:created', { item }, item); // ...then re-add for the owner
+      emitPackingToViewers(tripId, 'packing:created', { item }, item); // ...then re-add for allowed viewers
     }
   } else {
     if (wasPrivate) broadcast(tripId, 'packing:created', { item }, undefined); // private->public: add for members who lacked it
@@ -812,8 +806,8 @@ export function createRealRpcHost(id: string, granted: ReadonlySet<string>, rout
       broadcastPackingUpdate(tripId, itemId, updated as PackingPrivacy, !!before?.is_private);
       return updated;
     },
-    deletePackingItem: (tripId, itemId) => {
-      const deleted = deletePackingItemSvc(String(tripId), String(itemId)) as PackingPrivacy | null;
+    deletePackingItem: (tripId, itemId, actingUserId) => {
+      const deleted = deletePackingItemSvc(String(tripId), String(itemId), actingUserId) as PackingPrivacy | null;
       if (!deleted) throw new ForbiddenResource(`no packing item ${itemId} on trip ${tripId}`);
       emitPackingToViewers(tripId, 'packing:deleted', { itemId }, deleted);
       return { deleted: true };

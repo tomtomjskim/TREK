@@ -238,6 +238,31 @@ describe('Tool: copy_trip', () => {
     });
   });
 
+  it('copies only Common and caller-owned restricted packing items', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id, { title: 'Packing Source' });
+    testDb.prepare('INSERT INTO trip_members (trip_id, user_id) VALUES (?, ?)').run(trip.id, member.id);
+    const insert = testDb.prepare(
+      'INSERT INTO packing_items (trip_id, name, is_private, owner_id) VALUES (?, ?, ?, ?)',
+    );
+    insert.run(trip.id, 'Common', 0, owner.id);
+    insert.run(trip.id, 'Owner private', 1, owner.id);
+    insert.run(trip.id, 'Member private', 1, member.id);
+
+    await withHarness(member.id, async (h) => {
+      const result = await h.client.callTool({ name: 'copy_trip', arguments: { tripId: trip.id } });
+      const data = parseToolResult(result) as any;
+      const copied = testDb.prepare(
+        'SELECT name, is_private, owner_id FROM packing_items WHERE trip_id = ? ORDER BY name',
+      ).all(data.trip.id);
+      expect(copied).toEqual([
+        { name: 'Common', is_private: 0, owner_id: member.id },
+        { name: 'Member private', is_private: 1, owner_id: member.id },
+      ]);
+    });
+  });
+
   it('returns access denied for non-member', async () => {
     const { user } = createUser(testDb);
     const { user: other } = createUser(testDb);

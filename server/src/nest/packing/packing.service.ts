@@ -56,14 +56,17 @@ export class PackingService {
     return ids;
   }
 
-  listItems(tripId: string, userId?: number) {
+  listItems(tripId: string, userId: number) {
     return svc.listItems(tripId, userId);
   }
 
   /** Reads an item's current privacy fields (#858) before an update, so the
    *  controller can detect a public↔private transition and route the broadcast. */
-  getItemPrivacy(tripId: string, id: string): PrivacyFields | undefined {
-    return db.prepare('SELECT is_private, owner_id FROM packing_items WHERE id = ? AND trip_id = ?').get(id, tripId) as PrivacyFields | undefined;
+  getItemPrivacy(tripId: string, id: string, actingUserId: number): PrivacyFields | undefined {
+    return db.prepare(`
+      SELECT is_private, owner_id FROM packing_items
+      WHERE id = ? AND trip_id = ? AND (is_private = 0 OR owner_id = ?)
+    `).get(id, tripId, actingUserId) as PrivacyFields | undefined;
   }
 
   createItem(tripId: string, data: Parameters<typeof svc.createItem>[1], ownerId?: number) {
@@ -78,28 +81,28 @@ export class PackingService {
     return svc.addContributor(tripId, id, userId);
   }
 
-  removeContributor(tripId: string, id: string, userId: number) {
-    return svc.removeContributor(tripId, id, userId);
+  removeContributor(tripId: string, id: string, userId: number, actingUserId: number) {
+    return svc.removeContributor(tripId, id, userId, actingUserId);
   }
 
   cloneItem(tripId: string, id: string, userId: number) {
     return svc.cloneItem(tripId, id, userId);
   }
 
-  updateItem(tripId: string, id: string, data: Parameters<typeof svc.updateItem>[2], changedKeys: string[], ifMatch?: string, actingUserId?: number) {
+  updateItem(tripId: string, id: string, data: Parameters<typeof svc.updateItem>[2], changedKeys: string[], ifMatch: string | undefined, actingUserId: number) {
     return svc.updateItem(tripId, id, data, changedKeys, ifMatch, actingUserId);
   }
 
-  deleteItem(tripId: string, id: string) {
-    return svc.deleteItem(tripId, id);
+  deleteItem(tripId: string, id: string, actingUserId: number) {
+    return svc.deleteItem(tripId, id, actingUserId);
   }
 
   bulkImport(tripId: string, items: Parameters<typeof svc.bulkImport>[1], ownerId?: number) {
     return svc.bulkImport(tripId, items, ownerId);
   }
 
-  reorderItems(tripId: string, orderedIds: Parameters<typeof svc.reorderItems>[1]): void {
-    svc.reorderItems(tripId, orderedIds);
+  reorderItems(tripId: string, orderedIds: Parameters<typeof svc.reorderItems>[1], actingUserId: number): boolean {
+    return svc.reorderItems(tripId, orderedIds, actingUserId);
   }
 
   listBags(tripId: string) {

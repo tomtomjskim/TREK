@@ -116,14 +116,14 @@ export class TripsService {
   }
 
   /** Aggregates every trip sub-collection for offline caching (legacy /:id/bundle). */
-  bundle(tripId: string, trip: { user_id: number }) {
+  bundle(tripId: string, trip: { user_id: number }, viewerUserId: number) {
     const { days } = listDays(tripId);
     const { owner, members } = this.listMembers(tripId, trip.user_id);
     return {
       trip,
       days,
       places: listPlaces(String(tripId), {}),
-      packingItems: listPackingItems(tripId),
+      packingItems: listPackingItems(tripId, viewerUserId),
       todoItems: listTodoItems(tripId),
       budgetItems: listBudgetItems(tripId),
       reservations: listReservations(tripId),

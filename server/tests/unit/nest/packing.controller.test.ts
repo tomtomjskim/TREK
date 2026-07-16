@@ -147,12 +147,12 @@ describe('PackingController (parity with the legacy /api/trips/:tripId/packing r
     it('keeps a private update scoped to the owner (#858)', () => {
       const updateItem = vi.fn().mockReturnValue({ id: 9, name: 'X', is_private: 1, owner_id: 1 });
       const broadcast = vi.fn();
-      const broadcastItem = vi.fn();
+      const broadcastToViewers = vi.fn();
       // Was already private before the change → owner-only update, no room broadcast.
       const getItemPrivacy = vi.fn().mockReturnValue({ is_private: 1, owner_id: 1 });
-      const svc = makeService({ updateItem, broadcast, broadcastItem, getItemPrivacy } as Partial<PackingService>);
+      const svc = makeService({ updateItem, broadcast, broadcastToViewers, getItemPrivacy } as Partial<PackingService>);
       new PackingController(svc).update(user, '5', '9', { name: 'X' }, 'sock');
-      expect(broadcastItem).toHaveBeenCalledWith('5', 'packing:updated', { item: { id: 9, name: 'X', is_private: 1, owner_id: 1 } }, { id: 9, name: 'X', is_private: 1, owner_id: 1 }, 'sock');
+      expect(broadcastToViewers).toHaveBeenCalledWith('5', 'packing:updated', { item: { id: 9, name: 'X', is_private: 1, owner_id: 1 } }, [1], 'sock');
       expect(broadcast).not.toHaveBeenCalled();
     });
 
@@ -194,10 +194,10 @@ describe('PackingController (parity with the legacy /api/trips/:tripId/packing r
 
   describe('PUT /reorder', () => {
     it('reorders the items and reports success', () => {
-      const reorderItems = vi.fn();
+      const reorderItems = vi.fn().mockReturnValue(true);
       const svc = makeService({ reorderItems } as Partial<PackingService>);
       expect(new PackingController(svc).reorder(user, '5', [3, 1, 2])).toEqual({ success: true });
-      expect(reorderItems).toHaveBeenCalledWith('5', [3, 1, 2]);
+      expect(reorderItems).toHaveBeenCalledWith('5', [3, 1, 2], user.id);
     });
 
     it('403 without packing_edit permission', () => {
@@ -236,10 +236,9 @@ describe('PackingController (parity with the legacy /api/trips/:tripId/packing r
   });
 
   describe('sharing, contributors, clone (#858 three-tier)', () => {
-    it('PUT /:id/sharing 400 invalid, 404 missing, 403 non-owner, else drops + re-emits', () => {
+    it('PUT /:id/sharing 400 invalid, 404 missing/non-owner, else drops + re-emits', () => {
       expect(thrown(() => new PackingController(makeService()).setSharing(user, '5', '9', { visibility: 'nope' as never }))).toEqual({ status: 400, body: { error: 'Invalid visibility' } });
       expect(thrown(() => new PackingController(makeService({ setItemSharing: vi.fn().mockReturnValue(null) } as Partial<PackingService>)).setSharing(user, '5', '9', { visibility: 'personal' }))).toEqual({ status: 404, body: { error: 'Item not found' } });
-      expect(thrown(() => new PackingController(makeService({ setItemSharing: vi.fn().mockReturnValue({ forbidden: true }) } as Partial<PackingService>)).setSharing(user, '5', '9', { visibility: 'personal' }))).toEqual({ status: 403, body: { error: 'Only the owner can change sharing' } });
 
       const updated = { id: 9, is_private: 1, owner_id: 1, recipients: [{ user_id: 2 }] };
       const setItemSharing = vi.fn().mockReturnValue(updated);
@@ -280,8 +279,16 @@ describe('PackingController (parity with the legacy /api/trips/:tripId/packing r
       const broadcast = vi.fn();
       const svc = makeService({ removeContributor, broadcast } as Partial<PackingService>);
       new PackingController(svc).removeContributor(user, '5', '9', '2', 'sock');
-      expect(removeContributor).toHaveBeenCalledWith('5', '9', 2);
+      expect(removeContributor).toHaveBeenCalledWith('5', '9', 2, user.id);
       expect(broadcast).toHaveBeenCalledWith('5', 'packing:updated', { item }, 'sock');
+    });
+
+    it('DELETE /:id/contributors/:userId hides an unrelated or missing pledge', () => {
+      const svc = makeService({
+        removeContributor: vi.fn().mockReturnValue(null),
+      } as Partial<PackingService>);
+      expect(thrown(() => new PackingController(svc).removeContributor(user, '5', '9', '2')))
+        .toEqual({ status: 404, body: { error: 'Item not found' } });
     });
   });
 

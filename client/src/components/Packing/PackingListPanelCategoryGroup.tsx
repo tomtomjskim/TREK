@@ -46,12 +46,14 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
   const [dragId, setDragId] = useState<number | null>(null)
   const [overId, setOverId] = useState<number | null>(null)
   const contribFor = usePluginViewContributions('packing', tripId)
+  const mutableItems = items.filter(item => !item.is_private || item.owner_id === currentUserId)
+  const mutableAllItems = allItems.filter(item => !item.is_private || item.owner_id === currentUserId)
 
   const handleReorderDrop = (targetId: number) => {
     const from = dragId
     setDragId(null); setOverId(null)
     if (from == null || from === targetId) return
-    const catOrder = items.map(i => i.id)
+    const catOrder = mutableItems.map(i => i.id)
     const fi = catOrder.indexOf(from)
     const ti = catOrder.indexOf(targetId)
     if (fi < 0 || ti < 0) return
@@ -59,9 +61,9 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
     catOrder.splice(ti, 0, from)
     // Slot the reordered category ids back into the positions this category's
     // items occupy in the global list, leaving every other category untouched.
-    const catIds = new Set(items.map(i => i.id))
+    const catIds = new Set(mutableItems.map(i => i.id))
     let ci = 0
-    const globalIds = allItems.map(i => (catIds.has(i.id) ? catOrder[ci++] : i.id))
+    const globalIds = mutableAllItems.map(i => (catIds.has(i.id) ? catOrder[ci++] : i.id))
     onReorder(globalIds)
   }
   const [editingName, setEditingName] = useState(false)
@@ -88,7 +90,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
   }, [showAssigneeDropdown])
 
   const abgehakt = items.filter(i => i.checked).length
-  const alleAbgehakt = abgehakt === items.length
+  const alleAbgehakt = mutableItems.length > 0 && mutableItems.every(item => !!item.checked)
   const dot = katColor(kategorie, allCategories)
 
   const handleSaveKatName = async () => {
@@ -100,14 +102,14 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
 
   const handleCheckAll = async () => {
     try {
-      for (const item of Array.from(items)) {
+      for (const item of mutableItems) {
         if (!item.checked) await togglePackingItem(tripId, item.id, true)
       }
     } catch { toast.error(t('packing.toast.saveError')) }
   }
   const handleUncheckAll = async () => {
     try {
-      for (const item of Array.from(items)) {
+      for (const item of mutableItems) {
         if (item.checked) await togglePackingItem(tripId, item.id, false)
       }
     } catch { toast.error(t('packing.toast.saveError')) }
@@ -240,7 +242,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
           {abgehakt}/{items.length}
         </span>
 
-        <div style={{ position: 'relative' }}>
+        {canEdit && <div style={{ position: 'relative' }}>
           <button ref={menuBtnRef} onClick={() => setShowMenu(m => !m)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', borderRadius: 6, display: 'flex', color: 'var(--text-faint)' }}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--text-secondary)'} onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}>
             <MoreHorizontal size={15} />
@@ -251,18 +253,16 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
             <>
               <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setShowMenu(false)} />
               <div style={{ position: 'fixed', right: rect ? window.innerWidth - rect.right : 0, top: rect ? rect.bottom + 4 : 0, zIndex: 100, background: 'var(--bg-card)', border: '1px solid var(--border-primary)', borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.1)', padding: 4, minWidth: 170 }}>
-                {canEdit && <MenuItem icon={<Pencil size={13} />} label={t('packing.menuRename')} onClick={() => { setEditingName(true); setShowMenu(false) }} />}
+                <MenuItem icon={<Pencil size={13} />} label={t('packing.menuRename')} onClick={() => { setEditingName(true); setShowMenu(false) }} />
                 <MenuItem icon={<CheckCheck size={13} />} label={t('packing.menuCheckAll')} onClick={() => { handleCheckAll(); setShowMenu(false) }} />
                 <MenuItem icon={<RotateCcw size={13} />} label={t('packing.menuUncheckAll')} onClick={() => { handleUncheckAll(); setShowMenu(false) }} />
-                {canEdit && <>
                 <div style={{ height: 1, background: 'var(--bg-tertiary)', margin: '4px 0' }} />
                 <MenuItem icon={<Trash2 size={13} />} label={t('packing.menuDeleteCat')} danger onClick={handleDeleteAll} />
-                </>}
               </div>
             </>
             );
           })()}
-        </div>
+        </div>}
       </div>
 
       {offen && (
@@ -271,7 +271,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
             const contributions = contribFor(item.id)
             return (
               <React.Fragment key={item.id}>
-                <ArtikelZeile item={item} tripId={tripId} categories={allCategories} onCategoryChange={() => {}} onDelete={onDeleteItem} bagTrackingEnabled={bagTrackingEnabled} bags={bags} onCreateBag={onCreateBag} canEdit={canEdit}
+                <ArtikelZeile item={item} tripId={tripId} categories={allCategories} onDelete={onDeleteItem} bagTrackingEnabled={bagTrackingEnabled} bags={bags} onCreateBag={onCreateBag} canEdit={canEdit}
                   tripMembers={tripMembers} currentUserId={currentUserId} onSetSharing={onSetSharing} onClone={onClone} onJoin={onJoin} onLeave={onLeave}
                   drag={canEdit ? {
                     isDragging: dragId === item.id,

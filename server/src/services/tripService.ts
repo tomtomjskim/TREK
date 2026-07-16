@@ -883,6 +883,8 @@ export function exportICS(tripId: string | number): { ics: string; filename: str
 /**
  * Duplicates a trip (all days, places, assignments, accommodations, reservations,
  * budget, packing bags/items, day notes) into a new trip owned by `newOwnerId`.
+ * Packing copies only Common plus caller-owned restricted rows; restricted rows
+ * become Personal in the new trip and recipient/contributor links are dropped.
  * Packing items are reset to unchecked. Budget paid status is cleared.
  * Returns the new trip's ID.
  */
@@ -1007,14 +1009,21 @@ export function copyTripById(sourceTripId: string | number, newOwnerId: number, 
       bagMap.set(bag.id, r.lastInsertRowid);
     }
 
-    const oldPacking = db.prepare('SELECT * FROM packing_items WHERE trip_id = ?').all(sourceTripId) as any[];
+    const oldPacking = db.prepare(`
+      SELECT * FROM packing_items
+      WHERE trip_id = ? AND (is_private = 0 OR owner_id = ?)
+    `).all(sourceTripId, newOwnerId) as any[];
     const insertPacking = db.prepare(`
-      INSERT INTO packing_items (trip_id, name, checked, category, sort_order, weight_grams, bag_id, updated_at)
-      VALUES (?, ?, 0, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      INSERT INTO packing_items (
+        trip_id, name, checked, category, sort_order, weight_grams, bag_id,
+        quantity, is_private, owner_id, updated_at
+      )
+      VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     `);
     for (const p of oldPacking) {
       insertPacking.run(newTripId, p.name, p.category, p.sort_order, p.weight_grams,
-        p.bag_id ? (bagMap.get(p.bag_id) ?? null) : null);
+        p.bag_id ? (bagMap.get(p.bag_id) ?? null) : null,
+        p.quantity ?? 1, p.is_private ? 1 : 0, newOwnerId);
     }
 
     const oldNotes = db.prepare('SELECT * FROM day_notes WHERE trip_id = ?').all(sourceTripId) as any[];

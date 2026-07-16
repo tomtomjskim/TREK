@@ -1128,6 +1128,37 @@ describe('Copy trip with data', () => {
     expect(newNotes[0].text).toBe('Pack early!');
   });
 
+  it('TRIP-026a — a member copy excludes other owners\' restricted packing items', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id, { title: 'Private Packing Source' });
+    addTripMember(testDb, trip.id, member.id);
+
+    const common = createPackingItem(testDb, trip.id, { name: 'Common charger' });
+    const ownerPrivate = createPackingItem(testDb, trip.id, { name: 'Owner medication' });
+    const memberPrivate = createPackingItem(testDb, trip.id, { name: 'Member medication' });
+    const sharedToMember = createPackingItem(testDb, trip.id, { name: 'Shared surprise' });
+    testDb.prepare('UPDATE packing_items SET owner_id = ? WHERE id = ?').run(owner.id, common.id);
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ? WHERE id = ?').run(owner.id, ownerPrivate.id);
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ? WHERE id = ?').run(member.id, memberPrivate.id);
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ? WHERE id = ?').run(owner.id, sharedToMember.id);
+    testDb.prepare('INSERT INTO packing_item_recipients (item_id, user_id) VALUES (?, ?)').run(sharedToMember.id, member.id);
+
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/copy`)
+      .set('Cookie', authCookie(member.id))
+      .send({ title: 'Member-safe Copy' });
+
+    expect(res.status).toBe(201);
+    const copied = testDb.prepare(
+      'SELECT name, is_private, owner_id FROM packing_items WHERE trip_id = ? ORDER BY name',
+    ).all(res.body.trip.id) as any[];
+    expect(copied).toEqual([
+      { name: 'Common charger', is_private: 0, owner_id: member.id },
+      { name: 'Member medication', is_private: 1, owner_id: member.id },
+    ]);
+  });
+
   it('TRIP-027 — copy preserves todos (unchecked, unassigned) and budget category order', async () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { title: 'Todo Trip' });
@@ -1235,6 +1266,24 @@ describe('Trip bundle', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.trip.id).toBe(trip.id);
+  });
+
+  it('BUNDLE-004a — member bundle excludes another owner\'s restricted packing item', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, member.id);
+    const common = createPackingItem(testDb, trip.id, { name: 'Common charger' });
+    const privateItem = createPackingItem(testDb, trip.id, { name: 'Private medication' });
+    testDb.prepare('UPDATE packing_items SET owner_id = ? WHERE id = ?').run(owner.id, common.id);
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ? WHERE id = ?').run(owner.id, privateItem.id);
+
+    const res = await request(app)
+      .get(`/api/trips/${trip.id}/bundle`)
+      .set('Cookie', authCookie(member.id));
+
+    expect(res.status).toBe(200);
+    expect(res.body.packingItems.map((item: any) => item.name)).toEqual(['Common charger']);
   });
 
   it('BUNDLE-005 — returns 401 when unauthenticated', async () => {

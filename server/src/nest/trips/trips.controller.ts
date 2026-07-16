@@ -374,7 +374,7 @@ export class TripsController {
     if (!trip) {
       throw new HttpException({ error: 'Trip not found' }, 404);
     }
-    return this.trips.bundle(id, trip);
+    return this.trips.bundle(id, trip, user.id);
   }
 
   @Get(':id/export.ics')

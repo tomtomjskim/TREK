@@ -38,6 +38,19 @@ describe('packingRepo.list', () => {
     expect(cached[0].id).toBe(item.id);
   });
 
+  it('online — removes stale rows missing from the viewer-scoped response', async () => {
+    const visible = buildPackingItem({ id: 21, trip_id: 1, name: 'Visible' });
+    const stale = buildPackingItem({ id: 22, trip_id: 1, name: 'Stale private' });
+    await offlineDb.packingItems.bulkPut([visible, stale]);
+    server.use(
+      http.get('/api/trips/1/packing', () => HttpResponse.json({ items: [visible] })),
+    );
+
+    await packingRepo.list(1);
+
+    expect(await offlineDb.packingItems.where('trip_id').equals(1).toArray()).toEqual([visible]);
+  });
+
   it('offline — returns Dexie cache without REST call', async () => {
     Object.defineProperty(navigator, 'onLine', { value: false });
 

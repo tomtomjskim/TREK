@@ -16,7 +16,7 @@ import {
   upsertTrip,
   upsertDays,
   upsertPlaces,
-  upsertPackingItems,
+  replacePackingItemsForTrip,
   upsertTodoItems,
   upsertBudgetItems,
   upsertReservations,
@@ -87,7 +87,7 @@ async function syncTrip(tripId: number): Promise<void> {
   await upsertTrip(bundle.trip)
   await upsertDays(bundle.days)
   await upsertPlaces(bundle.places)
-  await upsertPackingItems(bundle.packingItems)
+  await replacePackingItemsForTrip(tripId, bundle.packingItems)
   await upsertTodoItems(bundle.todoItems)
   await upsertBudgetItems(bundle.budgetItems)
   await upsertReservations(bundle.reservations)
@@ -157,10 +157,13 @@ let _syncing = false
  * sync; clears Dexie for stale or user-disabled trips as a side effect.
  */
 async function reconcileTrips(trips: Trip[]): Promise<Trip[]> {
+  const accessibleIds = new Set(trips.map((trip) => trip.id))
+  const cachedTrips = await offlineDb.trips.toArray()
+  const revoked = cachedTrips.filter((trip) => !accessibleIds.has(trip.id))
   const stale = trips.filter(isStale)
   // Trips the user turned off explicitly are evicted regardless of date.
   const disabled = trips.filter(t => !isTripOfflineEnabled(t.id))
-  await Promise.all([...stale, ...disabled].map(t => clearTripData(t.id).catch(console.error)))
+  await Promise.all([...revoked, ...stale, ...disabled].map(t => clearTripData(t.id).catch(console.error)))
   return trips.filter(t => shouldCache(t) && isTripOfflineEnabled(t.id))
 }
 

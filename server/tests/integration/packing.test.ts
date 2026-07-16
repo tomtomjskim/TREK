@@ -258,7 +258,62 @@ describe('Three-tier packing sharing (#858)', () => {
     const created = await request(app).post(`/api/trips/${trip.id}/packing`).set('Cookie', authCookie(owner.id)).send({ name: 'Tent', visibility: 'personal' });
 
     const denied = await request(app).put(`/api/trips/${trip.id}/packing/${created.body.item.id}/sharing`).set('Cookie', authCookie(member.id)).send({ visibility: 'common' });
-    expect(denied.status).toBe(403);
+    expect(denied.status).toBe(404);
+  });
+
+  it('PACK-3T-006 — a member cannot mutate, delete, or clone an owner-only item by ID', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, member.id);
+    const created = await request(app)
+      .post(`/api/trips/${trip.id}/packing`)
+      .set('Cookie', authCookie(owner.id))
+      .send({ name: 'Private medication', visibility: 'personal' });
+    const itemId = created.body.item.id;
+
+    const clone = await request(app)
+      .post(`/api/trips/${trip.id}/packing/${itemId}/clone`)
+      .set('Cookie', authCookie(member.id));
+    const update = await request(app)
+      .put(`/api/trips/${trip.id}/packing/${itemId}`)
+      .set('Cookie', authCookie(member.id))
+      .send({ name: 'Exposed' });
+    const remove = await request(app)
+      .delete(`/api/trips/${trip.id}/packing/${itemId}`)
+      .set('Cookie', authCookie(member.id));
+
+    expect(clone.status).toBe(404);
+    expect(update.status).toBe(404);
+    expect(remove.status).toBe(404);
+    expect(testDb.prepare('SELECT name FROM packing_items WHERE id = ?').get(itemId))
+      .toEqual({ name: 'Private medication' });
+  });
+
+  it('PACK-3T-007 — contributor self-removal cannot disclose a hidden or non-pledged item', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, member.id);
+    const hidden = await request(app)
+      .post(`/api/trips/${trip.id}/packing`)
+      .set('Cookie', authCookie(owner.id))
+      .send({ name: 'Private medication', visibility: 'personal' });
+    const common = await request(app)
+      .post(`/api/trips/${trip.id}/packing`)
+      .set('Cookie', authCookie(owner.id))
+      .send({ name: 'Common', visibility: 'common' });
+
+    const hiddenAttempt = await request(app)
+      .delete(`/api/trips/${trip.id}/packing/${hidden.body.item.id}/contributors/${member.id}`)
+      .set('Cookie', authCookie(member.id));
+    const nonPledgeAttempt = await request(app)
+      .delete(`/api/trips/${trip.id}/packing/${common.body.item.id}/contributors/${member.id}`)
+      .set('Cookie', authCookie(member.id));
+
+    expect(hiddenAttempt.status).toBe(404);
+    expect(nonPledgeAttempt.status).toBe(404);
+    expect(hiddenAttempt.body.item).toBeUndefined();
   });
 });
 

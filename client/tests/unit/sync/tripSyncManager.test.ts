@@ -183,6 +183,20 @@ describe('tripSyncManager.syncAll — stale eviction', () => {
     // → trip should simply not appear in Dexie (not cached, not evicted pre-seeded data)
     expect(await offlineDb.trips.get(recentId)).toBeUndefined();
   });
+
+  it('evicts cached trips that are no longer in the accessible trip list', async () => {
+    const revokedId = 202;
+    await upsertTrip(buildTrip({ id: revokedId, end_date: dateOffset(5) }));
+    await offlineDb.packingItems.put(buildPackingItem({ trip_id: revokedId, name: 'Revoked private' }));
+    server.use(
+      http.get('/api/trips', () => HttpResponse.json({ trips: [] })),
+    );
+
+    await tripSyncManager.syncAll();
+
+    expect(await offlineDb.trips.get(revokedId)).toBeUndefined();
+    expect(await offlineDb.packingItems.where('trip_id').equals(revokedId).count()).toBe(0);
+  });
 });
 
 // ── bundle upsert ──────────────────────────────────────────────────────────────
@@ -209,6 +223,24 @@ describe('tripSyncManager.syncAll — bundle upsert', () => {
     expect(await offlineDb.budgetItems.where('trip_id').equals(tripId).count()).toBe(1);
     expect(await offlineDb.reservations.where('trip_id').equals(tripId).count()).toBe(1);
     expect(await offlineDb.tripFiles.where('trip_id').equals(tripId).count()).toBe(1);
+  });
+
+  it('replaces cached packing rows with the viewer-scoped bundle snapshot', async () => {
+    const tripId = 302;
+    const bundle = makeBundle(tripId);
+    const stale = buildPackingItem({ id: 999, trip_id: tripId, name: 'Stale private' });
+    await offlineDb.packingItems.put(stale);
+    server.use(
+      http.get('/api/trips', () =>
+        HttpResponse.json({ trips: [buildTrip({ id: tripId, end_date: dateOffset(5) })] }),
+      ),
+      http.get(`/api/trips/${tripId}/bundle`, () => HttpResponse.json(bundle)),
+    );
+
+    await tripSyncManager.syncAll();
+
+    const cached = await offlineDb.packingItems.where('trip_id').equals(tripId).toArray();
+    expect(cached).toEqual(bundle.packingItems);
   });
 
   it('writes syncMeta with lastSyncedAt', async () => {

@@ -51,6 +51,7 @@ import {
   addContributor,
   removeContributor,
   cloneItem,
+  reorderItems,
 } from '../../../src/services/packingService';
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -404,12 +405,9 @@ describe('private items (#858)', () => {
 
     const ownerView = listItems(trip.id, owner.id) as any[];
     const otherView = listItems(trip.id, other.id) as any[];
-    const unscoped = listItems(trip.id) as any[];
 
     expect(ownerView.map(i => i.name).sort()).toEqual(['Private', 'Shared']);
     expect(otherView.map(i => i.name)).toEqual(['Shared']);
-    // Without a viewer (internal callers) nothing is filtered.
-    expect(unscoped).toHaveLength(2);
   });
 
   it('PACK-SVC-016: updateItem toggles privacy and claims an unowned item for the actor', () => {
@@ -434,11 +432,11 @@ describe('private items (#858)', () => {
     const trip = createTrip(testDb, user.id);
     const item = createItem(trip.id, { name: 'Private', is_private: true }, user.id) as any;
 
-    const deleted = deleteItem(trip.id, item.id) as any;
+    const deleted = deleteItem(trip.id, item.id, user.id) as any;
     expect(deleted).not.toBeNull();
     expect(deleted.is_private).toBe(1);
     expect(deleted.owner_id).toBe(user.id);
-    expect(deleteItem(trip.id, item.id)).toBeNull();
+    expect(deleteItem(trip.id, item.id, user.id)).toBeNull();
   });
 
   it('PACK-SVC-018: bulkImport stamps the owner on every item', () => {
@@ -502,7 +500,7 @@ describe('three-tier packing sharing (#858)', () => {
     const item = createItem(trip.id, { name: 'First aid', visibility: 'personal' }, owner.id) as any;
 
     // A non-owner is rejected.
-    expect((setItemSharing(trip.id, item.id, friend.id, 'shared', [friend.id]) as any).forbidden).toBe(true);
+    expect(setItemSharing(trip.id, item.id, friend.id, 'shared', [friend.id])).toBeNull();
 
     const updated = setItemSharing(trip.id, item.id, owner.id, 'shared', [friend.id]) as any;
     expect(updated.recipients.map((r: any) => r.user_id)).toEqual([friend.id]);
@@ -527,7 +525,7 @@ describe('three-tier packing sharing (#858)', () => {
     expect(addContributor(trip.id, common.id, owner.id)).toBeNull();
     expect(addContributor(trip.id, personal.id, helper.id)).toBeNull();
 
-    const cleared = removeContributor(trip.id, common.id, helper.id) as any;
+    const cleared = removeContributor(trip.id, common.id, helper.id, helper.id) as any;
     expect(cleared.contributors).toEqual([]);
   });
 
@@ -545,5 +543,93 @@ describe('three-tier packing sharing (#858)', () => {
     // The clone is the cloner's alone.
     expect(names(listItems(trip.id, owner.id) as any[])).toEqual(['Travel adapter']);     // owner sees only the common one
     expect(names(listItems(trip.id, cloner.id) as any[])).toEqual(['Travel adapter', 'Travel adapter']); // common + own clone
+  });
+
+  it('PACK-SVC-046: only the owner may update or delete a restricted item', () => {
+    const { user: owner } = createUser(testDb);
+    const { user: recipient } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    const shared = createItem(
+      trip.id,
+      { name: 'Prescription', visibility: 'shared', recipient_ids: [recipient.id] },
+      owner.id,
+    ) as any;
+
+    expect(
+      updateItem(trip.id, shared.id, { name: 'Stolen' }, ['name'], undefined, recipient.id),
+    ).toBeNull();
+    expect(deleteItem(trip.id, shared.id, recipient.id)).toBeNull();
+    expect((testDb.prepare('SELECT name FROM packing_items WHERE id = ?').get(shared.id) as any).name)
+      .toBe('Prescription');
+
+    expect(updateItem(trip.id, shared.id, { name: 'Updated' }, ['name'], undefined, owner.id))
+      .toMatchObject({ name: 'Updated' });
+    expect(deleteItem(trip.id, shared.id, owner.id)).toMatchObject({ id: shared.id });
+  });
+
+  it('PACK-SVC-047: clone is limited to Common items', () => {
+    const { user: owner } = createUser(testDb);
+    const { user: recipient } = createUser(testDb);
+    const { user: stranger } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    const shared = createItem(
+      trip.id,
+      { name: 'Shared checklist', visibility: 'shared', recipient_ids: [recipient.id] },
+      owner.id,
+    ) as any;
+
+    const common = createItem(trip.id, { name: 'Common checklist', visibility: 'common' }, owner.id) as any;
+
+    expect(cloneItem(trip.id, shared.id, stranger.id)).toBeNull();
+    expect(cloneItem(trip.id, shared.id, recipient.id)).toBeNull();
+    expect(cloneItem(trip.id, common.id, recipient.id)).toMatchObject({
+      name: 'Common checklist',
+      is_private: 1,
+      owner_id: recipient.id,
+    });
+  });
+
+  it('PACK-SVC-048: reorder rejects a mixed hidden-ID request atomically', () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    const common = createItem(trip.id, { name: 'Common', visibility: 'common' }, owner.id) as any;
+    const hidden = createItem(trip.id, { name: 'Hidden', visibility: 'personal' }, owner.id) as any;
+
+    expect(reorderItems(trip.id, [hidden.id, common.id], member.id)).toBe(false);
+    const rows = testDb.prepare(
+      'SELECT id, sort_order FROM packing_items WHERE trip_id = ? ORDER BY sort_order',
+    ).all(trip.id) as any[];
+    expect(rows).toEqual([
+      { id: common.id, sort_order: 0 },
+      { id: hidden.id, sort_order: 1 },
+    ]);
+  });
+
+  it('PACK-SVC-049: only a contributor or the item owner may remove a pledge', () => {
+    const { user: owner } = createUser(testDb);
+    const { user: helper } = createUser(testDb);
+    const { user: other } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    const common = createItem(trip.id, { name: 'Common', visibility: 'common' }, owner.id) as any;
+    addContributor(trip.id, common.id, helper.id);
+
+    expect(removeContributor(trip.id, common.id, helper.id, other.id)).toBeNull();
+    expect((listItems(trip.id, owner.id) as any[])[0].contributors)
+      .toEqual([expect.objectContaining({ user_id: helper.id })]);
+
+    expect(removeContributor(trip.id, common.id, helper.id, helper.id))
+      .toMatchObject({ contributors: [] });
+  });
+
+  it('PACK-SVC-050: contributor removal cannot reveal a hidden item or a non-existent pledge', () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    const hidden = createItem(trip.id, { name: 'Private medication', visibility: 'personal' }, owner.id);
+    const common = createItem(trip.id, { name: 'Common', visibility: 'common' }, owner.id);
+
+    expect(removeContributor(trip.id, hidden.id, member.id, member.id)).toBeNull();
+    expect(removeContributor(trip.id, common.id, member.id, member.id)).toBeNull();
   });
 });

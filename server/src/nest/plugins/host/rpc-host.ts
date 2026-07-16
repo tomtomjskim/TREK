@@ -228,7 +228,7 @@ export interface HostDeps {
   /** Update a packing item; four-case public<->private broadcast; throws if not on the trip. */
   updatePackingItem(tripId: number, itemId: number, input: Record<string, unknown>, actingUserId: number): unknown;
   /** Delete a packing item; owner+recipients-scoped packing:deleted broadcast; returns { deleted: true }. */
-  deletePackingItem(tripId: number, itemId: number): unknown;
+  deletePackingItem(tripId: number, itemId: number, actingUserId: number): unknown;
   // --- Packing bags (packing_edit; no privacy — broadcast to the whole room) ---
   listPackingBags(tripId: number): unknown[];
   createPackingBag(tripId: number, input: Record<string, unknown>): unknown;
@@ -903,7 +903,7 @@ export class PluginRpcHost {
         const itemId = num(p.itemId, 'itemId');
         const actor = this.requireActor(uid, 'packing item');
         this.requireTripEdit(tripId, actor, deps.canEditPacking);
-        return deps.deletePackingItem(tripId, itemId);
+        return deps.deletePackingItem(tripId, itemId, actor);
       });
       // Bags carry no privacy — a plain packing:bag-* broadcast to the whole room.
       this.methods.set('packing.listBags', (p, uid) => this.tripRead(p, uid, () => deps.listPackingBags(num(p.tripId, 'tripId'))));
