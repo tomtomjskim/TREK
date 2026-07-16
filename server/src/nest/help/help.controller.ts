@@ -32,7 +32,7 @@ export class HelpController {
     }
   }
 
-  @Get('asset/*')
+  @Get('asset/*path')
   async asset(@Req() req: Request, @Res() res: Response): Promise<void> {
     // Take everything after `/asset/` straight from the URL — the Express
     // wildcard param isn't reliably populated through the Nest adapter.
