@@ -418,8 +418,10 @@ export function applyTemplate(tripId: string | number, templateId: string | numb
 // ── Save as Template ──────────────────────────────────────────────────────
 
 export function saveAsTemplate(tripId: string | number, userId: number, templateName: string) {
+  // Instance templates are visible to every trip member, so Personal and
+  // Shared-with-people items must never cross into this global catalogue.
   const items = db.prepare(
-    'SELECT name, category FROM packing_items WHERE trip_id = ? ORDER BY sort_order ASC'
+    'SELECT name, category FROM packing_items WHERE trip_id = ? AND is_private = 0 ORDER BY sort_order ASC'
   ).all(tripId) as { name: string; category: string }[];
 
   if (items.length === 0) return null;

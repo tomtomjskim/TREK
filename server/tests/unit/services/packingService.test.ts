@@ -92,6 +92,44 @@ describe('saveAsTemplate', () => {
     expect(template.created_by).toBe(user.id);
   });
 
+  it('PACK-SVC-001a: excludes Personal and Shared items from an instance template', () => {
+    const { user: admin } = createUser(testDb, { role: 'admin' });
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, admin.id);
+
+    createItem(trip.id, { name: 'Group charger', category: 'Electronics', visibility: 'common' }, admin.id);
+    createItem(trip.id, { name: 'Private diary', category: 'Personal', visibility: 'personal' }, member.id);
+    createItem(
+      trip.id,
+      { name: 'Shared surprise', category: 'Personal', visibility: 'shared', recipient_ids: [admin.id] },
+      member.id,
+    );
+
+    const result = saveAsTemplate(trip.id, admin.id, 'Safe Shared Template');
+
+    expect(result).toMatchObject({ itemCount: 1, categoryCount: 1 });
+    const storedItems = testDb.prepare(`
+      SELECT ti.name
+      FROM packing_template_items ti
+      JOIN packing_template_categories tc ON tc.id = ti.category_id
+      WHERE tc.template_id = ?
+      ORDER BY ti.sort_order
+    `).all(result!.id) as { name: string }[];
+    expect(storedItems.map(item => item.name)).toEqual(['Group charger']);
+  });
+
+  it('PACK-SVC-001b: does not create an instance template from private-only items', () => {
+    const { user: admin } = createUser(testDb, { role: 'admin' });
+    const trip = createTrip(testDb, admin.id);
+    createItem(trip.id, { name: 'Private diary', visibility: 'personal' }, admin.id);
+
+    const result = saveAsTemplate(trip.id, admin.id, 'Private-only Template');
+
+    expect(result).toBeNull();
+    const templateCount = testDb.prepare('SELECT COUNT(*) AS count FROM packing_templates').get() as { count: number };
+    expect(templateCount.count).toBe(0);
+  });
+
   it('PACK-SVC-002: returns null when trip has no packing items', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);

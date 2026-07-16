@@ -639,4 +639,38 @@ describe('Packing — apply-template, bag members, save-as-template', () => {
     expect(res.body.templates.some((t: { name: string }) => t.name === 'Shared Template')).toBe(true);
     expect(res.body.templates[0]).toHaveProperty('item_count');
   });
+
+  it('PACK-017f — saving an instance template excludes another member\'s Personal item', async () => {
+    const { user: admin } = createUser(testDb, { role: 'admin' });
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, admin.id);
+    addTripMember(testDb, trip.id, member.id);
+
+    const common = await request(app)
+      .post(`/api/trips/${trip.id}/packing`)
+      .set('Cookie', authCookie(admin.id))
+      .send({ name: 'Group charger', visibility: 'common' });
+    expect(common.status).toBe(201);
+
+    const personal = await request(app)
+      .post(`/api/trips/${trip.id}/packing`)
+      .set('Cookie', authCookie(member.id))
+      .send({ name: 'Private diary', visibility: 'personal' });
+    expect(personal.status).toBe(201);
+
+    const saved = await request(app)
+      .post(`/api/trips/${trip.id}/packing/save-as-template`)
+      .set('Cookie', authCookie(admin.id))
+      .send({ name: 'Safe Shared Template' });
+    expect(saved.status).toBe(201);
+
+    const storedItems = testDb.prepare(`
+      SELECT ti.name
+      FROM packing_template_items ti
+      JOIN packing_template_categories tc ON tc.id = ti.category_id
+      WHERE tc.template_id = ?
+      ORDER BY ti.sort_order
+    `).all(saved.body.template.id) as { name: string }[];
+    expect(storedItems.map(item => item.name)).toEqual(['Group charger']);
+  });
 });
