@@ -389,6 +389,25 @@ describe('TripPlannerPage', () => {
     });
   });
 
+  describe('FE-PAGE-PLANNER-009b: Map controls adapt to the live panel corridor', () => {
+    it('uses compact controls at an unfolded Fold-width viewport', async () => {
+      vi.useFakeTimers();
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 884 });
+      seedTripStore({ id: 42 });
+
+      renderPlannerPage(42);
+      act(() => { vi.runAllTimers(); });
+      vi.useRealTimers();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('adaptive-map-controls')).toHaveAttribute('data-layout-mode', 'compact');
+      });
+      expect(screen.getByRole('button', { name: 'Explore places on the map' })).toBeInTheDocument();
+
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 });
+    });
+  });
+
   describe('FE-PAGE-PLANNER-010: Reservations tab renders ReservationsPanel', () => {
     it('shows ReservationsPanel after clicking the Bookings tab', async () => {
       vi.useFakeTimers();
@@ -540,7 +559,7 @@ describe('TripPlannerPage', () => {
   });
 
   describe('FE-PAGE-PLANNER-016: Left panel collapse toggle', () => {
-    it('collapses the left sidebar when the collapse button is clicked', async () => {
+    it('uses an accessible 44px target and changes its name after collapse', async () => {
       vi.useFakeTimers();
 
       seedTripStore({ id: 42 });
@@ -556,13 +575,27 @@ describe('TripPlannerPage', () => {
       });
 
       const sidebarContainer = screen.getByTestId('day-plan-sidebar').parentElement!;
-      const collapseButton = sidebarContainer.previousElementSibling as HTMLElement;
+      const collapseButton = screen.getByRole('button', { name: 'Close Plan' });
+      expect(collapseButton).toHaveStyle({ width: '44px', height: '44px' });
 
       fireEvent.click(collapseButton);
 
       await waitFor(() => {
         expect(sidebarContainer).toHaveStyle('opacity: 0');
       });
+      expect(screen.getByRole('button', { name: 'Open Plan' })).toBeInTheDocument();
+    });
+
+    it('gives the Places panel toggle the same accessible touch target', async () => {
+      vi.useFakeTimers();
+      seedTripStore({ id: 42 });
+
+      renderPlannerPage(42);
+      act(() => { vi.runAllTimers(); });
+      vi.useRealTimers();
+
+      const toggle = await screen.findByRole('button', { name: 'Close Places' });
+      expect(toggle).toHaveStyle({ width: '44px', height: '44px' });
     });
   });
 
