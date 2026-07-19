@@ -50,7 +50,9 @@
 - 런타임은 `server/src/db/migrationRunner.ts`를 통해 legacy collision bridge, 공식 migration, 포크 migration 순으로 실행한다.
 - 이미 배포한 포크 migration을 수정하지 않는다. 변경은 새 ID로 추가하며 재실행 idempotency와 부분 실패 복구를 테스트한다.
 - 공식/포크 version collision 또는 알 수 없는 partial schema는 추측해 계속하지 않고 fail closed한다.
-- migration 변경은 fresh DB, stock 이전 버전, 현재 포크 DB, 재실행, 알 수 없는 partial state를 모두 검증하고 운영 전 SQLite backup/restore rehearsal을 수행한다.
+- migration 변경은 fresh DB, stock 이전 버전, 현재 포크 DB, 재실행, schema commit과
+  marker update 사이 crash window, 알 수 없는 partial state를 모두 검증하고 운영 전
+  SQLite backup/restore rehearsal을 수행한다.
 
 ## Verification and deployment
 
