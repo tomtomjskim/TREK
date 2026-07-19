@@ -40,7 +40,7 @@ const notifSend = vi.fn().mockResolvedValue(undefined);
 vi.mock('../../../src/services/notificationService', () => ({ send: notifSend }));
 
 import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
+import { runMigrations } from '../../../src/db/migrationRunner';
 import { createUser, createTrip, createPlace, createCategory, createTag, addTripMember } from '../../helpers/factories';
 import * as svc from '../../../src/services/collectionsService';
 import { removeIfUnreferenced } from '../../../src/services/placePhotoCache';

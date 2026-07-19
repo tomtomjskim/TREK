@@ -47,8 +47,6 @@ const settings: TranslationStrings = {
   'settings.mapTipLabel': 'Tip:',
   'settings.mapTip':
     'Pravé tlačítko myši a táhněte pro rotaci/náklon mapy. Prostřední tlačítko pro přidání místa (pravé tlačítko je vyhrazeno pro rotaci).',
-  'settings.latitude': 'Zeměpisná šířka',
-  'settings.longitude': 'Zeměpisná délka',
   'settings.saveMap': 'Uložit nastavení mapy',
   'settings.apiKeys': 'API klíče',
   'settings.mapsKey': 'Google Maps API klíč',
@@ -297,6 +295,7 @@ const settings: TranslationStrings = {
   'settings.notificationPreferences.ntfy': 'Ntfy',
   'settings.currency': 'Currency',
   'settings.currencyHint': 'All amounts in Costs are converted to and shown in this currency.',
+  'settings.currencyTrip': 'Měna cesty',
   'settings.passkey.title': 'Přístupové klíče',
   'settings.passkey.description':
     'Přihlašujte se rychleji a s ochranou proti phishingu pomocí přístupového klíče — otiskem prstu, obličejem, PINem nebo hardwarovým klíčem. Vaše heslo zůstává jako záloha.',
@@ -496,6 +495,9 @@ const settings: TranslationStrings = {
     'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
   'settings.mapLabelLanguageVectorHint':
     'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
+  'settings.alwaysShowRoutes': 'Vždy zobrazovat trasy rezervací',
+  'settings.alwaysShowRoutesHint':
+    'Automaticky zobrazí na mapě trasu každého letu, vlaku a jiné rezervace, aniž byste ji museli zapínat jednotlivě.',
 };
 
 export default settings;

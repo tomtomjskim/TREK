@@ -52,7 +52,7 @@ vi.mock('../../../src/utils/ssrfGuard', () => {
 });
 
 import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
+import { runMigrations } from '../../../src/db/migrationRunner';
 import { resetTestDb } from '../../helpers/test-db';
 import { createUser, createTrip } from '../../helpers/factories';
 import { mapDbError, getAlbumIdFromLink, pipeAsset } from '../../../src/services/memories/helpersService';

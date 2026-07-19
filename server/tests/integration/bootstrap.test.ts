@@ -7,7 +7,7 @@
  * server/src/bootstrap.ts + index.ts serve everything correctly without the legacy app.
  */
 import { buildApp } from '../../src/bootstrap';
-import { runMigrations } from '../../src/db/migrations';
+import { runMigrations } from '../../src/db/migrationRunner';
 import { createTables } from '../../src/db/schema';
 import { authCookie } from '../helpers/auth';
 import { createUser } from '../helpers/factories';

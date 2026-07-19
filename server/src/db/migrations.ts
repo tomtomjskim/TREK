@@ -66,108 +66,6 @@ export function trimUserWhitespace(db: Database.Database): boolean {
   return hadCollision;
 }
 
-const PACKING_TEMPLATE_SCOPE_MIGRATION_VERSION = 173;
-
-function assertPackingTemplateScopeSchema(db: Database.Database): void {
-  type TableColumn = { name: string; notnull: number; dflt_value: string | null };
-  type ForeignKey = { table: string; from: string; to: string; on_delete: string };
-
-  const errors: string[] = [];
-  const table = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'packing_templates'").get() as
-    | { sql: string }
-    | undefined;
-  if (!table) {
-    throw new Error('packing_templates schema does not match migration 173: table is missing');
-  }
-
-  const columns = db.prepare("PRAGMA table_info('packing_templates')").all() as TableColumn[];
-  const column = (name: string) => columns.find((candidate) => candidate.name === name);
-  const scope = column('scope');
-  const owner = column('owner_id');
-  const creator = column('created_by');
-
-  if (!scope || scope.notnull !== 1 || scope.dflt_value !== "'instance'") {
-    errors.push("scope must be NOT NULL DEFAULT 'instance'");
-  }
-  if (!owner || owner.notnull !== 0) errors.push('owner_id must be nullable');
-  if (!creator || creator.notnull !== 0) errors.push('created_by must be nullable');
-
-  const normalizedSql = table.sql.toLowerCase().replace(/\s+/g, ' ');
-  if (!normalizedSql.includes("check (scope in ('instance', 'personal'))")) {
-    errors.push('scope enum CHECK is missing');
-  }
-  if (
-    !normalizedSql.includes('packing_templates_scope_owner_check') ||
-    !normalizedSql.includes(
-      "(scope = 'instance' and owner_id is null) or (scope = 'personal' and owner_id is not null)",
-    )
-  ) {
-    errors.push('scope/owner CHECK is missing');
-  }
-
-  const foreignKeys = db.prepare("PRAGMA foreign_key_list('packing_templates')").all() as ForeignKey[];
-  const ownerCascade = foreignKeys.some(
-    (foreignKey) =>
-      foreignKey.from === 'owner_id' &&
-      foreignKey.table === 'users' &&
-      foreignKey.to === 'id' &&
-      foreignKey.on_delete === 'CASCADE',
-  );
-  const creatorSetNull = foreignKeys.some(
-    (foreignKey) =>
-      foreignKey.from === 'created_by' &&
-      foreignKey.table === 'users' &&
-      foreignKey.to === 'id' &&
-      foreignKey.on_delete === 'SET NULL',
-  );
-  if (!ownerCascade) errors.push('owner_id must reference users(id) ON DELETE CASCADE');
-  if (!creatorSetNull) errors.push('created_by must reference users(id) ON DELETE SET NULL');
-
-  const index = db
-    .prepare(
-      "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_packing_templates_scope_owner_created'",
-    )
-    .get();
-  if (!index) errors.push('scope/owner/created index is missing');
-
-  if (scope && owner) {
-    const invalidRows = db
-      .prepare(
-        `SELECT COUNT(*) AS count
-         FROM packing_templates
-         WHERE scope IS NULL
-            OR scope NOT IN ('instance', 'personal')
-            OR (scope = 'instance' AND owner_id IS NOT NULL)
-            OR (scope = 'personal' AND owner_id IS NULL)`,
-      )
-      .get() as { count: number };
-    if (invalidRows.count > 0) errors.push(`${invalidRows.count} row(s) violate the scope/owner contract`);
-  }
-
-  let graphViolations = 0;
-  for (const graphTable of [
-    'packing_templates',
-    'packing_template_categories',
-    'packing_template_items',
-  ] as const) {
-    const exists = db
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(graphTable);
-    if (!exists) {
-      errors.push(`${graphTable} table is missing`);
-      continue;
-    }
-    graphViolations += db.prepare(`PRAGMA foreign_key_check('${graphTable}')`).all().length;
-  }
-  if (graphViolations > 0) {
-    errors.push(`packing template graph contains ${graphViolations} foreign key violation(s)`);
-  }
-
-  if (errors.length > 0) {
-    throw new Error(`packing_templates schema does not match migration 173: ${errors.join('; ')}`);
-  }
-}
-
 function runMigrations(db: Database.Database): void {
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const versionRow = db.prepare('SELECT version FROM schema_version').get() as { version: number } | undefined;
@@ -3360,19 +3258,13 @@ function runMigrations(db: Database.Database): void {
 
     // Migration 151: user-added links on collections + saved places (JSON text)
     () => {
-      try { db.exec('ALTER TABLE collections ADD COLUMN links TEXT'); } catch (err) {
-        if (!(err instanceof Error) || !err.message.includes('duplicate column name')) throw err;
-      }
-      try { db.exec('ALTER TABLE collection_places ADD COLUMN links TEXT'); } catch (err) {
-        if (!(err instanceof Error) || !err.message.includes('duplicate column name')) throw err;
-      }
+      try { db.exec('ALTER TABLE collections ADD COLUMN links TEXT'); } catch (err) { console.warn('[migrations] Non-fatal migration step failed:', err); }
+      try { db.exec('ALTER TABLE collection_places ADD COLUMN links TEXT'); } catch (err) { console.warn('[migrations] Non-fatal migration step failed:', err); }
     },
     // Migration 152: per-member permission role on a shared list. Existing
     // accepted members default to 'editor' so nothing regresses.
     () => {
-      try { db.exec("ALTER TABLE collection_members ADD COLUMN role TEXT NOT NULL DEFAULT 'editor'"); } catch (err) {
-        if (!(err instanceof Error) || !err.message.includes('duplicate column name')) throw err;
-      }
+      try { db.exec("ALTER TABLE collection_members ADD COLUMN role TEXT NOT NULL DEFAULT 'editor'"); } catch (err) { console.warn('[migrations] Non-fatal migration step failed:', err); }
     },
     // Migration 153: per-trip invite links (#1143). One rotating token per trip;
     // a logged-in existing user who opens the link joins the trip as a member.
@@ -3735,83 +3627,79 @@ function runMigrations(db: Database.Database): void {
       `);
     },
 
-    // Durable, process-independent reservations for Google Places usage. Calls
-    // reserve an attempt before network I/O, so restarts and provider failures
-    // cannot accidentally reset or refund the monthly safety budget.
+    // Why a plugin's update was REFUSED by the signature check (#plugins). A refused
+    // update leaves a working plugin pinned at its old version — previously the reason
+    // lived only in a transient toast, so the plugin quietly stopped updating and the
+    // admin had to re-attempt an update to rediscover why. Record it instead.
+    //
+    // `update_block_version` is the registry version that was refused: once the registry
+    // offers something NEWER, the block describes an artifact nobody is being offered
+    // anymore, so it reads as stale and the admin can just re-attempt (the next install
+    // re-verifies and either succeeds or re-blocks with fresh values). Deliberately no
+    // `status = 'error'` — the plugin still runs fine on its old code.
     () => {
-      db.exec(`
-        CREATE TABLE IF NOT EXISTS google_api_usage (
-          period TEXT NOT NULL,
-          sku TEXT NOT NULL,
-          attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-          updated_at INTEGER NOT NULL,
-          PRIMARY KEY (period, sku)
-        );
-      `);
+      for (const col of ['update_block_code TEXT', 'update_block_detail TEXT', 'update_block_version TEXT']) {
+        try {
+          db.exec(`ALTER TABLE plugins ADD COLUMN ${col};`);
+        } catch (err) {
+          console.warn('[migrations] Non-fatal migration step failed:', err);
+        }
+      }
     },
 
-    // Packing template ownership scopes. Existing templates are instance-wide;
-    // personal templates remain feature-off until the owner-scoped R2 API/UI is
-    // deployed. Attribution is nullable so deleting a creator does not delete an
-    // instance template, while owner_id controls personal-template lifecycle.
-    // This rebuild must run outside the runner transaction because SQLite cannot
-    // toggle foreign_keys while a transaction is active.
-    {
-      raw: () => {
-        const templateColumns = db.prepare("PRAGMA table_info('packing_templates')").all() as Array<{ name: string }>;
-        const hasScope = templateColumns.some((column) => column.name === 'scope');
-        const hasOwner = templateColumns.some((column) => column.name === 'owner_id');
+    // The semver RANGE of TREK versions a plugin declares it supports (its manifest's
+    // `trek`, e.g. ">=3.2.0 <4.0.0"). The existing `min_trek_version` only carries the
+    // lower bound, so it cannot express "stops working at 4.0" — which is precisely the
+    // case the activation gate has to catch after a TREK upgrade. Kept nullable: a plugin
+    // installed before this column existed has no range recorded, and the gate refuses to
+    // activate it rather than guessing (see TREK_VERSION_UNKNOWN).
+    () => {
+      try {
+        db.exec('ALTER TABLE plugins ADD COLUMN trek_range TEXT;');
+      } catch (err) {
+        console.warn('[migrations] Non-fatal migration step failed:', err);
+      }
+    },
 
-        // The table rebuild commits before the runner advances schema_version. If
-        // the process stops in that narrow window, retry the version marker without
-        // reclassifying already-scoped rows (especially personal rows) as instance.
-        if (hasScope || hasOwner) {
-          assertPackingTemplateScopeSchema(db);
-          return;
-        }
+    // `place_regions` is a re-derivable Nominatim cache, only ever populated for a place ID
+    // that isn't already cached — so a wrong row, once written, was permanent. Region
+    // resolution now resolves a place's lat/lng directly against the bundled admin1 polygons
+    // (the same ones the client renders) instead of trusting Nominatim's address level, which
+    // could name a subdivision level the bundle doesn't carry (Barcelona's ES-B province vs
+    // the bundle's ES-CT autonomous community) and never highlight. That fix only helps
+    // places re-resolved after it, so clear the cache once and let every place re-resolve on
+    // the next Atlas load. The country_code stored alongside is cleared too, which also drops
+    // the old wrong-country rows a US-state-abbreviation address used to produce.
+    () => {
+      try {
+        db.exec('DELETE FROM place_regions');
+      } catch (err) {
+        // place_regions is created by an earlier migration; tolerate its absence on an
+        // unusual partial DB rather than aborting startup.
+        if (!(err instanceof Error) || !err.message.includes('no such table')) throw err;
+      }
+    },
 
-        const foreignKeysEnabled = Number(db.pragma('foreign_keys', { simple: true })) === 1;
-        if (foreignKeysEnabled) db.exec('PRAGMA foreign_keys = OFF');
-        try {
-          db.transaction(() => {
-            const before = db.prepare('SELECT COUNT(*) AS count FROM packing_templates').get() as { count: number };
-            db.exec(`
-              CREATE TABLE packing_templates_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                scope TEXT NOT NULL DEFAULT 'instance'
-                  CHECK (scope IN ('instance', 'personal')),
-                owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                CONSTRAINT packing_templates_scope_owner_check CHECK (
-                  (scope = 'instance' AND owner_id IS NULL) OR
-                  (scope = 'personal' AND owner_id IS NOT NULL)
-                )
-              );
-              INSERT INTO packing_templates_new
-                (id, name, scope, owner_id, created_by, created_at)
-              SELECT id, name, 'instance', NULL, created_by, created_at
-              FROM packing_templates;
-              DROP TABLE packing_templates;
-              ALTER TABLE packing_templates_new RENAME TO packing_templates;
-              CREATE INDEX idx_packing_templates_scope_owner_created
-                ON packing_templates(scope, owner_id, created_at);
-            `);
-
-            const after = db.prepare('SELECT COUNT(*) AS count FROM packing_templates').get() as { count: number };
-            if (after.count !== before.count) {
-              throw new Error(`packing_templates row count changed during migration: ${before.count} -> ${after.count}`);
-            }
-            const violations = db.prepare('PRAGMA foreign_key_check').all();
-            if (violations.length > 0) {
-              throw new Error(`packing template scope migration produced ${violations.length} foreign key violation(s)`);
-            }
-          })();
-        } finally {
-          if (foreignKeysEnabled) db.exec('PRAGMA foreign_keys = ON');
-        }
-      },
+    // Tombstones for Atlas regions the user has explicitly removed — the region-level
+    // counterpart to hidden_countries above (#1490). A visited region is normally derived
+    // fresh from place_regions/visited_regions on every request, so "removing" it has
+    // nothing to delete; recording it here lets getVisitedRegions suppress a derived region
+    // the same way getStats already suppresses a derived country. Unlike the country-level
+    // tombstone (originally only reachable for a manually-marked or zero-count country),
+    // this also covers a region derived from real place data — e.g. one that ended up on
+    // the wrong side of a border-simplification gap and the user just wants gone.
+    () => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS hidden_regions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          region_code TEXT NOT NULL,
+          country_code TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE (user_id, region_code)
+        );
+      `);
+      db.exec('CREATE INDEX IF NOT EXISTS idx_hidden_regions_user ON hidden_regions (user_id);');
     },
   ];
 
@@ -3832,11 +3720,6 @@ function runMigrations(db: Database.Database): void {
       db.prepare('UPDATE schema_version SET version = ?').run(i + 1);
     }
     console.log(`[DB] Migrations complete — schema version ${migrations.length}`);
-  }
-
-  const finalVersion = db.prepare('SELECT version FROM schema_version').get() as { version: number } | undefined;
-  if ((finalVersion?.version ?? 0) >= PACKING_TEMPLATE_SCOPE_MIGRATION_VERSION) {
-    assertPackingTemplateScopeSchema(db);
   }
 }
 

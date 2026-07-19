@@ -45,8 +45,6 @@ const settings: TranslationStrings = {
   'settings.mapTipLabel': 'نصيحة:',
   'settings.mapTip':
     'انقر بزر الماوس الأيمن واسحب لتدوير/إمالة الخريطة. النقر الأوسط لإضافة مكان (النقر الأيمن مخصص للتدوير).',
-  'settings.latitude': 'خط العرض',
-  'settings.longitude': 'خط الطول',
   'settings.saveMap': 'حفظ الخريطة',
   'settings.apiKeys': 'مفاتيح API',
   'settings.mapsKey': 'مفتاح Google Maps API',
@@ -290,6 +288,7 @@ const settings: TranslationStrings = {
   'settings.about.supporter.tier.hostelBunkmate': 'Hostel Bunkmate', // en-fallback
   'settings.currency': 'Currency',
   'settings.currencyHint': 'All amounts in Costs are converted to and shown in this currency.',
+  'settings.currencyTrip': 'عملة الرحلة',
   'settings.passkey.title': 'مفاتيح المرور',
   'settings.passkey.description':
     'سجّل الدخول بشكل أسرع وأكثر مقاومة للتصيّد باستخدام مفتاح مرور — ببصمة إصبعك أو وجهك أو رمز PIN أو مفتاح أمان مادي. تبقى كلمة المرور كنسخة احتياطية.',
@@ -488,6 +487,9 @@ const settings: TranslationStrings = {
     'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
   'settings.mapLabelLanguageVectorHint':
     'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
+  'settings.alwaysShowRoutes': 'إظهار مسارات الحجوزات دائمًا',
+  'settings.alwaysShowRoutesHint':
+    'يعرض تلقائيًا مسار كل رحلة طيران وقطار وحجز آخر على الخريطة، دون الحاجة إلى تفعيله لكل عنصر على حدة.',
 };
 
 export default settings;

@@ -19,7 +19,7 @@
 import Database from 'better-sqlite3';
 import type { INestApplication } from '@nestjs/common';
 import { createTables } from '../../src/db/schema';
-import { runMigrations } from '../../src/db/migrations';
+import { runMigrations } from '../../src/db/migrationRunner';
 import { AuthPublicController } from '../../src/nest/auth/auth-public.controller';
 import type { RateLimitService } from '../../src/nest/auth/rate-limit.service';
 

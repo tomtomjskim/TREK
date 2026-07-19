@@ -41,7 +41,7 @@ const { searchPlacesMock } = vi.hoisted(() => ({ searchPlacesMock: vi.fn() }));
 vi.mock('../../../src/services/mapsService', () => ({ searchPlaces: searchPlacesMock }));
 
 import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
+import { runMigrations } from '../../../src/db/migrationRunner';
 import { resetTestDb } from '../../helpers/test-db';
 import { createUser, createTrip, createPlace, createDay, createDayAssignment, createJourney } from '../../helpers/factories';
 import { createMcpHarness, parseToolResult, type McpHarness } from '../../helpers/mcp-harness';

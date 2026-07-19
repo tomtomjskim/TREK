@@ -20,6 +20,17 @@
 
 공식 기여 후보는 먼저 Discord `#github-pr`에서 승인을 받고, `upstream/dev` 기준의 별도 브랜치에서 한 가지 변경만 담아야 한다. 공식 PR에는 JSNetworkCorp 도메인, 계정, secret 위치, 운영 데이터, 포크 전용 migration을 포함하지 않는다.
 
+공식 기여를 시작할 때는 이 문서의 스냅샷만 믿지 말고 아래 원본을 `upstream/dev`에서
+다시 읽는다. 정책이 달라졌으면 원본이 우선이다.
+
+- `CONTRIBUTING.md`
+- `.github/PULL_REQUEST_TEMPLATE.md`
+- `.github/workflows/enforce-target-branch.yml`
+
+새 기능을 구현하기 전에는 `docs/upstream/README.md`의 feature decision checklist를
+작성한다. lane, 데이터 소유권, core integration seam, 테스트, upstream 수용 시 제거 조건이
+불명확하면 구현을 시작하지 않는다.
+
 ## Upstream synchronization
 
 - 배포 `main`을 rebase하거나 공식 `main`에 직접 맞추지 않는다. 검증 가능한 공식 tag를 격리 worktree의 `sync/*` 또는 `feat/upstream-*` 브랜치에 merge한다.
@@ -27,6 +38,10 @@
 - 충돌 해결 전에 `git merge-tree`로 충돌 surface를 확인하고 DB migration, auth/privacy, provider 비용, UI 순으로 위험을 분류한다.
 - 공식 tag 병합 뒤에는 `docs/upstream/README.md`의 patch inventory와 conflict hotspot을 갱신한다.
 - 공식 저장소에서 수용된 기능은 다음 tag sync 때 동등한 포크 patch를 제거해 divergence를 줄인다.
+- 공식 PR 브랜치는 포크 `main`에서 분기하지 않는다. 최신 `upstream/dev`의 별도 worktree에서
+  일반화된 최소 변경만 재구성하고, 포크 기능과의 동등성은 테스트로 연결한다.
+- 공식 PR이 merge됐더라도 포크 patch를 즉시 제거하지 않는다. 해당 변경이 포함된 서명된
+  release tag를 통합하고 회귀 검증한 뒤 제거한다.
 
 ## Database migration ownership
 

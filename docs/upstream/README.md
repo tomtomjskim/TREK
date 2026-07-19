@@ -21,7 +21,8 @@ rebase하지 않는다.
 
 ## Official contribution gate
 
-공식 `CONTRIBUTING.md`와 PR template의 현재 계약은 다음과 같다.
+공식 `CONTRIBUTING.md`, PR template, target-branch workflow를 2026-07-19
+`upstream/dev` `483b2b1d`에서 다시 확인했다. 현재 계약은 다음과 같다.
 
 1. 구현 전에 Discord `#github-pr`에서 아이디어와 범위를 승인받는다.
 2. PR 하나에는 관련된 변경 한 가지만 포함한다.
@@ -58,6 +59,59 @@ Plugin은 자체 DB migration을 소유할 수 있지만 TREK core schema를 직
 않는다. core table, auth/permission, WebSocket privacy 또는 공통 지도 레이아웃을
 바꿔야 하는 변경은 plugin으로 위장하지 않고 upstream contribution 또는 최소
 fork-core patch로 분류한다.
+
+## Feature decision checklist
+
+새 기능이나 기존 포크 patch를 수정하기 전에 다음 항목을 patch inventory 또는 별도
+설계 문서에 고정한다.
+
+1. **lane**: `upstream-contrib`, `plugin`, `fork-core`, `instance-only` 중 하나를 선택한다.
+2. **사용자와 contract**: 모든 TREK 설치에 필요한지, 이 인스턴스 정책인지, public API나
+   권한 의미가 바뀌는지 적는다.
+3. **데이터 소유권**: 공식 core DB, `fork_schema_migrations`, plugin-owned SQLite,
+   instance config 중 어디에 저장하는지 정한다.
+4. **integration seam**: core 변경이 필요하면 import/controller/UI hook 수를 최소화하고
+   포크 adapter 위치를 명시한다.
+5. **검증과 rollback**: negative auth/privacy, migration 재실행, provider 비용, responsive
+   UI, backup/restore 중 해당하는 증거를 지정한다.
+6. **retirement signal**: 공식 release tag, SDK capability 추가, 운영 설정 이전처럼 로컬
+   patch를 제거할 객관적 조건을 적는다.
+
+서로 다른 lane은 커밋과 PR을 분리한다. 배포를 위한 통합 merge commit은 여러 lane을
+포함할 수 있지만, 공식 기여 브랜치의 source로 재사용하지 않는다.
+
+## v3.4 plugin extraction feasibility
+
+v3.4의 실제 SDK/host 계약을 기준으로 한 판단이다. 다음 release에서는 capability가
+변할 수 있으므로 재검증한다.
+
+| 기능 surface | v3.4에서 plugin으로 가능한 부분 | 현재 SDK gap / 결론 |
+| --- | --- | --- |
+| Google place enrichment | `http:outbound:<host>`, `db:own` usage ledger/migration, user/instance settings, settings action, authenticated route, `ctx.places.update`, `ctx.meta` external ID | native import modal과 admin usage panel에 provider UI를 주입하는 전용 hook이 없다. provider/ledger를 먼저 plugin service로 추출하고 native UI adapter는 얇은 fork-core로 남기는 hybrid가 현실적이다. |
+| Google hard cap | plugin-owned DB의 선예약과 외부 호출 wrapper | 앱 core의 다른 Google 호출까지 한 plugin이 강제할 수 없다. 모든 provider call이 plugin을 통과하기 전에는 core guard를 유지한다. |
+| packing personal templates/privacy | 별도 plugin DB와 독립 page는 가능 | core packing table, native list/template UI, REST/MCP/plugin write 권한을 일관되게 바꾸는 hook이 없다. 보안 contract를 포함한 단독 upstream PR 또는 최소 fork-core가 맞다. |
+| 지도 label locale | plugin frame 안의 별도 지도만 가능 | 공통 MapLibre/Mapbox style expression과 Settings를 바꾸므로 단독 upstream PR 후보다. |
+| Fold adaptive controls | table contributor로 대체 불가 | planner의 공통 responsive layout이므로 단독 upstream PR 후보다. |
+| Android/Cloudflare/Compose | 해당 없음 | package identity, signing, domain, reverse proxy는 instance-only로 유지한다. |
+
+Google plugin 추출은 한 번에 UI까지 옮기지 않는다. 권장 순서는 provider client와 usage
+ledger를 interface 뒤로 격리하고, plugin-owned DB/route로 옮길 수 있는지 contract test를
+만든 뒤, SDK에 native place-enrichment/admin metric hook을 공식 제안하고, 마지막으로 core
+adapter를 제거하는 방식이다.
+
+## Upstream PR extraction lifecycle
+
+1. 포크 patch의 재현 테스트와 일반적인 사용자 문제를 분리한다.
+2. 공식 최신 정책과 `upstream/dev` 상태를 다시 확인하고 Discord에서 범위를 승인받는다.
+3. `upstream/dev` 기반 `upstream-contrib/<topic>` worktree에서 한 기능만 최소 구현한다.
+4. JSNetworkCorp 설정과 포크 migration 없이 공식 전체 테스트/coverage를 통과시킨다.
+5. TOM이 명시 승인한 경우에만 공식 PR을 생성한다.
+6. merge 후에도 포크 patch는 유지한다. 변경이 포함된 공식 release tag를 격리 통합하고
+   동등성 회귀가 통과할 때 patch와 adapter를 제거한다.
+
+이 lifecycle을 따르면 공식 PR과 실제 배포 포크의 upgrade 주기가 분리되어, PR 검토가
+늦어지거나 거절돼도 운영 배포를 막지 않고 수용 후에는 자연스럽게 divergence를 줄일 수
+있다.
 
 ## Migration namespace contract
 

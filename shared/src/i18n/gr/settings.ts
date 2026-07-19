@@ -52,8 +52,6 @@ const settings: TranslationStrings = {
   'settings.mapTipLabel': 'Συμβουλή:',
   'settings.mapTip':
     'κάντε δεξί κλικ και σύρετε για περιστροφή/κλίση του χάρτη. Μεσαίο κλικ για προσθήκη τοποθεσίας (το δεξί κλικ έχει κρατηθεί για περιστροφή).',
-  'settings.latitude': 'Γεωγραφικό Πλάτος',
-  'settings.longitude': 'Γεωγραφικό Μήκος',
   'settings.saveMap': 'Αποθήκευση Χάρτη',
   'settings.apiKeys': 'Κλειδιά API',
   'settings.mapsKey': 'Google Maps API Key',
@@ -312,6 +310,7 @@ const settings: TranslationStrings = {
   'settings.mfa.demoBlocked': 'Δεν είναι διαθέσιμο σε λειτουργία demo',
   'settings.currency': 'Currency',
   'settings.currencyHint': 'All amounts in Costs are converted to and shown in this currency.',
+  'settings.currencyTrip': 'Νόμισμα ταξιδιού',
   'settings.passkey.title': 'Passkeys',
   'settings.passkey.description':
     'Συνδεθείτε πιο γρήγορα και με προστασία από phishing χρησιμοποιώντας ένα passkey — το δαχτυλικό σας αποτύπωμα, το πρόσωπό σας, ένα PIN ή ένα κλειδί υλικού. Ο κωδικός σας παραμένει ως εφεδρεία.',
@@ -515,6 +514,9 @@ const settings: TranslationStrings = {
     'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
   'settings.mapLabelLanguageVectorHint':
     'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
+  'settings.alwaysShowRoutes': 'Πάντα εμφάνιση διαδρομών κράτησης',
+  'settings.alwaysShowRoutesHint':
+    'Εμφανίζει αυτόματα στον χάρτη τη διαδρομή κάθε πτήσης, τρένου και άλλης κράτησης, χωρίς να χρειάζεται να την ενεργοποιείτε μία προς μία.',
 };
 
 export default settings;

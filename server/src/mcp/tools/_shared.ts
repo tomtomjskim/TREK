@@ -1,6 +1,6 @@
-import { broadcast } from '../../websocket';
 import { db } from '../../db/database';
 import { checkPermission } from '../../services/permissions';
+import { broadcast } from '../../websocket';
 
 export function safeBroadcast(
   tripId: number,
@@ -26,6 +26,11 @@ export const TOOL_ANNOTATIONS_READONLY = {
   openWorldHint: false,
 } as const;
 
+export const TOOL_ANNOTATIONS_OPEN_WORLD_READONLY = {
+  ...TOOL_ANNOTATIONS_READONLY,
+  openWorldHint: true,
+} as const;
+
 export const TOOL_ANNOTATIONS_WRITE = {
   readOnlyHint: false,
   destructiveHint: false,
@@ -47,6 +52,11 @@ export const TOOL_ANNOTATIONS_NON_IDEMPOTENT = {
   openWorldHint: false,
 } as const;
 
+export const TOOL_ANNOTATIONS_OPEN_WORLD_NON_IDEMPOTENT = {
+  ...TOOL_ANNOTATIONS_NON_IDEMPOTENT,
+  openWorldHint: true,
+} as const;
+
 export function demoDenied() {
   return { content: [{ type: 'text' as const, text: 'Write operations are disabled in demo mode.' }], isError: true };
 }
@@ -56,7 +66,10 @@ export function noAccess() {
 }
 
 export function permissionDenied() {
-  return { content: [{ type: 'text' as const, text: 'You do not have permission to perform this action on this trip.' }], isError: true };
+  return {
+    content: [{ type: 'text' as const, text: 'You do not have permission to perform this action on this trip.' }],
+    isError: true,
+  };
 }
 
 /**

@@ -72,7 +72,7 @@ helm install trek trek/trek \
 
 ```yaml
 image:
-  repository: mauriceboe/trek
+  repository: liketrek/TREK
   # tag: latest        # defaults to the chart's appVersion
   pullPolicy: IfNotPresent
 
@@ -97,6 +97,7 @@ env:
   PORT: 3000
   # TZ: "Europe/Berlin"          # timezone for logs, reminders, cron jobs
   # LOG_LEVEL: "info"            # "info" = concise, "debug" = verbose
+  # TREK_WIKI_DIR: "/app/wiki"   # where /help reads its docs from; leave unset (the image ships them)
   # DEFAULT_LANGUAGE: "en"       # fallback language on login page; supported: de, en, es, fr, hu, nl, br, cs, pl, ru, zh, zh-TW, it, tr, ar, id, ja, ko, uk, gr
   # ALLOWED_ORIGINS: "https://trek.example.com"
   # APP_URL: "https://trek.example.com"
@@ -187,7 +188,7 @@ helm upgrade trek trek/trek
 
 ## Full Values Reference
 
-See the [`charts/README.md`](https://github.com/mauriceboe/TREK/blob/main/charts/README.md) for all available values.
+See the [`charts/README.md`](https://github.com/liketrek/TREK/blob/main/charts/README.md) for all available values.
 
 ## Next Steps
 
