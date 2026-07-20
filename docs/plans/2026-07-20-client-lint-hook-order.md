@@ -13,7 +13,7 @@
 ## Scope and lane
 
 - Lane: temporary `fork-core` correctness fix with an upstream-compatible diff; no official upstream branch or PR in this task.
-- Production behavior, DOM shape, API contract, database, dependencies, image, Compose and deployment remain unchanged.
+- Normal non-null DOM, API and upload behavior remains unchanged; the previously crashing same-mount null↔place transition is fixed. Database, dependencies, image, Compose and deployment remain unchanged.
 - The full client lint baseline is 1,274 warnings across 14 rule buckets:
   - `@typescript-eslint/no-explicit-any`: 560
   - `@typescript-eslint/no-unused-vars`: 472
@@ -102,3 +102,16 @@ Confirm null→place and place→null transitions, upload behavior, dependencies
 **Step 3: Publish only to the fork**
 
 Push `fix/place-inspector-hook-order`, open a PR against `tomtomjskim/TREK:main`, wait for required CI, then merge only if green. Do not deploy.
+
+## Final local evidence
+
+- RED: the new same-mount null→place transition test failed with React's `Rendered more hooks than during the previous render` diagnostic at `PlaceInspector`'s file-upload `useCallback`.
+- GREEN: `PlaceInspector.test.tsx` passed 52/52, including null↔place transitions and an upload assertion that rerenders to a different place before checking the submitted `FormData` place ID and file.
+- Target lint: `PlaceInspector.tsx` has 0 `react-hooks/rules-of-hooks` warning; its eight unrelated pre-existing warnings remain outside this patch.
+- Full client lint: 0 errors and 1,273 warnings, down exactly one from the 1,274-warning baseline; `react-hooks/rules-of-hooks` is 0.
+- `npm run typecheck --workspaces --if-present` passed for client, server and shared.
+- `npm test` passed: shared 34 files / 141 tests, server 304 files / 5,430 tests, client 205 files / 3,434 passed and 38 skipped.
+- Full-test log counts for Hook-order, React `act()`, MSW unhandled request, router future, jsdom navigation and deprecated Vitest environment patterns were all 0.
+- `npm run build` passed. Existing plugin timing, ineffective dynamic import and large-chunk advisories remain separate build debt.
+- Independent review found no blocker or major risk. Its two LOW follow-ups—upload place ID coverage and implementation-independent retirement wording—were applied and rechecked with the focused test, client typecheck, target lint and `git diff --check`.
+- No dependency, database, image, Compose service, official upstream repository or production deployment was changed.
