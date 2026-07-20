@@ -37,7 +37,7 @@ vi.mock('../../src/websocket', () => ({ broadcastToUser: vi.fn(), broadcast: vi.
 vi.mock('../../src/services/notificationService', () => ({ send: vi.fn().mockResolvedValue(undefined) }));
 
 import { createTables } from '../../src/db/schema';
-import { runMigrations } from '../../src/db/migrations';
+import { runMigrations } from '../../src/db/migrationRunner';
 import { createUser, createTrip, createCategory } from '../helpers/factories';
 import { CollectionsModule } from '../../src/nest/collections/collections.module';
 import { TrekExceptionFilter } from '../../src/nest/common/trek-exception.filter';

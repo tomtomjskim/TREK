@@ -33,7 +33,7 @@ const { broadcastMock } = vi.hoisted(() => ({ broadcastMock: vi.fn() }));
 vi.mock('../../../src/websocket', () => ({ broadcastToUser: broadcastMock }));
 
 import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
+import { runMigrations } from '../../../src/db/migrationRunner';
 import { resetTestDb } from '../../helpers/test-db';
 import { createUser, createAdmin, disableNotificationPref } from '../../helpers/factories';
 import { createNotification, createNotificationForRecipient, respondToBoolean } from '../../../src/services/inAppNotifications';

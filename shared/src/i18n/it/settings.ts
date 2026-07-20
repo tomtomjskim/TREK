@@ -50,8 +50,6 @@ const settings: TranslationStrings = {
   'settings.mapTipLabel': 'Suggerimento:',
   'settings.mapTip':
     'Click destro e trascina per ruotare/inclinare la mappa. Click centrale per aggiungere un luogo (il click destro è riservato alla rotazione).',
-  'settings.latitude': 'Latitudine',
-  'settings.longitude': 'Longitudine',
   'settings.saveMap': 'Salva Mappa',
   'settings.apiKeys': 'Chiavi API',
   'settings.mapsKey': 'Chiave API Google Maps',
@@ -303,6 +301,7 @@ const settings: TranslationStrings = {
   'settings.notificationPreferences.ntfy': 'Ntfy',
   'settings.currency': 'Currency',
   'settings.currencyHint': 'All amounts in Costs are converted to and shown in this currency.',
+  'settings.currencyTrip': 'Valuta del viaggio',
   'settings.passkey.title': 'Passkey',
   'settings.passkey.description':
     'Accedi più velocemente e in modo resistente al phishing con una passkey — la tua impronta digitale, il volto, il PIN o una chiave hardware. La tua password resta come riserva.',
@@ -504,6 +503,9 @@ const settings: TranslationStrings = {
     'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
   'settings.mapLabelLanguageVectorHint':
     'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
+  'settings.alwaysShowRoutes': 'Mostra sempre i percorsi delle prenotazioni',
+  'settings.alwaysShowRoutesHint':
+    'Mostra automaticamente sulla mappa il percorso di ogni volo, treno e altra prenotazione, senza doverlo attivare singolarmente.',
 };
 
 export default settings;

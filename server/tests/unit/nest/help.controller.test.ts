@@ -13,6 +13,7 @@ vi.mock('../../../src/services/wikiService', () => ({
   getWikiIndex: vi.fn(),
   getWikiPage: vi.fn(),
   getWikiAsset: wikiMocks.getWikiAsset,
+  isLocalWiki: vi.fn(() => false),
   WikiNotFound: class WikiNotFound extends Error {},
 }));
 

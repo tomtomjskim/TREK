@@ -23,7 +23,9 @@ import { createTestDb } from '../../helpers/test-db';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const MIGRATIONS_PATH = resolve(here, '../../../src/db/migrations.ts');
+const FORK_MIGRATIONS_PATH = resolve(here, '../../../src/db/forkMigrations.ts');
 const migrationsSource = readFileSync(MIGRATIONS_PATH, 'utf8');
+const forkMigrationsSource = readFileSync(FORK_MIGRATIONS_PATH, 'utf8');
 
 /**
  * Strip line and block comments so commented-out SQL (or prose mentioning
@@ -37,6 +39,7 @@ function stripComments(src: string): string {
 }
 
 const scannableSource = stripComments(migrationsSource);
+const forkScannableSource = stripComments(forkMigrationsSource);
 
 interface DestructiveHit {
   /** Normalised signature used as the allowlist key, e.g. "DROP TABLE budget_items". */
@@ -95,9 +98,6 @@ const ALLOWED_DESTRUCTIVE: Record<string, string> = {
     'Make place_id nullable + ON DELETE SET NULL. Rebuild, rows copied.',
   'DROP TABLE schema_version':
     'Add surrogate id PK to schema_version. Rebuild, version row copied.',
-  'DROP TABLE packing_templates':
-    'Migration 173: add scope/owner lifecycle constraints and nullable attribution. Rebuild copies every row as instance scope and verifies row count plus foreign keys before commit.',
-
   // ── photo/journey table rebuilds (data preserved) ────────────────────────
   'DROP TABLE trip_photos':
     'trip_photos normalisation + later photo_id FK refactor. Rebuilds, rows copied.',
@@ -136,9 +136,14 @@ const ALLOWED_DESTRUCTIVE: Record<string, string> = {
   'DELETE FROM journey_entries':
     "Migration 121: DELETE ... WHERE title IN ('Gallery','[Trip Photos]') — remove synthetic wrapper entries replaced by the gallery model.",
   'DELETE FROM place_regions':
-    'Atlas enclave fix: DELETE ... WHERE place_id IN (places inside specific enclave boxes) — invalidate stale region cache; re-resolved on next request.',
+    'Atlas cache invalidation: earlier bounded enclave rows and official v174 full cache reset are both re-derivable from place coordinates.',
   'DELETE FROM visited_regions':
     'Atlas geoBoundaries swap (#1119): DELETE ... WHERE id = ? — after UPDATE OR IGNORE re-codes a manually-marked region to its current code, drop only the single leftover row whose UNIQUE(user_id, region_code) collision caused the update to be skipped (a duplicate of a region the user already has).',
+};
+
+const ALLOWED_FORK_DESTRUCTIVE: Record<string, string> = {
+  'DROP TABLE packing_templates':
+    'Fork packing-scope migration rebuilds into packing_templates_new, copies every row, verifies row count/FKs, then renames it.',
 };
 
 describe('migration hygiene — destructive operation guard', () => {
@@ -167,6 +172,16 @@ describe('migration hygiene — destructive operation guard', () => {
     const present = new Set(findDestructiveStatements(scannableSource).map((h) => h.signature));
     const dead = Object.keys(ALLOWED_DESTRUCTIVE).filter((sig) => !present.has(sig));
     expect(dead, `Allowlist entries no longer found in migrations.ts: ${dead.join(', ')}`).toEqual([]);
+  });
+
+  it('keeps fork migrations on their own reviewed destructive-operation allowlist', () => {
+    const hits = findDestructiveStatements(forkScannableSource);
+    const offenders = hits.filter((hit) => !(hit.signature in ALLOWED_FORK_DESTRUCTIVE));
+    const present = new Set(hits.map((hit) => hit.signature));
+    const dead = Object.keys(ALLOWED_FORK_DESTRUCTIVE).filter((signature) => !present.has(signature));
+
+    expect(offenders).toEqual([]);
+    expect(dead).toEqual([]);
   });
 });
 
@@ -200,14 +215,19 @@ describe('migration hygiene — full chain smoke', () => {
     }
   });
 
-  it('does not warn for expected duplicate columns on a fresh schema', () => {
+  it('emits only the upstream-known duplicate-column warnings on a fresh schema', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const db = createTestDb();
     try {
       const migrationWarnings = warn.mock.calls.filter(
         ([message]) => message === '[migrations] Non-fatal migration step failed:',
       );
-      expect(migrationWarnings).toEqual([]);
+      const duplicateColumns = migrationWarnings.map(([, error]) =>
+        error instanceof Error ? error.message : String(error),
+      );
+      expect(duplicateColumns.sort()).toEqual(
+        ['duplicate column name: links', 'duplicate column name: links', 'duplicate column name: role'].sort(),
+      );
     } finally {
       db.close();
       warn.mockRestore();

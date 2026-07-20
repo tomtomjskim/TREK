@@ -50,8 +50,6 @@ const settings: TranslationStrings = {
   'settings.mapTipLabel': 'Mẹo:',
   'settings.mapTip':
     'nhấp chuột phải và kéo để xoay/cao độ bản đồ. Nhấp chuột giữa để thêm địa điểm (nhấp chuột phải được dành riêng cho việc xoay).',
-  'settings.latitude': 'Vĩ độ',
-  'settings.longitude': 'Kinh độ',
   'settings.saveMap': 'Lưu bản đồ',
   'settings.apiKeys': 'API Key',
   'settings.mapsKey': 'Google Maps API Key',
@@ -308,6 +306,7 @@ const settings: TranslationStrings = {
   'settings.mfa.demoBlocked': 'Không có sẵn ở chế độ demo',
   'settings.currency': 'Tiền tệ',
   'settings.currencyHint': 'Tất cả số tiền trong Chi phí được chuyển đổi sang và hiển thị bằng loại tiền tệ này.',
+  'settings.currencyTrip': 'Tiền tệ của chuyến đi',
   'settings.passkey.title': 'Mật mã',
   'settings.passkey.description':
     'Đăng nhập nhanh hơn và chống lừa đảo bằng mật mã — vân tay, khuôn mặt, PIN hoặc khóa phần cứng của bạn. Mật khẩu của bạn vẫn là bản sao lưu.',
@@ -506,6 +505,9 @@ const settings: TranslationStrings = {
     'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
   'settings.mapLabelLanguageVectorHint':
     'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
+  'settings.alwaysShowRoutes': 'Luôn hiển thị tuyến đường đặt chỗ',
+  'settings.alwaysShowRoutesHint':
+    'Tự động hiển thị trên bản đồ tuyến đường của mỗi chuyến bay, tàu hỏa và đặt chỗ khác, không cần bật riêng từng mục.',
 };
 
 export default settings;

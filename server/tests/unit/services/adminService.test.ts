@@ -43,7 +43,7 @@ vi.mock('../../../src/demo/demo-reset', () => ({
 }));
 
 import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
+import { runMigrations } from '../../../src/db/migrationRunner';
 import { resetTestDb } from '../../helpers/test-db';
 import { createUser, createAdmin, createInviteToken } from '../../helpers/factories';
 import {

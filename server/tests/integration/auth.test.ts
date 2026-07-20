@@ -56,7 +56,7 @@ vi.mock('../../src/websocket', () => ({ broadcast: vi.fn(), broadcastToUser: vi.
 
 import { buildApp } from '../../src/bootstrap';
 import { createTables } from '../../src/db/schema';
-import { runMigrations } from '../../src/db/migrations';
+import { runMigrations } from '../../src/db/migrationRunner';
 import { resetTestDb, resetRateLimits } from '../helpers/test-db';
 import { createUser, createAdmin, createUserWithMfa, createInviteToken, createTrip, createBudgetItem, createJourney, createJourneyEntry, addJourneyContributor, addTripPhoto, createCategory, createTag, createTodoItem, createMcpToken, createBucketListItem, createVisitedCountry, createCollabNote, addTripMember } from '../helpers/factories';
 import { authCookie, authHeader } from '../helpers/auth';

@@ -49,8 +49,6 @@ const settings: TranslationStrings = {
   'settings.mapTipLabel': 'Tips:',
   'settings.mapTip':
     'högerklicka och dra för att rotera eller luta kartan. Mittklicka för att lägga till en plats (högerklick är reserverat för rotation).',
-  'settings.latitude': 'Latitud',
-  'settings.longitude': 'Longitud',
   'settings.saveMap': 'Spara karta',
   'settings.apiKeys': 'API nycklar',
   'settings.mapsKey': 'Google Maps API nyckel',
@@ -306,6 +304,7 @@ const settings: TranslationStrings = {
   'settings.mfa.demoBlocked': 'Finns inte i demoläge',
   'settings.currency': 'Valuta',
   'settings.currencyHint': 'Alla belopp under kostnader omräknas till och redovisas i denna valuta.',
+  'settings.currencyTrip': 'Resans valuta',
   'settings.passkey.title': 'Inloggningsnycklar',
   'settings.passkey.description':
     'Logga in snabbare och med bättre skydd mot nätfiske med en inloggningsnyckel – ditt fingeravtryck, ditt ansikte, din PIN-kod eller en hårdvarunyckel. Ditt lösenord finns kvar som reserv.',
@@ -501,6 +500,9 @@ const settings: TranslationStrings = {
     'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
   'settings.mapLabelLanguageVectorHint':
     'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
+  'settings.alwaysShowRoutes': 'Visa alltid bokningsrutter',
+  'settings.alwaysShowRoutesHint':
+    'Visar automatiskt rutten för varje flyg, tåg och annan bokning på kartan, utan att du behöver aktivera det för varje bokning för sig.',
 };
 
 export default settings;

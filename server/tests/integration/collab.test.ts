@@ -59,7 +59,7 @@ vi.mock('../../src/services/collabService', async (importOriginal) => {
 
 import { buildApp } from '../../src/bootstrap';
 import { createTables } from '../../src/db/schema';
-import { runMigrations } from '../../src/db/migrations';
+import { runMigrations } from '../../src/db/migrationRunner';
 import { resetTestDb, resetRateLimits } from '../helpers/test-db';
 import { createUser, createTrip, addTripMember } from '../helpers/factories';
 import { authCookie, generateToken } from '../helpers/auth';

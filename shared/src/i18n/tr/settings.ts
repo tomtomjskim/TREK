@@ -48,8 +48,6 @@ const settings: TranslationStrings = {
   'settings.mapTipLabel': 'İpucu:',
   'settings.mapTip':
     'Haritayı döndürmek/eğmek için sağ tıklayıp sürükleyin. Yer eklemek için orta tıklama (sağ tık döndürmeye ayrılmıştır).',
-  'settings.latitude': 'Enlem',
-  'settings.longitude': 'Boylam',
   'settings.saveMap': 'Haritayı Kaydet',
   'settings.apiKeys': 'API Anahtarları',
   'settings.mapsKey': 'Google Maps API Anahtarı',
@@ -300,6 +298,7 @@ const settings: TranslationStrings = {
   'settings.oauth.badge.machine': 'makine',
   'settings.currency': 'Currency',
   'settings.currencyHint': 'All amounts in Costs are converted to and shown in this currency.',
+  'settings.currencyTrip': 'Gezi para birimi',
   'settings.passkey.title': 'Passkey’ler',
   'settings.passkey.description':
     'Passkey ile daha hızlı ve kimlik avına dayanıklı şekilde oturum açın — parmak iziniz, yüzünüz, PIN’iniz veya bir donanım anahtarı. Şifreniz yedek olarak kalır.',
@@ -501,6 +500,9 @@ const settings: TranslationStrings = {
     'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
   'settings.mapLabelLanguageVectorHint':
     'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
+  'settings.alwaysShowRoutes': 'Rezervasyon rotalarını her zaman göster',
+  'settings.alwaysShowRoutesHint':
+    'Haritada her uçuş, tren ve diğer rezervasyonun rotasını, tek tek açmaya gerek kalmadan otomatik olarak gösterir.',
 };
 
 export default settings;

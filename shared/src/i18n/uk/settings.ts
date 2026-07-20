@@ -49,8 +49,6 @@ const settings: TranslationStrings = {
   'settings.mapTipLabel': 'Порада:',
   'settings.mapTip':
     'Затисніть праву кнопку миші та перетягніть, щоб повернути/нахилити карту. Клік середньою кнопкою — додати місце (права кнопка зарезервована для обертання).',
-  'settings.latitude': 'Широта',
-  'settings.longitude': 'Довгота',
   'settings.saveMap': 'Зберегти карту',
   'settings.apiKeys': 'API-ключі',
   'settings.mapsKey': 'API-ключ Google Maps',
@@ -302,6 +300,7 @@ const settings: TranslationStrings = {
   'settings.oauth.badge.machine': 'машина',
   'settings.currency': 'Currency',
   'settings.currencyHint': 'All amounts in Costs are converted to and shown in this currency.',
+  'settings.currencyTrip': 'Валюта подорожі',
   'settings.passkey.title': 'Passkeys',
   'settings.passkey.description':
     'Входьте швидше та з захистом від фішингу за допомогою passkey — відбитка пальця, обличчя, PIN-коду або апаратного ключа. Ваш пароль залишається як резервний варіант.',
@@ -504,6 +503,9 @@ const settings: TranslationStrings = {
     'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
   'settings.mapLabelLanguageVectorHint':
     'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
+  'settings.alwaysShowRoutes': 'Завжди показувати маршрути бронювань',
+  'settings.alwaysShowRoutesHint':
+    'Автоматично показує на карті маршрут для кожного рейсу, поїзда та іншого бронювання — без потреби вмикати це окремо для кожного елемента.',
 };
 
 export default settings;

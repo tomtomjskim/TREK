@@ -20,7 +20,7 @@ vi.mock('../../../src/db/database', () => dbMock);
 vi.mock('../../../src/config', () => ({ JWT_SECRET: 'x'.repeat(40), ENCRYPTION_KEY: 'a'.repeat(64), updateJwtSecret: () => {} }));
 
 import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
+import { runMigrations } from '../../../src/db/migrationRunner';
 import { createUser } from '../../helpers/factories';
 import { readUserSettingsDecrypted, hasRequiredUserSettings, readUserSettingDecrypted } from '../../../src/nest/plugins/plugins.service';
 import { parseManifest, ManifestError } from '../../../src/nest/plugins/install/manifest';

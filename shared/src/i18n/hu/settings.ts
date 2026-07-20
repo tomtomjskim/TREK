@@ -49,8 +49,6 @@ const settings: TranslationStrings = {
   'settings.mapTipLabel': 'Tipp:',
   'settings.mapTip':
     'Jobb klikk és húzás a térkép forgatásához/döntéséhez. Középső kattintás hely hozzáadásához (a jobb klikk a forgatáshoz van fenntartva).',
-  'settings.latitude': 'Szélességi fok',
-  'settings.longitude': 'Hosszúsági fok',
   'settings.saveMap': 'Térkép mentése',
   'settings.apiKeys': 'API kulcsok',
   'settings.mapsKey': 'Google Maps API kulcs',
@@ -304,6 +302,7 @@ const settings: TranslationStrings = {
   'settings.notificationPreferences.ntfy': 'Ntfy',
   'settings.currency': 'Currency',
   'settings.currencyHint': 'All amounts in Costs are converted to and shown in this currency.',
+  'settings.currencyTrip': 'Az utazás pénzneme',
   'settings.passkey.title': 'Passkey-k',
   'settings.passkey.description':
     'Jelentkezz be gyorsabban és adathalászat-állóan egy passkey-jel — ujjlenyomattal, arccal, PIN-kóddal vagy hardveres kulccsal. A jelszavad tartalékként megmarad.',
@@ -505,6 +504,9 @@ const settings: TranslationStrings = {
     'Raster tile labels cannot be changed by TREK. This preference applies when you use MapLibre or Mapbox GL.',
   'settings.mapLabelLanguageVectorHint':
     'Name labels use this language when the selected vector style provides a translation; local names remain the fallback.',
+  'settings.alwaysShowRoutes': 'Mindig jelenjenek meg a foglalási útvonalak',
+  'settings.alwaysShowRoutesHint':
+    'Automatikusan megjeleníti minden repülőjárat, vonat és egyéb foglalás útvonalát a térképen, nincs szükség egyenkénti bekapcsolásra.',
 };
 
 export default settings;

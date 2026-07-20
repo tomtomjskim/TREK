@@ -24,7 +24,7 @@ vi.mock('../../../src/websocket', () => ({ broadcastToUser: vi.fn() }));
 vi.mock('../../../src/utils/ssrfGuard', () => ({ checkSsrf: vi.fn(async () => ({ allowed: true, resolvedIp: '1.2.3.4' })), createPinnedDispatcher: vi.fn(() => ({})) }));
 
 import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
+import { runMigrations } from '../../../src/db/migrationRunner';
 import { resetTestDb } from '../../helpers/test-db';
 import { createUser, createAdmin, setAppSetting, setNotificationChannels } from '../../helpers/factories';
 import { send } from '../../../src/services/notificationService';

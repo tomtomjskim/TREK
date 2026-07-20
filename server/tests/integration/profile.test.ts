@@ -46,7 +46,7 @@ vi.mock('../../src/websocket', () => ({ broadcast: vi.fn(), broadcastToUser: vi.
 
 import { buildApp } from '../../src/bootstrap';
 import { createTables } from '../../src/db/schema';
-import { runMigrations } from '../../src/db/migrations';
+import { runMigrations } from '../../src/db/migrationRunner';
 import { resetTestDb, resetRateLimits } from '../helpers/test-db';
 import { createUser, createAdmin, createTrip } from '../helpers/factories';
 import { authCookie } from '../helpers/auth';
