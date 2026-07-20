@@ -1,5 +1,5 @@
 // FE-ADMIN-DEVNOTIF-001 to FE-ADMIN-DEVNOTIF-010
-import { render, screen, waitFor } from '../../../tests/helpers/render';
+import { act, fireEvent, render, screen, waitFor } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../tests/helpers/msw/server';
@@ -116,11 +116,16 @@ describe('DevNotificationsPanel', () => {
         HttpResponse.json({ message: 'Server error' }, { status: 500 }),
       ),
     );
-    const user = userEvent.setup();
     render(<><ToastContainer /><DevNotificationsPanel /></>);
     await screen.findByText('Type Testing');
-    await user.click(screen.getByText('Simple → Me').closest('button')!);
-    await screen.findByText(/failed|error/i);
+    const sendButton = screen.getByText('Simple → Me').closest('button')!;
+    await act(async () => {
+      fireEvent.click(sendButton);
+    });
+    await waitFor(() => {
+      expect(document.querySelector('.nomad-toast')).toHaveTextContent(/failed|error/i);
+      expect(sendButton).toBeEnabled();
+    });
   });
 
   it('FE-ADMIN-DEVNOTIF-009: changing trip selector updates payload targetId', async () => {

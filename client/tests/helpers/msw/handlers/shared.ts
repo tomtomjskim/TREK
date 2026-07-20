@@ -2,6 +2,30 @@ import { http, HttpResponse } from 'msw';
 import { buildTrip, buildDay, buildPlace } from '../../factories';
 
 export const sharedHandlers = [
+  http.get('/api/plugins', () => {
+    return HttpResponse.json({ plugins: [] });
+  }),
+
+  http.get('/api/trip-warnings/:tripId', () => {
+    return HttpResponse.json({ warnings: [] });
+  }),
+
+  http.get('/api/view-contributions/:view/:tripId', () => {
+    return HttpResponse.json({ contributions: [] });
+  }),
+
+  http.get('/api/health/features', () => {
+    return HttpResponse.json({ bookingImport: false, aiParsing: false });
+  }),
+
+  http.get('/api/health', () => {
+    return HttpResponse.json({ status: 'ok' });
+  }),
+
+  http.get('https://api.frankfurter.dev/v2/rates', () => {
+    return HttpResponse.json([]);
+  }),
+
   http.get('/api/shared/:token', ({ params }) => {
     const { token } = params;
 

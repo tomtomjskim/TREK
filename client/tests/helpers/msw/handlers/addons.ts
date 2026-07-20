@@ -10,4 +10,12 @@ export const addonHandlers = [
       ],
     });
   }),
+
+  http.get('/api/atlas-layers', () => {
+    return HttpResponse.json({ layers: [] });
+  }),
+
+  http.get('/api/addons/atlas/country/:code', () => {
+    return HttpResponse.json({ places: [], trips: [], manually_marked: false });
+  }),
 ];

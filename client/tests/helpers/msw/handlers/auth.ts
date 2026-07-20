@@ -25,6 +25,26 @@ export const authHandlers = [
     return HttpResponse.json({ token: 'mock-ws-token' });
   }),
 
+  http.get('/api/auth/users', () => {
+    return HttpResponse.json({ users: [] });
+  }),
+
+  http.get('/api/auth/travel-stats', () => {
+    return HttpResponse.json({
+      countries: [],
+      cities: [],
+      coords: [],
+      totalTrips: 0,
+      totalDays: 0,
+      totalPlaces: 0,
+      totalDistanceKm: 0,
+    });
+  }),
+
+  http.get('/api/auth/passkey/credentials', () => {
+    return HttpResponse.json({ credentials: [] });
+  }),
+
   http.post('/api/auth/logout', () => {
     return HttpResponse.json({ success: true });
   }),

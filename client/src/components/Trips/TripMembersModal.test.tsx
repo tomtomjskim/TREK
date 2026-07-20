@@ -363,7 +363,7 @@ describe('TripMembersModal', () => {
     render(<TripMembersModal {...defaultProps} />);
     await screen.findByText('Invite User');
 
-    const inviteBtn = screen.getByRole('button', { name: /Invite/i });
+    const inviteBtn = screen.getByRole('button', { name: /^Invite$/i });
     expect(inviteBtn).toBeDisabled();
   });
 

@@ -1,5 +1,5 @@
 // FE-PLANNER-RESMODAL-001 to FE-PLANNER-RESMODAL-052
-import { render, screen, waitFor, fireEvent } from '../../../tests/helpers/render';
+import { act, render, screen, waitFor, fireEvent } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../tests/helpers/msw/server';
@@ -289,7 +289,9 @@ describe('ReservationModal', () => {
     });
 
     // Cleanup
-    resolveOnSave!();
+    await act(async () => {
+      resolveOnSave!();
+    });
   });
 
   // ── Assignment linking ──────────────────────────────────────────────────────

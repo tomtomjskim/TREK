@@ -31,7 +31,10 @@ vi.mock('./hooks/useInAppNotificationListener.ts', () => ({
 
 function renderApp(initialPath = '/') {
   return render(
-    <MemoryRouter initialEntries={[initialPath]}>
+    <MemoryRouter
+      initialEntries={[initialPath]}
+      future={{ v7_startTransition: false, v7_relativeSplatPath: false }}
+    >
       <App />
     </MemoryRouter>
   )

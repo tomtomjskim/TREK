@@ -8,6 +8,10 @@ export const packingHandlers = [
     });
   }),
 
+  http.get('/api/trips/:id/packing/templates', () => {
+    return HttpResponse.json({ templates: [] });
+  }),
+
   http.post('/api/trips/:id/packing', async ({ params, request }) => {
     const body = await request.json() as Record<string, unknown>;
     const item = buildPackingItem({ trip_id: Number(params.id), ...body });

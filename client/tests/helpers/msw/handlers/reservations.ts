@@ -2,6 +2,10 @@ import { http, HttpResponse } from 'msw';
 import { buildReservation } from '../../factories';
 
 export const reservationsHandlers = [
+  http.get('/api/reservations/upcoming', () => {
+    return HttpResponse.json({ reservations: [] });
+  }),
+
   http.get('/api/trips/:id/reservations', ({ params }) => {
     return HttpResponse.json({
       reservations: [buildReservation({ trip_id: Number(params.id) })],

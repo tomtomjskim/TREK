@@ -37,6 +37,10 @@ export const adminHandlers = [
     return HttpResponse.json({ invites: [] });
   }),
 
+  http.get('/api/admin/invites/trips', () => {
+    return HttpResponse.json({ trips: [] });
+  }),
+
   http.post('/api/admin/invites', async ({ request }) => {
     const body = await request.json() as Record<string, unknown>;
     return HttpResponse.json({ invite: { id: 1, token: 'test-invite-token', ...body } });
@@ -80,6 +84,18 @@ export const adminHandlers = [
     return HttpResponse.json({ enabled: true });
   }),
 
+  http.get('/api/admin/places-photos', () => {
+    return HttpResponse.json({ enabled: true });
+  }),
+
+  http.get('/api/admin/places-autocomplete', () => {
+    return HttpResponse.json({ enabled: true });
+  }),
+
+  http.get('/api/admin/places-details', () => {
+    return HttpResponse.json({ enabled: true });
+  }),
+
   http.put('/api/admin/places-enrichment', async ({ request }) => {
     const body = await request.json() as Record<string, unknown>;
     return HttpResponse.json({ enabled: body.enabled });
@@ -87,6 +103,10 @@ export const adminHandlers = [
 
   http.get('/api/admin/google-api-usage', () => {
     return HttpResponse.json({ usage: [] });
+  }),
+
+  http.get('/api/admin/collab-features', () => {
+    return HttpResponse.json({ chat: true, notes: true, polls: true, whatsnext: true });
   }),
 
   http.get('/api/admin/addons', () => {

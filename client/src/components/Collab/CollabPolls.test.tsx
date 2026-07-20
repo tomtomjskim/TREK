@@ -10,7 +10,7 @@ vi.mock('../../api/websocket', () => ({
   removeListener: vi.fn(),
 }));
 
-import { render, screen, waitFor } from '../../../tests/helpers/render';
+import { act, render, screen, waitFor } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../tests/helpers/msw/server';
@@ -234,7 +234,9 @@ describe('CollabPolls', () => {
 
     // Get the WS listener that was registered
     const listener = (addListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    listener({ type: 'collab:poll:created', poll: buildPoll({ id: 77, question: 'Live poll?' }) });
+    act(() => {
+      listener({ type: 'collab:poll:created', poll: buildPoll({ id: 77, question: 'Live poll?' }) });
+    });
 
     await screen.findByText('Live poll?');
   });
@@ -249,7 +251,9 @@ describe('CollabPolls', () => {
     await screen.findByText('Best destination?');
 
     const listener = (addListener as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    listener({ type: 'collab:poll:deleted', pollId: 3 });
+    act(() => {
+      listener({ type: 'collab:poll:deleted', pollId: 3 });
+    });
 
     await waitFor(() =>
       expect(screen.queryByText('Best destination?')).not.toBeInTheDocument(),

@@ -22,4 +22,12 @@ export const placesHandlers = [
   http.delete('/api/trips/:id/places/:placeId', () => {
     return HttpResponse.json({ success: true });
   }),
+
+  http.get('/api/maps/place-photo/:placeId', () => {
+    return HttpResponse.json({ photoUrl: null, attribution: null });
+  }),
+
+  http.get('/api/place-details/:placeId', () => {
+    return HttpResponse.json({ providers: [] });
+  }),
 ];

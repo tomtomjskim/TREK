@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, fireEvent } from '../../../tests/helpers/render'
+import { act, render, screen, fireEvent } from '../../../tests/helpers/render'
 import { resetAllStores, seedStore } from '../../../tests/helpers/store'
 import { buildUser } from '../../../tests/helpers/factories'
 import { useAuthStore } from '../../store/authStore'
@@ -24,7 +24,9 @@ let originalInnerWidth: number
 
 function setViewport(width: number) {
   Object.defineProperty(window, 'innerWidth', { value: width, writable: true, configurable: true })
-  window.dispatchEvent(new Event('resize'))
+  act(() => {
+    window.dispatchEvent(new Event('resize'))
+  })
 }
 
 describe('CollabPanel', () => {

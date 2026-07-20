@@ -1,7 +1,7 @@
 import React from 'react'
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { render, screen } from '../../../tests/helpers/render'
-import { fireEvent, waitFor } from '@testing-library/react'
+import { cleanup, render, screen } from '../../../tests/helpers/render'
+import { act, fireEvent, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { resetAllStores } from '../../../tests/helpers/store'
 import { buildPlace, buildReservation } from '../../../tests/helpers/factories'
@@ -88,6 +88,7 @@ function buildMapPlace(overrides: Record<string, any> = {}) {
 }
 
 afterEach(() => {
+  cleanup()
   vi.clearAllMocks()
   resetAllStores()
 })
@@ -279,13 +280,13 @@ describe('MapView', () => {
     expect(end).toBeTypeOf('function')
 
     fireEvent.click(screen.getByTestId('marker-hover-trigger')) // ensure hover is showing
-    start!()
+    act(() => start!())
     await waitFor(() => expect(screen.queryByTestId('tooltip')).toBeNull())
     // during the pan animation a mouseover must not re-show the card
     fireEvent.click(screen.getByTestId('marker-hover-trigger'))
     expect(screen.queryByTestId('tooltip')).toBeNull()
     // once the move ends, hover works again
-    end!()
+    act(() => end!())
     await user.click(screen.getByTestId('marker-hover-trigger'))
     expect(screen.getByTestId('tooltip')).toBeTruthy()
   })

@@ -25,6 +25,8 @@ truth다.
   migration namespace와 release 통합 절차
 - [v3.4.x integration evidence](plans/2026-07-19-upstream-v3.4-integration-evidence.md):
   통합·테스트·이미지·배포·PR closeout 증거
+- [Client test warning cleanup](plans/2026-07-20-client-test-warning-cleanup.md):
+  Vitest 환경, MSW 기본 계약과 React 비동기 테스트 경고 정리 기준
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

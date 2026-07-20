@@ -168,6 +168,7 @@ describe('PlaceFormModal', () => {
     server.use(
       http.post('/api/maps/search', () =>
         HttpResponse.json({
+          source: 'test',
           places: [{ name: 'Eiffel Tower', address: 'Paris', lat: '48.8584', lng: '2.2945' }],
         }),
       ),
@@ -190,6 +191,7 @@ describe('PlaceFormModal', () => {
     server.use(
       http.post('/api/maps/search', () =>
         HttpResponse.json({
+          source: 'test',
           places: [{ name: 'Eiffel Tower', address: 'Paris', lat: '48.8584', lng: '2.2945' }],
         }),
       ),
@@ -208,6 +210,7 @@ describe('PlaceFormModal', () => {
     server.use(
       http.post('/api/maps/search', () =>
         HttpResponse.json({
+          source: 'test',
           places: [{ name: 'Eiffel Tower', address: 'Paris', lat: '48.8584', lng: '2.2945' }],
         }),
       ),

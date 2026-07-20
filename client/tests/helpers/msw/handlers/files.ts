@@ -16,4 +16,8 @@ export const filesHandlers = [
   http.delete('/api/trips/:id/files/:fileId', () => {
     return HttpResponse.json({ success: true });
   }),
+
+  http.get('/api/trips/:id/files/:fileId/download', () => {
+    return HttpResponse.arrayBuffer(new ArrayBuffer(0));
+  }),
 ];

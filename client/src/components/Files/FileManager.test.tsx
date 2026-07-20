@@ -1,5 +1,5 @@
 // FE-COMP-FILEMANAGER-001 to FE-COMP-FILEMANAGER-012
-import { render, screen, waitFor, fireEvent } from '../../../tests/helpers/render';
+import { act, render, screen, waitFor, fireEvent } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../tests/helpers/msw/server';
@@ -509,7 +509,9 @@ describe('FileManager', () => {
       value: { items: [mockItem] },
     });
 
-    await fireEvent(container, pasteEvent);
+    await act(async () => {
+      fireEvent(container, pasteEvent);
+    });
 
     await waitFor(() => {
       expect(onUpload).toHaveBeenCalled();

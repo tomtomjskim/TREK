@@ -55,7 +55,7 @@ export function FilePreviewPortal({ file, onClose }: FilePreviewPortalProps) {
             </div>
           </div>
           {(isPdf || isTxt) ? (
-            <object data={authUrl ? `${authUrl}#view=FitH` : ''} type={file.mime_type} style={{ flex: 1, width: '100%', border: 'none', background: '#fff' }} title={file.original_name}>
+            <object data={authUrl ? `${authUrl}#view=FitH` : undefined} type={file.mime_type} style={{ flex: 1, width: '100%', border: 'none', background: '#fff' }} title={file.original_name}>
               <p style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
                 <button onClick={openInNewTab} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-primary)', textDecoration: 'underline', fontSize: 'calc(14px * var(--fs-scale-body, 1))', padding: 0 }}>Download</button>
               </p>

@@ -650,6 +650,10 @@ describe('CollabNotes', () => {
 
   it('FE-COMP-NOTES-036: clicking PDF attachment opens FilePreviewPortal', async () => {
     const user = userEvent.setup();
+    let resolveAuthRequest!: () => void;
+    const authRequest = new Promise<void>(resolve => {
+      resolveAuthRequest = resolve;
+    });
     server.use(
       http.get('/api/trips/1/collab/notes', () =>
         HttpResponse.json({
@@ -664,7 +668,10 @@ describe('CollabNotes', () => {
           }],
         })
       ),
-      http.post('/api/auth/resource-token', () => HttpResponse.json({ token: 'test-token' })),
+      http.post('/api/auth/resource-token', async () => {
+        await authRequest;
+        return HttpResponse.json({ token: 'test-token' });
+      }),
     );
     render(<CollabNotes {...defaultProps} />);
     await screen.findByText('PDF Note Portal');
@@ -672,6 +679,17 @@ describe('CollabNotes', () => {
     await user.click(screen.getByText('PDF'));
     // FilePreviewPortal renders the file name in the header
     await screen.findByText('document.pdf');
+    const preview = document.querySelector<HTMLObjectElement>('object[title="document.pdf"]');
+    expect(preview).not.toBeNull();
+    expect(preview).not.toHaveAttribute('data');
+
+    await act(async () => resolveAuthRequest());
+    await waitFor(() => {
+      expect(preview).toHaveAttribute(
+        'data',
+        '/api/trips/1/files/1/download?token=test-token#view=FitH',
+      );
+    });
   });
 
   it('FE-COMP-NOTES-037: note with website shows website thumbnail component', async () => {

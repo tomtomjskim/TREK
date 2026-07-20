@@ -159,7 +159,9 @@ describe('PluginFrame', () => {
     const posted: Array<Record<string, unknown>> = [];
     (iframe.contentWindow as unknown as { postMessage: (m: unknown) => void }).postMessage = (m: unknown) => posted.push(m as Record<string, unknown>);
 
-    fromFrame(iframe, { type: 'trek:confirm', requestId: 'c1', message: 'Delete everything?', confirmLabel: 'Yes, wipe it' });
+    act(() => {
+      fromFrame(iframe, { type: 'trek:confirm', requestId: 'c1', message: 'Delete everything?', confirmLabel: 'Yes, wipe it' });
+    });
     const confirmBtn = await screen.findByText('Yes, wipe it');
     fireEvent.click(confirmBtn);
 

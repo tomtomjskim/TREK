@@ -313,6 +313,7 @@ describe('BudgetPanel', () => {
   it('FE-COMP-BUDGET-025: CSV export button triggers download via URL.createObjectURL', async () => {
     const createObjectURL = vi.fn(() => 'blob:test');
     vi.spyOn(URL, 'createObjectURL').mockImplementation(createObjectURL);
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     const user = userEvent.setup();
     const item = { ...buildBudgetItem({ trip_id: 1, category: 'Other', name: 'Misc' }), total_price: 10 };
     server.use(
@@ -322,6 +323,7 @@ describe('BudgetPanel', () => {
     await screen.findByText('CSV');
     await user.click(screen.getByText('CSV'));
     expect(createObjectURL).toHaveBeenCalled();
+    expect(anchorClick).toHaveBeenCalled();
     vi.restoreAllMocks();
   });
 
