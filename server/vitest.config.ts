@@ -10,6 +10,9 @@ export default defineConfig({
   // (vitest's default esbuild does not emit it -> type-based DI would break).
   plugins: [
     swc.vite({
+      // Vitest appends a query string when transforming uncovered files.
+      // Keep those virtual TypeScript ids inside SWC's transform pipeline.
+      include: /\.m?[jt]sx?(?:$|\?)/,
       jsc: {
         parser: { syntax: 'typescript', decorators: true },
         transform: { legacyDecorator: true, decoratorMetadata: true },
