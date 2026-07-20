@@ -102,6 +102,16 @@ describe('PlaceInspector', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('FE-PLANNER-INSPECTOR-001b: transitions between empty and selected places', () => {
+    const { container, rerender } = render(<PlaceInspector {...defaultProps} place={null} />);
+
+    rerender(<PlaceInspector {...defaultProps} place={place} />);
+    expect(screen.getByText('Eiffel Tower')).toBeInTheDocument();
+
+    rerender(<PlaceInspector {...defaultProps} place={null} />);
+    expect(container.firstChild).toBeNull();
+  });
+
   it('FE-PLANNER-INSPECTOR-002: renders without crashing with a valid place', () => {
     render(<PlaceInspector {...defaultProps} />);
     expect(document.body).toBeTruthy();
