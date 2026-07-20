@@ -427,7 +427,7 @@ describe('API client interceptors', () => {
     server.use(
       http.get('/api/notifications/in-app', ({ request }) => {
         searchParams = new URL(request.url).searchParams;
-        return HttpResponse.json([]);
+        return HttpResponse.json({ notifications: [], total: 0, unread_count: 0 });
       })
     );
 
@@ -526,8 +526,8 @@ describe('API namespace smoke tests', () => {
   });
 
   it('mapsApi.search posts query', async () => {
-    server.use(http.post('/api/maps/search', () => HttpResponse.json({ results: [] })));
-    await expect(mapsApi.search('Paris')).resolves.toMatchObject({ results: [] });
+    server.use(http.post('/api/maps/search', () => HttpResponse.json({ places: [], source: 'test' })));
+    await expect(mapsApi.search('Paris')).resolves.toMatchObject({ places: [], source: 'test' });
   });
 
   it('budgetApi.list fetches budget items', async () => {
@@ -546,7 +546,7 @@ describe('API namespace smoke tests', () => {
   });
 
   it('weatherApi.get fetches weather data', async () => {
-    server.use(http.get('/api/weather', () => HttpResponse.json({ temp: 20 })));
+    server.use(http.get('/api/weather', () => HttpResponse.json({ temp: 20, main: 'Clear', description: 'clear', type: 'current' })));
     await expect(weatherApi.get(48.8, 2.3, '2025-06-01')).resolves.toMatchObject({ temp: 20 });
   });
 
@@ -843,19 +843,19 @@ describe('API namespace smoke tests', () => {
   // ── notificationsApi additional methods ───────────────────────────────────────
 
   it('notificationsApi.testWebhook tests webhook endpoint', async () => {
-    server.use(http.post('/api/notifications/test-webhook', () => HttpResponse.json({ ok: true })));
-    await expect(notificationsApi.testWebhook('http://example.com')).resolves.toMatchObject({ ok: true });
+    server.use(http.post('/api/notifications/test-webhook', () => HttpResponse.json({ success: true })));
+    await expect(notificationsApi.testWebhook('http://example.com')).resolves.toMatchObject({ success: true });
   });
 
   it('notificationsApi.testSmtp tests smtp endpoint', async () => {
-    server.use(http.post('/api/notifications/test-smtp', () => HttpResponse.json({ ok: true })));
-    await expect(notificationsApi.testSmtp('user@example.com')).resolves.toMatchObject({ ok: true });
+    server.use(http.post('/api/notifications/test-smtp', () => HttpResponse.json({ success: true })));
+    await expect(notificationsApi.testSmtp('user@example.com')).resolves.toMatchObject({ success: true });
   });
 
   // ── mapsApi additional methods ────────────────────────────────────────────────
 
   it('mapsApi.reverse fetches reverse geocode', async () => {
-    server.use(http.get('/api/maps/reverse', () => HttpResponse.json({ address: 'Paris' })));
+    server.use(http.get('/api/maps/reverse', () => HttpResponse.json({ name: 'Paris', address: 'Paris' })));
     await expect(mapsApi.reverse(48.8, 2.3)).resolves.toMatchObject({ address: 'Paris' });
   });
 

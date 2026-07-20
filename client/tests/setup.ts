@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import 'fake-indexeddb/auto';
 import { cleanup } from '@testing-library/react';
-import { afterAll, afterEach, beforeAll, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, vi } from 'vitest';
 import { server } from './helpers/msw/server';
 
 // Mock the websocket module so stores don't try to open real connections
@@ -16,12 +16,26 @@ vi.mock('../src/api/websocket', () => ({
 }));
 
 // MSW lifecycle
-beforeAll(() => server.listen({ onUnhandledRequest: 'warn' }));
+const unhandledRequests = new Set<string>();
+
+server.events.on('request:unhandled', ({ request }) => {
+  const url = new URL(request.url);
+  unhandledRequests.add(`${request.method} ${url.pathname}${url.search}`);
+});
+
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+beforeEach(() => unhandledRequests.clear());
 afterEach(() => {
+  const requests = [...unhandledRequests];
   server.resetHandlers();
   cleanup();
   localStorage.clear();
   sessionStorage.clear();
+  unhandledRequests.clear();
+
+  if (requests.length > 0) {
+    throw new Error(`Unhandled MSW request(s):\n${requests.map(request => `- ${request}`).join('\n')}`);
+  }
 });
 afterAll(() => server.close());
 

@@ -1171,6 +1171,7 @@ describe('AtlasPage', () => {
       server.use(
         http.post('/api/maps/search', () =>
           HttpResponse.json({
+            source: 'test',
             places: [
               { name: 'Tokyo', lat: 35.6762, lng: 139.6503, address: 'Japan' },
             ],
@@ -1293,6 +1294,7 @@ describe('AtlasPage', () => {
       server.use(
         http.post('/api/maps/search', () =>
           HttpResponse.json({
+            source: 'test',
             places: [{ name: 'Bali', lat: -8.3405, lng: 115.0920, address: 'Indonesia' }],
           }),
         ),
@@ -1463,6 +1465,7 @@ describe('AtlasPage', () => {
       server.use(
         http.post('/api/maps/search', () =>
           HttpResponse.json({
+            source: 'test',
             places: [{ name: 'Paris', lat: 48.8566, lng: 2.3522, address: 'France' }],
           }),
         ),

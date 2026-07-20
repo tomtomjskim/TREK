@@ -13,7 +13,10 @@ function renderWithProviders(
 ) {
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (
-      <MemoryRouter initialEntries={initialEntries}>
+      <MemoryRouter
+        initialEntries={initialEntries}
+        future={{ v7_startTransition: false, v7_relativeSplatPath: false }}
+      >
         <TranslationProvider>{children}</TranslationProvider>
       </MemoryRouter>
     );

@@ -1,6 +1,6 @@
 import React from 'react'
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
-import { render } from '../../../tests/helpers/render'
+import { cleanup, render } from '../../../tests/helpers/render'
 import { act } from '@testing-library/react'
 import { resetAllStores } from '../../../tests/helpers/store'
 import { buildPlace } from '../../../tests/helpers/factories'
@@ -188,6 +188,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  cleanup()
   vi.clearAllMocks()
   glBounds.clear()
   resetAllStores()
@@ -289,13 +290,15 @@ describe('MapViewGL', () => {
     expect((maplibregl.Map as any).mock.calls[0][0]).toMatchObject({ aroundCenter: false })
 
     vi.clearAllMocks()
-    useSettingsStore.setState({
-      settings: {
-        ...useSettingsStore.getState().settings,
-        map_provider: 'mapbox-gl',
-        mapbox_access_token: 'pk.test_token',
-      },
-    } as any)
+    act(() => {
+      useSettingsStore.setState({
+        settings: {
+          ...useSettingsStore.getState().settings,
+          map_provider: 'mapbox-gl',
+          mapbox_access_token: 'pk.test_token',
+        },
+      } as any)
+    })
     render(<MapViewGL places={places} fitKey={1} glProvider="mapbox-gl" />)
     await act(async () => {})
     // mapbox-gl has no such option — it must not receive the stray key.

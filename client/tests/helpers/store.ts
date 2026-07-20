@@ -1,3 +1,4 @@
+import { act } from '@testing-library/react';
 import { useAuthStore } from '../../src/store/authStore';
 import { useTripStore } from '../../src/store/tripStore';
 import { useSettingsStore } from '../../src/store/settingsStore';
@@ -16,13 +17,15 @@ const initialAddonState = useAddonStore.getState();
 const initialNotifState = useInAppNotificationStore.getState();
 const initialPermsState = usePermissionsStore.getState();
 export function resetAllStores(): void {
-  useAuthStore.setState(initialAuthState, true);
-  useTripStore.setState(initialTripState, true);
-  useSettingsStore.setState(initialSettingsState, true);
-  useVacayStore.setState(initialVacayState, true);
-  useAddonStore.setState(initialAddonState, true);
-  useInAppNotificationStore.setState(initialNotifState, true);
-  usePermissionsStore.setState(initialPermsState, true);
+  act(() => {
+    useAuthStore.setState(initialAuthState, true);
+    useTripStore.setState(initialTripState, true);
+    useSettingsStore.setState(initialSettingsState, true);
+    useVacayStore.setState(initialVacayState, true);
+    useAddonStore.setState(initialAddonState, true);
+    useInAppNotificationStore.setState(initialNotifState, true);
+    usePermissionsStore.setState(initialPermsState, true);
+  });
 }
 
 /**
@@ -37,5 +40,7 @@ export function seedStore<T extends object>(
   store: { setState: (partial: Partial<T>, replace?: boolean) => void },
   state: DeepPartial<T>,
 ): void {
-  store.setState(state as Partial<T>);
+  act(() => {
+    store.setState(state as Partial<T>);
+  });
 }

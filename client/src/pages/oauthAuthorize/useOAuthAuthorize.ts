@@ -3,6 +3,7 @@ import { useAuthStore } from '../../store/authStore'
 import { oauthApi } from '../../api/client'
 import { SCOPE_GROUPS } from '../../api/oauthScopes'
 import { useTranslation } from '../../i18n'
+import { redirectBrowser } from './browserNavigation'
 
 interface ValidateResult {
   valid: boolean
@@ -109,7 +110,7 @@ export function useOAuthAuthorize() {
         resource,
       })
       setPageState('done')
-      window.location.href = result.redirect
+      redirectBrowser(result.redirect)
     } catch {
       setPageState('error')
       setErrorMsg('Authorization failed. Please try again.')
@@ -133,7 +134,7 @@ export function useOAuthAuthorize() {
 
   function handleLoginRedirect() {
     const next = '/oauth/consent?' + params.toString() + window.location.hash
-    window.location.href = '/login?redirect=' + encodeURIComponent(next)
+    redirectBrowser('/login?redirect=' + encodeURIComponent(next))
   }
 
   // Group requested scopes by their translated group name

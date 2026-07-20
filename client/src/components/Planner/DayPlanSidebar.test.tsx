@@ -1045,7 +1045,7 @@ describe('DayPlanSidebar', () => {
     const draggable = screen.getByText('Test Place').closest('[draggable="true"]')
     fireEvent.dragStart(draggable as Element, { dataTransfer: dt })
     // Dispatch global dragend on document
-    document.dispatchEvent(new Event('dragend'))
+    fireEvent(document, new Event('dragend'))
     // Component should handle cleanup without errors
     expect(screen.getByText('Test Place')).toBeInTheDocument()
   })
@@ -1061,15 +1061,18 @@ describe('DayPlanSidebar', () => {
     // Mock URL.createObjectURL
     const createObjURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock')
     const revokeObjURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     render(<DayPlanSidebar {...makeDefaultProps()} />)
     // The ICS button now opens a hover menu (Download / Subscribe) instead of
     // downloading on direct click.
     await user.hover(screen.getByText('ICS').closest('button')!)
     await user.click(await screen.findByText('Download ICS'))
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledWith('/api/trips/1/export.ics', expect.any(Object)))
+    expect(anchorClick).toHaveBeenCalled()
     fetchSpy.mockRestore()
     createObjURL.mockRestore()
     revokeObjURL.mockRestore()
+    anchorClick.mockRestore()
   })
 
   // ── openAddNote button click ──────────────────────────────────────────
@@ -1177,7 +1180,7 @@ describe('DayPlanSidebar', () => {
 
   // ── Drop on assignment: same-day reorder ─────────────────────────────
 
-  it('FE-PLANNER-DAYPLAN-066: dropping assignment from same day triggers handleMergedDrop', () => {
+  it('FE-PLANNER-DAYPLAN-066: dropping assignment from same day triggers handleMergedDrop', async () => {
     const place1 = buildPlace({ id: 1, name: 'Place A' })
     const place2 = buildPlace({ id: 2, name: 'Place B' })
     const day = buildDay({ id: 10, date: '2025-06-01', title: 'Day 1' })
@@ -1193,8 +1196,9 @@ describe('DayPlanSidebar', () => {
     fireEvent.dragStart(draggableA1 as Element, { dataTransfer: dt })
     const draggableA2 = screen.getByText('Place B').closest('[draggable="true"]')
     fireEvent.drop(draggableA2 as Element, { dataTransfer: { getData: vi.fn().mockReturnValue('') } })
-    // handleMergedDrop called; onReorder should eventually be called
-    expect(onReorder).toBeDefined()
+    // handleMergedDrop called; wait for its async reorder so no state update leaks
+    // into the next test.
+    await waitFor(() => expect(onReorder).toHaveBeenCalled())
   })
 
   // ── Cross-day note drop on day header ─────────────────────────────────

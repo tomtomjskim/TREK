@@ -505,9 +505,8 @@ describe('useRouteCalculation', () => {
     // Now add a third place — update both the local store object and the Zustand store
     const p3 = buildPlace({ lat: 30, lng: 30 });
     const a3 = buildAssignment({ day_id: 5, order_index: 2, place: p3 });
-    storeData = buildMockStore({ '5': [a1, a2, a3] }); // also calls useTripStore.setState
-
-    await act(async () => {
+    act(() => {
+      storeData = buildMockStore({ '5': [a1, a2, a3] }); // also calls useTripStore.setState
       rerender();
     });
 

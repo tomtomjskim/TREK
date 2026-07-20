@@ -1,6 +1,10 @@
 import { http, HttpResponse } from 'msw';
 
 export const notificationHandlers = [
+  http.get('/api/system-notices/active', () => {
+    return HttpResponse.json([]);
+  }),
+
   http.get('/api/notifications/in-app', ({ request }) => {
     const url = new URL(request.url);
     const offset = parseInt(url.searchParams.get('offset') || '0', 10);

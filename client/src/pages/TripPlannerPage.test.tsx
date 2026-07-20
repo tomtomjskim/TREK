@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, waitFor, act, fireEvent } from '../../tests/helpers/render';
+import { cleanup, render, screen, waitFor, act, fireEvent } from '../../tests/helpers/render';
 import { Routes, Route } from 'react-router-dom';
 import { resetAllStores, seedStore } from '../../tests/helpers/store';
 import { buildUser, buildTrip, buildDay, buildPlace, buildAssignment } from '../../tests/helpers/factories';
@@ -1445,7 +1445,10 @@ describe('TripPlannerPage', () => {
   });
 
   describe('FE-PAGE-PLANNER-048: trip-page plugins can replace core tabs and pick a position', () => {
-    afterEach(() => usePluginStore.setState({ plugins: [], loaded: false }));
+    afterEach(() => {
+      cleanup();
+      usePluginStore.setState({ plugins: [], loaded: false });
+    });
 
     it('hides the replaced core tab and splices the plugin tab at its position', async () => {
       usePluginStore.setState({

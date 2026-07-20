@@ -72,4 +72,13 @@ export const tripsHandlers = [
     const trip = buildTrip({ id: Number(params.id) + 1000, ...body });
     return HttpResponse.json({ trip });
   }),
+
+  http.get('/api/trips/:id/collab/link-preview', ({ request }) => {
+    const url = new URL(request.url).searchParams.get('url');
+    return HttpResponse.json({ title: null, description: null, image: null, url });
+  }),
+
+  http.get('/api/trips/:id/invite-link', () => {
+    return HttpResponse.json({ token: null });
+  }),
 ];

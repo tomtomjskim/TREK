@@ -7,6 +7,13 @@ import { useAuthStore } from '../store/authStore';
 import { resetAllStores, seedStore } from '../../tests/helpers/store';
 import { buildUser } from '../../tests/helpers/factories';
 import OAuthAuthorizePage from './OAuthAuthorizePage';
+import { redirectBrowser } from './oauthAuthorize/browserNavigation';
+
+vi.mock('./oauthAuthorize/browserNavigation', () => ({
+  redirectBrowser: vi.fn(),
+}));
+
+const redirectBrowserMock = vi.mocked(redirectBrowser);
 
 // Default OAuth query params
 const DEFAULT_SEARCH = '?client_id=test-client&redirect_uri=http%3A%2F%2Flocalhost%3A4000%2Fcallback&scope=trips%3Aread&state=abc&code_challenge=challenge&code_challenge_method=S256';
@@ -25,6 +32,7 @@ const VALIDATE_OK = {
 };
 
 beforeEach(() => {
+  redirectBrowserMock.mockClear();
   resetAllStores();
   setSearchParams(DEFAULT_SEARCH);
   server.resetHandlers();
@@ -128,6 +136,7 @@ describe('OAuthAuthorizePage', () => {
     // Shows auto-approving spinner
     await waitFor(() => {
       expect(authorizeCalled).toBe(true);
+      expect(redirectBrowserMock).toHaveBeenCalledWith('http://localhost:4000/callback?code=xyz');
     });
   });
 
@@ -145,6 +154,7 @@ describe('OAuthAuthorizePage', () => {
     await user.click(screen.getByText('Deny'));
     await waitFor(() => {
       expect(body.approved).toBe(false);
+      expect(redirectBrowserMock).toHaveBeenCalledWith('http://localhost:4000/callback?error=access_denied');
     });
   });
 
@@ -162,6 +172,7 @@ describe('OAuthAuthorizePage', () => {
     await user.click(screen.getByText('Approve Access'));
     await waitFor(() => {
       expect(body.approved).toBe(true);
+      expect(redirectBrowserMock).toHaveBeenCalledWith('http://localhost:4000/callback?code=ok');
     });
   });
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, cleanup } from '../../tests/helpers/render';
+import { act, render, screen, waitFor, cleanup } from '../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../tests/helpers/msw/server';
@@ -242,10 +242,13 @@ beforeEach(() => {
   setupDefaultHandlers();
 });
 
-afterEach(() => {
-  // Advance timers to flush pending setTimeout (e.g. 300ms setupObserver) before teardown
-  vi.runOnlyPendingTimers();
+afterEach(async () => {
   cleanup();
+  // Flush any non-component timers only after unmounting so their callbacks cannot
+  // enqueue React state updates during test teardown.
+  await act(async () => {
+    vi.runOnlyPendingTimers();
+  });
   vi.useRealTimers();
 });
 
@@ -2179,7 +2182,9 @@ describe('JourneyDetailPage', () => {
       await openGalleryWithProvider(user);
 
       // Flush pending timers/microtasks so the search fetch resolves
-      await vi.runAllTimersAsync();
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
 
       // Photos should load via the search endpoint, rendered as thumbnail images
       await waitFor(() => {
@@ -2731,7 +2736,9 @@ describe('JourneyDetailPage', () => {
       await openGalleryWithProvider(user);
 
       // Flush pending timers/microtasks so the search fetch resolves
-      await vi.runAllTimersAsync();
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
 
       // Wait for photos to load
       await waitFor(() => {
@@ -3431,6 +3438,7 @@ describe('JourneyDetailPage', () => {
       server.use(
         http.post('/api/maps/search', () => {
           return HttpResponse.json({
+            source: 'test',
             places: [
               { name: 'Vatican City', address: 'Vatican, Rome', lat: 41.9, lng: 12.45 },
               { name: 'Vatican Museums', address: 'Viale Vaticano', lat: 41.91, lng: 12.46 },
@@ -3447,7 +3455,9 @@ describe('JourneyDetailPage', () => {
       await user.type(locationInput, 'Vatican');
 
       // Advance timers past the 400ms debounce
-      vi.advanceTimersByTime(500);
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
 
       // Results should appear
       await waitFor(() => {
@@ -3464,6 +3474,7 @@ describe('JourneyDetailPage', () => {
       server.use(
         http.post('/api/maps/search', () => {
           return HttpResponse.json({
+            source: 'test',
             places: [
               { name: 'Vatican City', address: 'Vatican, Rome', lat: 41.9, lng: 12.45 },
             ],
@@ -3476,7 +3487,9 @@ describe('JourneyDetailPage', () => {
 
       const locationInput = screen.getByPlaceholderText('Search location...');
       await user.type(locationInput, 'Vatican');
-      vi.advanceTimersByTime(500);
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
 
       await waitFor(() => {
         expect(screen.getByText('Vatican City')).toBeInTheDocument();

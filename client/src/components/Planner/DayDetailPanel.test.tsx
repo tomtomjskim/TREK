@@ -13,6 +13,7 @@ import { buildUser, buildAdmin, buildTrip, buildDay, buildPlace, buildReservatio
 import DayDetailPanel from './DayDetailPanel';
 
 const day = buildDay({ id: 1, trip_id: 1, date: '2025-06-15', title: 'Day in Paris' });
+const noWeather = { temp: 0, main: '', description: '', type: '', error: 'no_forecast' };
 
 const defaultProps = {
   day,
@@ -32,7 +33,7 @@ beforeEach(() => {
   resetAllStores();
   vi.clearAllMocks();
   server.use(
-    http.get('/api/weather/detailed', () => HttpResponse.json({ error: true })),
+    http.get('/api/weather/detailed', () => HttpResponse.json(noWeather)),
     http.get('/api/trips/1/accommodations', () => HttpResponse.json({ accommodations: [] })),
   );
   seedStore(useAuthStore, { user: buildAdmin(), isAuthenticated: true });
@@ -153,7 +154,7 @@ describe('DayDetailPanel', () => {
   it('FE-PLANNER-DAYDETAIL-010: weather data renders temperature in Celsius', async () => {
     server.use(
       http.get('/api/weather/detailed', () =>
-        HttpResponse.json({ main: 'Clear', temp: 22, temp_min: 18, temp_max: 26, description: 'sunny' })
+        HttpResponse.json({ main: 'Clear', temp: 22, temp_min: 18, temp_max: 26, description: 'sunny', type: 'forecast' })
       ),
     );
     render(<DayDetailPanel {...defaultProps} lat={48.8566} lng={2.3522} />);
@@ -166,7 +167,7 @@ describe('DayDetailPanel', () => {
     });
     server.use(
       http.get('/api/weather/detailed', () =>
-        HttpResponse.json({ main: 'Clear', temp: 0, temp_min: 0, temp_max: 0, description: 'cold' })
+        HttpResponse.json({ main: 'Clear', temp: 0, temp_min: 0, temp_max: 0, description: 'cold', type: 'forecast' })
       ),
     );
     render(<DayDetailPanel {...defaultProps} lat={48.8566} lng={2.3522} />);
@@ -175,7 +176,7 @@ describe('DayDetailPanel', () => {
 
   it('FE-PLANNER-DAYDETAIL-012: no weather shows "No weather data" message', async () => {
     server.use(
-      http.get('/api/weather/detailed', () => HttpResponse.json({ error: true })),
+      http.get('/api/weather/detailed', () => HttpResponse.json(noWeather)),
     );
     render(<DayDetailPanel {...defaultProps} lat={48.8566} lng={2.3522} />);
     await screen.findByText(/No weather/i);
@@ -426,6 +427,7 @@ describe('DayDetailPanel', () => {
           temp_min: 12,
           temp_max: 18,
           description: 'rainy',
+          type: 'forecast',
           precipitation_probability_max: 80,
           precipitation_sum: 5.2,
           wind_max: 30,
@@ -454,6 +456,7 @@ describe('DayDetailPanel', () => {
           temp_min: 15,
           temp_max: 25,
           description: 'cloudy',
+          type: 'forecast',
           wind_max: 50,
         })
       ),
@@ -634,10 +637,11 @@ describe('DayDetailPanel', () => {
           temp_min: 15,
           temp_max: 25,
           description: 'sunny',
+          type: 'forecast',
           hourly: [
-            { hour: 8, main: 'Clear', temp: 18, precipitation_probability: 0 },
-            { hour: 10, main: 'Clear', temp: 20, precipitation_probability: 10 },
-            { hour: 12, main: 'Clouds', temp: 22, precipitation_probability: 60 },
+            { hour: 8, main: 'Clear', temp: 18, precipitation: 0, precipitation_probability: 0, wind: 5, humidity: 60 },
+            { hour: 10, main: 'Clear', temp: 20, precipitation: 0, precipitation_probability: 10, wind: 6, humidity: 55 },
+            { hour: 12, main: 'Clouds', temp: 22, precipitation: 0.2, precipitation_probability: 60, wind: 8, humidity: 65 },
           ],
         })
       ),
