@@ -167,3 +167,19 @@ v3.4.0에서 확인된 conflict hotspot은 `server/src/db/migrations.ts`, maps/s
 packing row/service/tests, Google maps/admin services, locale settings 파일이다. 공식 root
 Compose image 이름은 실제 Docker reference가 소문자여야 하므로 배포 override에서
 검증한다.
+
+### v3.4.1 synchronization note
+
+- 공식 `v3.4.1`은 exact target `a0994658890eae96624fb9cbe7f55867f047fea2`로
+  고정한다. tag target이 unsigned이므로 signed tag라고 표현하지 않는다.
+- v3.4.0 통합 branch에서 `merge-tree`와 실제 merge 모두 충돌이 없었고 DB migration,
+  packing, Google hard cap 및 Fold/map hotspot을 건드리지 않았다.
+- per-user ntfy가 admin topic으로 fallback하지 않는 negative privacy test를 필수 gate로
+  둔다. transit arrive-by, AirTrail closed-to-open, accommodation morning leg, Synology
+  streaming/log redaction, Atlas bundle과 plugin registry 테스트도 함께 실행한다.
+- schema가 175로 유지되므로 배포 rollback은 현재 v3.4.0 R2 image로의 code-only 교체다.
+  그래도 운영 교체 전 owner-only SQLite online backup과 public app version을 확인한다.
+- 포크 merge commit `e1be01e`와 ARM64 image
+  `trek:3.4.1-upstream-integration-e1be01e`는 전체 test/typecheck/i18n/build, 격리
+  smoke와 운영 backup/public browser gate를 통과해 2026-07-20 배포했다. 다음 공식
+  release도 이 v3.4.1 기준점에서 exact tag를 병합한다.
