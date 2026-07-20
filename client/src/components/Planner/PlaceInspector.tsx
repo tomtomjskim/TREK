@@ -242,6 +242,28 @@ export default function PlaceInspector({
     if (e.key === 'Escape') setEditingName(false)
   }
 
+  const placeId = place?.id
+  const handleFileUpload = useCallback(async (e) => {
+    const selectedFiles = Array.from((e.target as HTMLInputElement).files || [])
+    if (!selectedFiles.length || !onFileUpload || placeId == null) return
+    setIsUploading(true)
+    try {
+      for (const file of selectedFiles) {
+        const fd = new FormData()
+        fd.append('file', file)
+        fd.append('place_id', String(placeId))
+        await onFileUpload(fd)
+      }
+      setFilesExpanded(true)
+    } catch (err: unknown) {
+      console.error('Upload failed', err)
+      toast.error(translateApiError(t, err, 'files.uploadError'))
+    } finally {
+      setIsUploading(false)
+      if (fileInputRef.current) fileInputRef.current.value = ''
+    }
+  }, [onFileUpload, placeId, toast, t])
+
   if (!place) return null
 
   const category = categories?.find(c => c.id === place.category_id)
@@ -263,27 +285,6 @@ export default function PlaceInspector({
   const weekdayIndex = getWeekdayIndex(selectedDay?.date)
 
   const placeFiles = (files || []).filter(f => String(f.place_id) === String(place.id) || (f.linked_place_ids || []).includes(place.id))
-
-  const handleFileUpload = useCallback(async (e) => {
-    const selectedFiles = Array.from((e.target as HTMLInputElement).files || [])
-    if (!selectedFiles.length || !onFileUpload) return
-    setIsUploading(true)
-    try {
-      for (const file of selectedFiles) {
-        const fd = new FormData()
-        fd.append('file', file)
-        fd.append('place_id', String(place.id))
-        await onFileUpload(fd)
-      }
-      setFilesExpanded(true)
-    } catch (err: unknown) {
-      console.error('Upload failed', err)
-      toast.error(translateApiError(t, err, 'files.uploadError'))
-    } finally {
-      setIsUploading(false)
-      if (fileInputRef.current) fileInputRef.current.value = ''
-    }
-  }, [onFileUpload, place.id, toast, t])
 
   return (
     <div

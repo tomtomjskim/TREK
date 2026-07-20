@@ -102,6 +102,16 @@ describe('PlaceInspector', () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it('FE-PLANNER-INSPECTOR-001b: transitions between empty and selected places', () => {
+    const { container, rerender } = render(<PlaceInspector {...defaultProps} place={null} />);
+
+    rerender(<PlaceInspector {...defaultProps} place={place} />);
+    expect(screen.getByText('Eiffel Tower')).toBeInTheDocument();
+
+    rerender(<PlaceInspector {...defaultProps} place={null} />);
+    expect(container.firstChild).toBeNull();
+  });
+
   it('FE-PLANNER-INSPECTOR-002: renders without crashing with a valid place', () => {
     render(<PlaceInspector {...defaultProps} />);
     expect(document.body).toBeTruthy();
@@ -584,7 +594,13 @@ describe('PlaceInspector', () => {
 
   it('FE-PLANNER-INSPECTOR-040: file input change triggers onFileUpload', async () => {
     const onFileUpload = vi.fn().mockResolvedValue(undefined);
-    const { container } = render(<PlaceInspector {...defaultProps} onFileUpload={onFileUpload} />);
+    const uploadPlace = buildPlace({ id: 401, name: 'Upload destination' });
+    const { container, rerender } = render(
+      <PlaceInspector {...defaultProps} onFileUpload={onFileUpload} />
+    );
+    rerender(
+      <PlaceInspector {...defaultProps} place={uploadPlace} onFileUpload={onFileUpload} />
+    );
     const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
     expect(fileInput).toBeTruthy();
     const testFile = new File(['content'], 'test.txt', { type: 'text/plain' });
@@ -592,8 +608,11 @@ describe('PlaceInspector', () => {
       fireEvent.change(fileInput, { target: { files: [testFile] } });
     });
     await waitFor(() => {
-      expect(onFileUpload).toHaveBeenCalled();
+      expect(onFileUpload).toHaveBeenCalledTimes(1);
     });
+    const uploadedForm = onFileUpload.mock.calls[0]?.[0] as FormData;
+    expect(uploadedForm.get('place_id')).toBe(String(uploadPlace.id));
+    expect(uploadedForm.get('file')).toBe(testFile);
   });
 
   // ── formatTime: 12h format ─────────────────────────────────────────────────
