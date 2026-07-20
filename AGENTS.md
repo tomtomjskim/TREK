@@ -6,7 +6,8 @@
 - 이 저장소의 배포 포크는 `https://github.com/tomtomjskim/TREK`이며 `origin`으로 유지한다.
 - 공식 TREK 저장소는 `https://github.com/liketrek/TREK`이며 읽기 전용 `upstream`으로 취급한다.
 - TOM의 명시 요청 없이 공식 저장소로 push하거나 pull request를 생성하지 않는다.
-- 코딩 전에 이 파일, `docs/upstream/README.md`, 현재 작업과 관련된 `docs/plans/`, 그리고
+- 코딩 전에 이 파일, `docs/README.md`, `docs/project-source-map.md`,
+  `docs/upstream/README.md`, 현재 작업과 관련된 `docs/plans/`, 그리고
   `/home/ubuntu/personal-wiki/wiki/{reviewed,generated}/llm/codebase/trek/`의 관련 문서를 읽는다.
 
 ## Change lanes

@@ -7,9 +7,8 @@ import { RateLimitService } from './rate-limit.service';
 
 /**
  * Auth module — public flows (login/register/reset/mfa-verify/logout) and the
- * authenticated account/MFA/token endpoints. The OIDC sub-mount (/api/auth/oidc)
- * is a separate, not-yet-migrated route, so the strangler lists the auth
- * sub-paths explicitly rather than claiming all of /api/auth.
+ * authenticated account/MFA/token endpoints. OIDC remains a separate Nest module
+ * under /api/auth/oidc so each surface keeps its own controller and guards.
  */
 @Module({
   controllers: [AuthPublicController, AuthController, PasskeyController],

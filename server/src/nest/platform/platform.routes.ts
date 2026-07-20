@@ -15,8 +15,8 @@ import { clientRegistrationHandler } from '@modelcontextprotocol/sdk/server/auth
 import type { OAuthMetadata } from '@modelcontextprotocol/sdk/shared/auth';
 import { getMcpSafeUrl } from '../../services/notifications';
 
-// Platform / transport routes extracted verbatim from createApp() (app.ts) so they can be
-// mounted on either the legacy Express app or the NestJS Express instance (strangler A6/A8).
+// Platform / transport routes extracted from the former createApp() composition and
+// mounted on Nest's Express adapter before app.init().
 //
 // IMPORTANT — path resolution: the original blocks lived in src/app.ts, where __dirname
 // resolves to the directory of app.js (one level above the uploads/public anchor), so they

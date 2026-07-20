@@ -47,9 +47,8 @@ import { SpaFallbackFilter } from './platform/spa-fallback.filter';
 import { IdempotencyInterceptor } from './common/idempotency.interceptor';
 
 /**
- * Root NestJS module for the incremental migration. Domain modules
- * (weather, notifications, integrations, ...) get registered here as they are
- * migrated.
+ * Root module for the unified TREK NestJS application. Every domain module is
+ * registered here; platform/static/transport routes are composed in bootstrap.ts.
  */
 @Module({
   imports: [DatabaseModule, WeatherModule, HelpModule, AirportsModule, ConfigModule, SystemNoticesModule, MapsModule, CategoriesModule, TagsModule, NotificationsModule, AtlasModule, VacayModule, PackingModule, TodoModule, BudgetModule, ReservationsModule, DaysModule, AssignmentsModule, PlacesModule, TripsModule, CollabModule, FilesModule, PhotosModule, MemoriesModule, AirtrailModule, JourneyModule, CollectionsModule, ShareModule, TripInviteModule, TransitModule, FeedsModule, SettingsModule, BackupModule, AuthModule, OidcModule, OauthModule, AdminModule, AddonsModule, PluginsModule, BookingImportModule],

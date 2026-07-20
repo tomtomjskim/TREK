@@ -10,7 +10,7 @@ import { DatabaseService } from '../database/database.service';
  *
  * The TREK client attaches an `X-Idempotency-Key` to ALL write operations (see
  * client/src/api/client.ts) and the offline sync queue replays mutations with
- * that key, so a migrated mutating route MUST honour it — otherwise a replayed
+ * that key, so every mutating route MUST honour it — otherwise a replayed
  * POST would create a duplicate instead of returning the cached response. This
  * reproduces the legacy behaviour exactly, against the same `idempotency_keys`
  * table:

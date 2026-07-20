@@ -91,7 +91,6 @@ const onListen = () => {
 let server: http.Server;
 let nestApp: INestApplication;
 
-// Strangler toggle: prefixes served by Nest (env-overridable, instant rollback).
 async function bootstrap(): Promise<void> {
   // The whole surface runs on the single NestJS app now (Express decommissioned):
   // global pipeline + /uploads + every /api domain + the platform/transport routes

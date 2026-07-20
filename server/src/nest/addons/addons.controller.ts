@@ -8,7 +8,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
  * (authenticate-gated, returns { collabFeatures, addons: [...] }).
  *
  * Distinct from the addon sub-mounts /api/addons/atlas and /api/addons/vacay
- * (their own Nest modules); the strangler routes only the EXACT /api/addons here.
+ * (their own Nest modules); this controller owns only the exact /api/addons route.
  */
 @Controller('api/addons')
 @UseGuards(JwtAuthGuard)
