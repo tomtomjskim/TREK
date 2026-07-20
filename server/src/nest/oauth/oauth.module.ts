@@ -7,8 +7,8 @@ import { RateLimitService } from '../auth/rate-limit.service';
 /**
  * OAuth 2.1 server (MCP). Public token/userinfo/revoke endpoints + the SPA's
  * authenticated consent/client/session management. The SDK-mounted
- * /oauth/authorize, /oauth/register and /oauth/consent stay on Express, so the
- * strangler lists /oauth/token, /oauth/userinfo, /oauth/revoke explicitly.
+ * /oauth/authorize, /oauth/register and /oauth/consent remain platform transport
+ * routes registered on Nest's Express adapter before app.init().
  */
 @Module({
   controllers: [OauthPublicController, OauthApiController],

@@ -4,6 +4,9 @@
 `liketrek/TREK`의 release를 반복해서 받아들이고, 일반화 가능한 변경은 공식
 프로젝트에 기여하기 위한 운영 계약이다.
 
+현재 runtime 진입점과 fork hotspot은 [`docs/project-source-map.md`](../project-source-map.md)를
+먼저 확인한다.
+
 ## Repository roles
 
 | 이름 | 저장소/기준 | 역할 |
@@ -181,5 +184,8 @@ Compose image 이름은 실제 Docker reference가 소문자여야 하므로 배
   그래도 운영 교체 전 owner-only SQLite online backup과 public app version을 확인한다.
 - 포크 merge commit `e1be01e`와 ARM64 image
   `trek:3.4.1-upstream-integration-e1be01e`는 전체 test/typecheck/i18n/build, 격리
-  smoke와 운영 backup/public browser gate를 통과해 2026-07-20 배포했다. 다음 공식
-  release도 이 v3.4.1 기준점에서 exact tag를 병합한다.
+  smoke와 운영 backup/public browser gate를 통과해 2026-07-20 배포했다.
+- 최종 integration head `1c59f44f`는 GitHub Actions server/client/shared/i18n/lint를
+  통과했고 PR #1을 merge commit `86d3e9a0`로 포크 `main`에 병합했다. 병합 뒤 임시
+  branch와 block-volume worktree는 삭제했으며 공식 upstream에는 branch나 PR을 만들지
+  않았다. 다음 공식 release도 이 v3.4.1 기준점에서 exact tag를 병합한다.

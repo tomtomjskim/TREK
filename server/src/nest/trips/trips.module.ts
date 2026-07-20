@@ -2,8 +2,8 @@ import { Module } from '@nestjs/common';
 import { TripsController } from './trips.controller';
 import { TripsService } from './trips.service';
 
-/** Trips aggregate root (C1 — Phase 3). Uses exact strangler prefixes so it does
- *  not capture the nested sub-domain mounts (collab, files, ...). */
+/** Trips aggregate root. Controller route ordering keeps aggregate endpoints
+ * distinct from nested sub-domain mounts (collab, files, ...). */
 @Module({
   controllers: [TripsController],
   providers: [TripsService],

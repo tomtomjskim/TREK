@@ -60,7 +60,7 @@ const addDays = (d: Date, n: number) => { const r = new Date(d); r.setDate(r.get
  * same per-field permission checks (trip_create / trip_edit / trip_archive /
  * trip_cover_upload / trip_delete / member_manage), the date inference on create,
  * audit logging, the offline bundle, ICS export and member-invite notification.
- * Uses EXACT strangler prefixes so it never swallows the nested sub-domain mounts.
+ * Route ordering keeps aggregate endpoints from swallowing nested sub-domain mounts.
  */
 @Controller('api/trips')
 @UseGuards(JwtAuthGuard)

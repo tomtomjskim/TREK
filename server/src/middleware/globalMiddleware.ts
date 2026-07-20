@@ -7,13 +7,10 @@ import { logDebug, logWarn, logError } from '../services/auditLog';
 import { enforceGlobalMfaPolicy } from './mfaPolicy';
 
 /**
- * The global request pipeline shared by the legacy Express app and the NestJS
- * instance. Both mount the *exact same* config so a request hitting a migrated
- * Nest route is protected identically to one hitting the legacy fallback
- * (helmet/CSP, CORS, HSTS, forced-HTTPS, the global MFA policy and request
- * logging). Keeping it in one place is what makes the strangler dispatch
- * behaviourally transparent — and is the prerequisite for retiring Express,
- * since the Nest instance must carry the whole shell on its own.
+ * The global request pipeline for the unified NestJS application and its
+ * integration-test harness. Keeping helmet/CSP, CORS, HSTS, forced-HTTPS, the
+ * global MFA policy and request logging in one place prevents production and
+ * test composition from drifting.
  *
  * `bodyParser` is opt-out: the Nest instance does its own body parsing, so it
  * passes `false` to avoid parsing the request twice.
