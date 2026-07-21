@@ -66,7 +66,7 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-expressions': 'warn',
       '@typescript-eslint/no-unsafe-function-type': 'warn',
       '@typescript-eslint/no-this-alias': 'warn',
-      '@typescript-eslint/no-non-null-asserted-optional-chain': 'warn',
+      '@typescript-eslint/no-non-null-asserted-optional-chain': 'error',
 
       // js.recommended rules with pre-existing hits.
       'no-empty': 'warn',
