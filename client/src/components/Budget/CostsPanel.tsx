@@ -339,7 +339,7 @@ export default function CostsPanel({ tripId, tripMembers = [] }: CostsPanelProps
 
   // Big money number with the design's muted symbol/decimals, locale-correct via Intl.
   const bigMoney = (amount: number, smallSize: number, mutedColor: string) => {
-    let parts: Intl.NumberFormatPart[] | null = null
+    let parts: Intl.NumberFormatPart[]
     try {
       const d = currencyDecimals(base)
       parts = new Intl.NumberFormat(currencyLocale(base), { style: 'currency', currency: base, minimumFractionDigits: d, maximumFractionDigits: d }).formatToParts(amount || 0)
@@ -870,7 +870,7 @@ function SummaryCard({ label, sub, amount, currency, locale, icon, foot, tone }:
   const muted = total ? 'rgba(255,255,255,0.55)' : 'var(--text-faint)'
   // formatToParts keeps the design's "big integer + muted symbol/decimals" styling
   // while letting Intl place the symbol and pick separators per locale + currency.
-  let parts: Intl.NumberFormatPart[] | null = null
+  let parts: Intl.NumberFormatPart[] | null
   try {
     const d = currencyDecimals(currency)
     parts = new Intl.NumberFormat(currencyLocale(currency), { style: 'currency', currency: (currency || 'EUR').toUpperCase(), minimumFractionDigits: d, maximumFractionDigits: d }).formatToParts(amount || 0)
