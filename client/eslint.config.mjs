@@ -51,10 +51,9 @@ export default tseslint.config(
       'react/no-danger': 'off',
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
 
-      // --- Severities tuned to keep CI green on a codebase that was never linted ---
-      // (each rule below has pre-existing violations; surfaced as warnings, not blockers)
+      // --- Severities are tightened incrementally as focused batches reach zero violations ---
+      // Most rules below still have pre-existing violations and remain warnings.
 
-      // rules-of-hooks has one conditional-hook violation in PlaceInspector.tsx -> warn (not error).
       'react-hooks/rules-of-hooks': 'warn',
       'react-hooks/exhaustive-deps': 'warn',
 
@@ -66,6 +65,8 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-expressions': 'warn',
       '@typescript-eslint/no-unsafe-function-type': 'warn',
       '@typescript-eslint/no-this-alias': 'warn',
+
+      // Zero-debt guardrail: new unsafe optional-chain assertions block CI.
       '@typescript-eslint/no-non-null-asserted-optional-chain': 'error',
 
       // js.recommended rules with pre-existing hits.

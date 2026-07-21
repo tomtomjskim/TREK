@@ -177,16 +177,19 @@ describe('placesSlice', () => {
         assignments: { '1': [selectedAssignment, unrelatedAssignment, orphanAssignment] },
       });
 
+      const bulkDeleteRequest = vi.fn<(body: { ids: number[] }) => void>();
       server.use(
         http.post('/api/trips/1/places/bulk-delete', async ({ request }) => {
           const body = await request.json() as { ids: number[] };
-          expect(body.ids).toEqual([10]);
+          bulkDeleteRequest(body);
           return HttpResponse.json({ deleted: [10], count: 1 });
         }),
       );
 
       await useTripStore.getState().deletePlacesMany(1, [10]);
 
+      expect(bulkDeleteRequest).toHaveBeenCalledOnce();
+      expect(bulkDeleteRequest).toHaveBeenCalledWith({ ids: [10] });
       expect(useTripStore.getState().places.map(place => place.id)).toEqual([20]);
       expect(useTripStore.getState().assignments['1'].map(assignment => assignment.id)).toEqual([200, 300]);
       expect(useTripStore.getState().assignments['1'][1].place).toBeUndefined();
