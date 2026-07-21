@@ -136,3 +136,24 @@ the promoted rule remains at zero. Existing build advisories remain separate deb
 Request an independent read-only review, push `fix/client-no-unused-expressions`, open
 a PR against `tomtomjskim/TREK:main`, wait for required CI, and merge only if green.
 Do not touch the official upstream repository or deploy production.
+
+## Final local evidence
+
+- Characterization baseline: the two focused files passed 126/126 before production
+  changes. The admin case now verifies collapsed → expanded → collapsed, while the
+  existing planner cases cover day and mobile route-distance round trips.
+- Lint RED: promoting `@typescript-eslint/no-unused-expressions` to `error` produced
+  exactly three errors at the known Set-toggle expressions and 59 unrelated warnings.
+- Incremental GREEN: the admin branch reduced the target errors from three to two with
+  its 16/16 tests passing; the two planner branches then reduced the rule to zero.
+- Final focused gate: 126/126 passed and target lint exited 0 with only the 59 unrelated
+  warnings in the two production files.
+- Full client lint: 0 errors and 1,269 warnings, down exactly three from the 1,272-warning
+  baseline; the promoted rule has zero violations.
+- `npm run typecheck --workspaces --if-present` passed for client, server and shared.
+- `npm test` passed: shared 34 files / 141 tests, server 304 files / 5,430 tests, client
+  205 files / 3,435 passed and 38 skipped.
+- `npm run build` and `git diff --check` passed. Existing plugin timing, ineffective
+  dynamic-import and large-chunk advisories remain separate build debt.
+- No public API, database, dependency, image, Compose service, layout, official upstream
+  repository or production deployment was changed.
