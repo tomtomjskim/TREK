@@ -312,7 +312,11 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
     e.stopPropagation()
     setExpandedDays(prev => {
       const n = new Set(prev)
-      n.has(dayId) ? n.delete(dayId) : n.add(dayId)
+      if (n.has(dayId)) {
+        n.delete(dayId)
+      } else {
+        n.add(dayId)
+      }
       try { localStorage.setItem(`day-expanded-${tripId}`, JSON.stringify([...n])) } catch {}
       return n
     })
@@ -2369,7 +2373,11 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                               // distances between places appear right here instead (#1374).
                               setExpandedRouteDayIds(prev => {
                                 const next = new Set(prev)
-                                next.has(day.id) ? next.delete(day.id) : next.add(day.id)
+                                if (next.has(day.id)) {
+                                  next.delete(day.id)
+                                } else {
+                                  next.add(day.id)
+                                }
                                 return next
                               })
                             } else if (isSelected) { onToggleRoute?.() }
