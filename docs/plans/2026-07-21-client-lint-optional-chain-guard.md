@@ -113,3 +113,22 @@ rule remains at zero. Existing build advisories remain separate debt.
 Request an independent read-only review, push `fix/bulk-place-delete-null-guard`, open a
 PR against `tomtomjskim/TREK:main`, wait for required CI, and merge only if green. Do not
 touch the official upstream repository or deploy production.
+
+## Final local evidence
+
+- Characterization baseline: `placesSlice.test.ts` passed 10/10 before the production
+  refactor, including selected, unrelated and runtime-shaped orphan assignments.
+- Lint RED: after promoting
+  `@typescript-eslint/no-non-null-asserted-optional-chain` to `error`, target lint exited
+  1 with exactly the existing unsafe optional-chain assertion as its error.
+- GREEN: the explicit nullable ID guard kept the focused test at 10/10 and target lint
+  passed with 0 errors; six unrelated warnings remain in the target file.
+- Full client lint: 0 errors and 1,272 warnings, down exactly one from the 1,273-warning
+  baseline; the promoted rule has zero violations.
+- `npm run typecheck --workspaces --if-present` passed for client, server and shared.
+- `npm test` passed: shared 34 files / 141 tests, server 304 files / 5,430 tests, client
+  205 files / 3,435 passed and 38 skipped.
+- `npm run build` and `git diff --check` passed. Existing plugin timing, ineffective
+  dynamic-import and large-chunk advisories remain separate build debt.
+- No dependency, database, image, Compose service, official upstream repository or
+  production deployment was changed.
