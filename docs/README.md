@@ -29,6 +29,8 @@ truth다.
   Vitest 환경, MSW 기본 계약과 React 비동기 테스트 경고 정리 기준
 - [PlaceInspector Hook order fix](plans/2026-07-20-client-lint-hook-order.md):
   전체 lint 경고 분류와 nullable place 선택 전환의 Hook 순서 회귀 기준
+- [Bulk place delete null guard](plans/2026-07-21-client-lint-optional-chain-guard.md):
+  선택·비선택·orphan assignment 보존 계약과 optional-chain lint 오류 게이트
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

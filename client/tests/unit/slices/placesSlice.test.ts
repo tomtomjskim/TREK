@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { useTripStore } from '../../../src/store/tripStore';
+import type { Assignment } from '../../../src/types';
 import { resetAllStores, seedStore } from '../../helpers/store';
 import { buildPlace, buildAssignment } from '../../helpers/factories';
 import { server } from '../../helpers/msw/server';
@@ -157,6 +158,41 @@ describe('placesSlice', () => {
       const dayAssignments = useTripStore.getState().assignments['1'];
       expect(dayAssignments).toHaveLength(1);
       expect(dayAssignments[0].id).toBe(200);
+    });
+  });
+
+  describe('deletePlacesMany', () => {
+    it('FE-PLACES-010: removes selected assignments while preserving unrelated and orphan assignments', async () => {
+      const selectedPlace = buildPlace({ id: 10, trip_id: 1 });
+      const unrelatedPlace = buildPlace({ id: 20, trip_id: 1 });
+      const selectedAssignment = buildAssignment({ id: 100, day_id: 1, place: selectedPlace });
+      const unrelatedAssignment = buildAssignment({ id: 200, day_id: 1, place: unrelatedPlace });
+      const orphanAssignment = {
+        ...buildAssignment({ id: 300, day_id: 1, place: unrelatedPlace }),
+        place: undefined,
+      } as unknown as Assignment;
+
+      seedStore(useTripStore, {
+        places: [selectedPlace, unrelatedPlace],
+        assignments: { '1': [selectedAssignment, unrelatedAssignment, orphanAssignment] },
+      });
+
+      const bulkDeleteRequest = vi.fn<(body: { ids: number[] }) => void>();
+      server.use(
+        http.post('/api/trips/1/places/bulk-delete', async ({ request }) => {
+          const body = await request.json() as { ids: number[] };
+          bulkDeleteRequest(body);
+          return HttpResponse.json({ deleted: [10], count: 1 });
+        }),
+      );
+
+      await useTripStore.getState().deletePlacesMany(1, [10]);
+
+      expect(bulkDeleteRequest).toHaveBeenCalledOnce();
+      expect(bulkDeleteRequest).toHaveBeenCalledWith({ ids: [10] });
+      expect(useTripStore.getState().places.map(place => place.id)).toEqual([20]);
+      expect(useTripStore.getState().assignments['1'].map(assignment => assignment.id)).toEqual([200, 300]);
+      expect(useTripStore.getState().assignments['1'][1].place).toBeUndefined();
     });
   });
 

@@ -93,7 +93,10 @@ export const createPlacesSlice = (set: SetState, get: GetState): PlacesSlice => 
         let changed = false
         for (const [dayId, items] of Object.entries(state.assignments)) {
           if (items.some((a: Assignment) => a.place?.id != null && idSet.has(a.place.id))) {
-            updatedAssignments[dayId] = items.filter((a: Assignment) => !idSet.has(a.place?.id!))
+            updatedAssignments[dayId] = items.filter((a: Assignment) => {
+              const assignedPlaceId = a.place?.id
+              return assignedPlaceId == null || !idSet.has(assignedPlaceId)
+            })
             changed = true
           }
         }
