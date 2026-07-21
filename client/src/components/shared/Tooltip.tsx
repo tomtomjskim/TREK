@@ -36,7 +36,7 @@ export function Tooltip({ label, placement = 'bottom', delay = 250, disabled, ch
     const tipW = tooltipRef.current?.offsetWidth ?? 0
     const tipH = tooltipRef.current?.offsetHeight ?? 0
     const gap = 6
-    let top = 0, left = 0
+    let top: number, left: number
     if (placement === 'top') { top = r.top - tipH - gap; left = r.left + r.width / 2 - tipW / 2 }
     else if (placement === 'bottom') { top = r.bottom + gap; left = r.left + r.width / 2 - tipW / 2 }
     else if (placement === 'left') { top = r.top + r.height / 2 - tipH / 2; left = r.left - tipW - gap }

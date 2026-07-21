@@ -7,7 +7,14 @@ import { useTripStore } from '../../store/tripStore'
 import { useSettingsStore } from '../../store/settingsStore'
 import { resetAllStores, seedStore } from '../../../tests/helpers/store'
 import { buildUser, buildTrip, buildBudgetItem } from '../../../tests/helpers/factories'
+import { formatMoney } from '../../utils/formatters'
 import CostsPanel from './CostsPanel'
+
+const mockIsMobile = vi.hoisted(() => ({ value: false }))
+
+vi.mock('../../hooks/useIsMobile', () => ({
+  useIsMobile: () => mockIsMobile.value,
+}))
 
 const tripMembers = [
   { id: 1, username: 'alice', avatar_url: null },
@@ -15,6 +22,7 @@ const tripMembers = [
 ]
 
 beforeEach(() => {
+  mockIsMobile.value = false
   resetAllStores()
   seedStore(useAuthStore, { user: buildUser(), isAuthenticated: true })
   seedStore(useTripStore, { trip: buildTrip({ id: 1, currency: 'EUR' }) })
@@ -467,6 +475,33 @@ describe('CostsPanel — settlements in the ledger', () => {
   })
 
   // ── Display currency ───────────────────────────────────────────────────────
+
+  it.each([
+    { layout: 'desktop', isMobile: false, containerSelector: 'div[style*="border-radius: 22"]' },
+    { layout: 'mobile', isMobile: true, containerSelector: 'section' },
+  ])('falls back to formatMoney in the $layout total card', async ({ isMobile, containerSelector }) => {
+    mockIsMobile.value = isMobile
+    seedStore(useSettingsStore, { settings: { ...useSettingsStore.getState().settings, default_currency: 'EUR' } })
+    const item = { ...buildBudgetItem({ trip_id: 1, category: 'food', name: 'Dinner' }), total_price: 90, currency: 'EUR' }
+    server.use(
+      http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [item] })),
+      http.get('/api/trips/1/budget/settlement', () => HttpResponse.json({ balances: [], flows: [], settlements: [] })),
+    )
+    const formatToParts = vi.spyOn(Intl.NumberFormat.prototype, 'formatToParts').mockImplementation(() => {
+      throw new RangeError('formatToParts unavailable')
+    })
+
+    try {
+      render(<CostsPanel tripId={1} tripMembers={tripMembers} />)
+
+      await screen.findByText('Dinner')
+      const totalCard = screen.getByText('Total trip spend').closest(containerSelector)
+      const expected = formatMoney(90, 'EUR', 'en').replace(/\s/g, ' ')
+      expect(totalCard?.textContent?.replace(/\s/g, ' ')).toContain(expected)
+    } finally {
+      formatToParts.mockRestore()
+    }
+  })
 
   it('shows amounts in the trip currency when the user has no display currency set', async () => {
     // No personal preference → the trip's own currency wins, instead of a hardcoded one.

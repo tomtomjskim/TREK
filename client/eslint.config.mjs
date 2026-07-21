@@ -68,11 +68,11 @@ export default tseslint.config(
       // Zero-debt guardrails: new violations block CI.
       '@typescript-eslint/no-unused-expressions': 'error',
       '@typescript-eslint/no-non-null-asserted-optional-chain': 'error',
+      'no-useless-assignment': 'error',
 
       // js.recommended rules with pre-existing hits.
       'no-empty': 'warn',
       'no-useless-escape': 'warn',
-      'no-useless-assignment': 'warn',
       'preserve-caught-error': 'warn',
     },
   },
