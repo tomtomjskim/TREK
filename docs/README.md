@@ -33,6 +33,8 @@ truth다.
   선택·비선택·orphan assignment 보존 계약과 optional-chain lint 오류 게이트
 - [Client unused-expression toggles](plans/2026-07-21-client-lint-unused-expressions.md):
   Admin·day·mobile route Set 왕복 동작과 unused-expression lint 오류 게이트
+- [Client useless-assignment cleanup](plans/2026-07-21-client-lint-useless-assignment.md):
+  Costs currency fallback·Tooltip placement 계약과 redundant-assignment lint 오류 게이트
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

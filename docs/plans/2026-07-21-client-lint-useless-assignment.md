@@ -199,3 +199,24 @@ Fast-forward the local fork `main`, verify the squash tree equals the reviewed b
 tree, remove the temporary branch/worktree, and record the evidence in
 `personal-wiki/wiki/generated/llm/codebase/trek/client-test-warning-gates.md`. Regenerate
 and validate wiki graph/meta artifacts before pushing the wiki commit.
+
+## Final local evidence
+
+- Baseline: `CostsPanel.test.tsx` passed 19/19 and target lint reproduced exactly four
+  `no-useless-assignment` warnings across the two production files.
+- Characterization: desktop/mobile currency fallback and four tooltip placements passed
+  as 25/25 tests before production edits; the two test files linted with zero messages.
+- Static RED: promoting the rule to `error` produced exactly four target errors and nine
+  unrelated warnings at the known `parts`, `top` and `left` initializers.
+- GREEN: removing only those initial values restored target lint to 0 errors / nine
+  unrelated warnings, kept the 25 focused tests green and passed client typecheck.
+- Full client lint checked 657 files with 0 errors / 1,265 warnings, down exactly four
+  from the 1,269-warning baseline; `no-useless-assignment` has zero violations and
+  src/test `--print-config` reports severity 2.
+- Workspace typecheck passed for client, server and shared.
+- Full tests passed: shared 34 files / 141 tests, server 304 files / 5,430 tests, client
+  206 files / 3,441 passed and 38 skipped.
+- Production build passed; the client bundle completed in 7.30s. Existing plugin timing,
+  ineffective dynamic-import and large-chunk advisories remain separate build debt.
+- `git diff --check` passed. No API, database, dependency, image, Compose, layout,
+  official upstream repository or production deployment was changed.
