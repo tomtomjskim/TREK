@@ -62,11 +62,11 @@ export default tseslint.config(
         'warn',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
       ],
-      '@typescript-eslint/no-unused-expressions': 'warn',
       '@typescript-eslint/no-unsafe-function-type': 'warn',
       '@typescript-eslint/no-this-alias': 'warn',
 
-      // Zero-debt guardrail: new unsafe optional-chain assertions block CI.
+      // Zero-debt guardrails: new violations block CI.
+      '@typescript-eslint/no-unused-expressions': 'error',
       '@typescript-eslint/no-non-null-asserted-optional-chain': 'error',
 
       // js.recommended rules with pre-existing hits.
