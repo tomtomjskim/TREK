@@ -170,3 +170,34 @@ Fast-forward the local fork `main`, verify the squash tree equals the reviewed b
 tree, remove the temporary branch/worktree, and record the evidence in
 `personal-wiki/wiki/generated/llm/codebase/trek/client-test-warning-gates.md`. Regenerate
 and validate wiki graph/meta artifacts before pushing the wiki commit.
+
+## Final local evidence
+
+- Baseline: `PlaceAvatar.test.tsx` passed 16/16; its lint reported 0 errors / three
+  warnings with exactly one `@typescript-eslint/no-this-alias` violation. Full client
+  lint was 0 errors / 1,265 warnings.
+- Characterization: an initial exact disconnect-count assertion exposed that the
+  file-local `afterEach` cleared calls before the shared setup's later `cleanup()`
+  unmounted the previous component. The isolated case called disconnect once; moving
+  observer mock reset/clear to `beforeEach` made the full 16-test file deterministic and
+  preserved the original mock behavior before alias removal.
+- Static RED: promoting `@typescript-eslint/no-this-alias` to `error` produced exactly
+  one target error and two unrelated `no-explicit-any` warnings in the test file.
+- GREEN: capturing only the callback restored target lint to 0 errors / two unrelated
+  warnings and kept all 16 focused tests passing. Client typecheck passed.
+- Full client lint checked 657 files with 0 errors / 1,264 warnings, down exactly one
+  from baseline; the target rule has zero violations and source/test `--print-config`
+  both report severity 2. The exact npm lint entrypoint reports the same 1,264 warnings.
+- Workspace typecheck passed for client, server, and shared.
+- Full tests passed: shared 34 files / 141 tests, server 304 files / 5,430 tests, client
+  206 files / 3,441 passed and 38 skipped.
+- Production build passed; the client bundle completed in 11.89s. Existing ineffective
+  dynamic-import and large-chunk advisories remain separate build debt.
+- Independent read-only review found no HIGH, MED, or LOW findings and returned
+  `proceed` / closeout `pass`. The reviewer independently passed the 16 focused tests,
+  changed-path and full client lint, client typecheck, source/test severity checks, and
+  `git diff --check`; no files were modified during review.
+- `git diff --check` passed. No production UI, API, database, dependency, image,
+  Compose, official upstream repository, or production deployment was changed. Browser
+  screenshots were omitted because only a test double, lint severity, and maintainer
+  documentation changed.
