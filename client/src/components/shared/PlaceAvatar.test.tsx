@@ -30,16 +30,13 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  mockDisconnect.mockClear();
+  mockObserve.mockClear();
+  observerInstance = null;
   vi.mocked(getCached).mockReturnValue(null);
   vi.mocked(isLoading).mockReturnValue(false);
   vi.mocked(fetchPhoto).mockReset();
   vi.mocked(onThumbReady).mockReturnValue(() => {});
-});
-
-afterEach(() => {
-  mockDisconnect.mockClear();
-  mockObserve.mockClear();
-  observerInstance = null;
 });
 
 import PlaceAvatar from './PlaceAvatar';
@@ -139,6 +136,7 @@ describe('PlaceAvatar', () => {
       observerInstance?.callback([{ isIntersecting: true }]);
     });
 
+    expect(mockDisconnect).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fetchPhoto)).toHaveBeenCalled();
   });
 

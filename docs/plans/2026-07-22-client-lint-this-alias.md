@@ -63,7 +63,10 @@ diff. Remove the local patch when a verified official release preserves the same
 **Step 1: Strengthen the visible-photo case**
 
 Extend `FE-COMP-AVATAR-011` to assert that `mockDisconnect` is called exactly once after
-the intersecting entry is emitted. Keep its existing `fetchPhoto` assertion.
+the intersecting entry is emitted. Keep its existing `fetchPhoto` assertion. Move the
+observer mock clears to `beforeEach`: the shared setup's later `cleanup()` can otherwise
+record the previous test's unmount after a file-local `afterEach` has already cleared the
+calls, contaminating the next test's count.
 
 **Step 2: Verify the characterization on the original mock**
 
@@ -110,7 +113,7 @@ two unrelated warnings.
 
 Replace `observerInstance` with a nullable callback variable. In the mock constructor,
 assign the constructor argument to that variable; remove the unused instance callback
-property. Reset the callback in `afterEach` and invoke it in the two intersection tests.
+property. Reset the callback in `beforeEach` and invoke it in the two intersection tests.
 Keep the observer method mocks and production component unchanged.
 
 **Step 4: Verify GREEN**
