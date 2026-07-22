@@ -12,13 +12,12 @@ vi.mock('../../services/photoService', () => ({
 // Mock IntersectionObserver as a class constructor
 const mockDisconnect = vi.fn();
 const mockObserve = vi.fn();
-let observerInstance: MockIntersectionObserver | null = null;
+type MockIntersectionCallback = (entries: Partial<IntersectionObserverEntry>[]) => void;
+let observerCallback: MockIntersectionCallback | null = null;
 
 class MockIntersectionObserver {
-  callback: (entries: Partial<IntersectionObserverEntry>[]) => void;
-  constructor(callback: (entries: Partial<IntersectionObserverEntry>[]) => void) {
-    this.callback = callback;
-    observerInstance = this;
+  constructor(callback: MockIntersectionCallback) {
+    observerCallback = callback;
   }
   observe = mockObserve;
   disconnect = mockDisconnect;
@@ -30,16 +29,13 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  mockDisconnect.mockClear();
+  mockObserve.mockClear();
+  observerCallback = null;
   vi.mocked(getCached).mockReturnValue(null);
   vi.mocked(isLoading).mockReturnValue(false);
   vi.mocked(fetchPhoto).mockReset();
   vi.mocked(onThumbReady).mockReturnValue(() => {});
-});
-
-afterEach(() => {
-  mockDisconnect.mockClear();
-  mockObserve.mockClear();
-  observerInstance = null;
 });
 
 import PlaceAvatar from './PlaceAvatar';
@@ -136,9 +132,10 @@ describe('PlaceAvatar', () => {
     render(<PlaceAvatar place={basePlaceNoImage} />);
 
     act(() => {
-      observerInstance?.callback([{ isIntersecting: true }]);
+      observerCallback?.([{ isIntersecting: true }]);
     });
 
+    expect(mockDisconnect).toHaveBeenCalledTimes(1);
     expect(vi.mocked(fetchPhoto)).toHaveBeenCalled();
   });
 
@@ -161,7 +158,7 @@ describe('PlaceAvatar', () => {
     render(<PlaceAvatar place={{ ...basePlaceNoImage, google_place_id: 'gid456' }} />);
 
     act(() => {
-      observerInstance?.callback([{ isIntersecting: true }]);
+      observerCallback?.([{ isIntersecting: true }]);
     });
 
     expect(vi.mocked(onThumbReady)).toHaveBeenCalledWith('gid456', expect.any(Function));

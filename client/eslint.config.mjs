@@ -63,9 +63,9 @@ export default tseslint.config(
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
       ],
       '@typescript-eslint/no-unsafe-function-type': 'warn',
-      '@typescript-eslint/no-this-alias': 'warn',
 
       // Zero-debt guardrails: new violations block CI.
+      '@typescript-eslint/no-this-alias': 'error',
       '@typescript-eslint/no-unused-expressions': 'error',
       '@typescript-eslint/no-non-null-asserted-optional-chain': 'error',
       'no-useless-assignment': 'error',
