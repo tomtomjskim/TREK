@@ -37,6 +37,8 @@ truth다.
   Costs currency fallback·Tooltip placement 계약과 redundant-assignment lint 오류 게이트
 - [Client this-alias cleanup](plans/2026-07-22-client-lint-this-alias.md):
   PlaceAvatar observer callback·disconnect 계약과 test mock alias lint 오류 게이트
+- [Custom version SemVer comparison](plans/2026-07-23-custom-version-semver-comparison.md):
+  포크 build metadata를 보존하면서 공식 release update와 관리자 알림을 판정하는 계약
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

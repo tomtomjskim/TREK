@@ -77,7 +77,9 @@ import {
   updateOidcSettings,
   saveDemoBaseline,
   getGithubReleases,
+  compareVersions,
   checkVersion,
+  __clearVersionCacheForTests,
   listAddons,
   updateAddon,
   updateCollabFeatures,
@@ -594,8 +596,15 @@ describe('getGithubReleases', () => {
 // ── checkVersion ──────────────────────────────────────────────────────────────
 
 describe('checkVersion', () => {
+  beforeEach(() => {
+    __clearVersionCacheForTests();
+    vi.unstubAllEnvs();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    __clearVersionCacheForTests();
   });
 
   it('ADMIN-SVC-054 — returns update_available:false when fetch fails', async () => {
@@ -615,6 +624,39 @@ describe('checkVersion', () => {
     expect(result.update_available).toBe(true);
     expect(result.latest).toBe('999.0.0');
     expect(result.release_url).toBe('https://github.com/example/releases/tag/v999.0.0');
+  });
+
+  it('ADMIN-SVC-055a — treats build metadata as equal release precedence', () => {
+    expect(compareVersions('3.4.1', '3.4.1+jsnetworkcorp.e1be01e')).toBe(0);
+  });
+
+  it('ADMIN-SVC-055b — still detects a newer official patch than a custom build', () => {
+    expect(compareVersions('3.4.2', '3.4.1+jsnetworkcorp.e1be01e')).toBe(1);
+  });
+
+  it('ADMIN-SVC-055c — preserves prerelease ordering when build metadata is present', () => {
+    expect(compareVersions('3.5.0-pre.2', '3.5.0-pre.1+jsnetworkcorp.testrev')).toBe(1);
+  });
+
+  it('ADMIN-SVC-055d — treats an invalid version as unknown instead of outdated', () => {
+    expect(compareVersions('3.4.1', 'dev')).toBe(0);
+  });
+
+  it('ADMIN-SVC-055e — keeps the raw custom version without showing a same-release update', async () => {
+    vi.stubEnv('APP_VERSION', '3.4.1+jsnetworkcorp.testrev');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v3.4.1',
+        html_url: 'https://github.com/liketrek/TREK/releases/tag/v3.4.1',
+      }),
+    }));
+
+    const result = await checkVersion();
+
+    expect(result.current).toBe('3.4.1+jsnetworkcorp.testrev');
+    expect(result.latest).toBe('3.4.1');
+    expect(result.update_available).toBe(false);
   });
 });
 

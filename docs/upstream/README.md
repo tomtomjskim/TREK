@@ -148,6 +148,7 @@ v3.4 통합부터 다음 계약을 사용한다.
 | Client zero-debt correctness lint guardrails | fork core maintenance | 높음 | 공식 release가 Admin scope·day expansion·mobile route-distance 왕복 동작을 보존하고 `no-unused-expressions` 위반을 없애면 local syntax patch 제거 |
 | Client redundant-assignment lint guardrail | fork core maintenance | 높음 | 공식 release가 Costs desktop/mobile currency fallback과 Tooltip 네 placement를 보존하고 `no-useless-assignment` 위반을 없애면 local syntax patch 제거 |
 | Client observer test-mock alias lint guardrail | fork core maintenance | 높음 | 공식 release가 PlaceAvatar intersection callback의 photo fetch·disconnect 계약을 보존하고 `no-this-alias` 위반을 없애면 local test patch 제거 |
+| Custom `APP_VERSION` SemVer comparison | fork core | 높음 | 공식 release가 build metadata를 update precedence에서 제외하고 same-release API·notification 회귀를 통과하면 local patch 제거 |
 | packing Personal/Shared privacy | upstream contribution 후보 | 높음, security fix | 공식 privacy contract와 negative tests가 수용된 release 후 local patch 제거 |
 | packing template scope R1 | fork core / upstream discussion | 중간 | 개인 템플릿 제품 방향 승인 전 writer는 비활성, migration은 fork namespace 유지 |
 | Google place enrichment와 app hard cap | fork core, plugin 추출 검토 | 중간 | provider 호출·usage ledger를 plugin-owned DB/action으로 옮길 SDK gap 분석 필요 |
