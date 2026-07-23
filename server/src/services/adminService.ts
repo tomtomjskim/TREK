@@ -18,6 +18,7 @@ import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import semver from 'semver';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -30,29 +31,10 @@ function utcSuffix(ts: string | null | undefined): string | null {
 }
 
 export function compareVersions(a: string, b: string): number {
-  const parse = (v: string) => {
-    const [base, pre] = v.split('-pre.');
-    const parts = base.split('.').map(Number);
-    const n = pre !== undefined ? parseInt(pre, 10) : null;
-    const preN = n !== null && Number.isFinite(n) ? n : null;
-    return { parts, preN };
-  };
-  const pa = parse(a),
-    pb = parse(b);
-  for (let i = 0; i < Math.max(pa.parts.length, pb.parts.length); i++) {
-    const na = pa.parts[i] || 0,
-      nb = pb.parts[i] || 0;
-    if (na > nb) return 1;
-    if (na < nb) return -1;
-  }
-  // Equal base: stable > prerelease; higher preN wins among prereleases
-  if (pa.preN === null && pb.preN !== null) return 1;
-  if (pa.preN !== null && pb.preN === null) return -1;
-  if (pa.preN !== null && pb.preN !== null) {
-    if (pa.preN > pb.preN) return 1;
-    if (pa.preN < pb.preN) return -1;
-  }
-  return 0;
+  const validA = semver.valid(a);
+  const validB = semver.valid(b);
+  if (!validA || !validB) return 0;
+  return semver.compare(validA, validB);
 }
 
 export const isDocker = (() => {

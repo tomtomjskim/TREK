@@ -72,11 +72,13 @@ beforeEach(() => {
   resetTestDb(testDb);
   __clearVersionCacheForTests();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 afterAll(() => {
   testDb.close();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,6 +91,17 @@ describe('checkAndNotifyVersion', () => {
     // GitHub reports same version as package.json (or older) → update_available: false
     const { version } = require('../../../package.json');
     mockGitHubLatest(`v${version}`);
+
+    await checkAndNotifyVersion();
+
+    expect(getNotificationCount()).toBe(0);
+    expect(getLastNotifiedVersion()).toBeUndefined();
+  });
+
+  it('VNOTIF-001a — does not notify for a custom build of the current official release', async () => {
+    createAdmin(testDb);
+    vi.stubEnv('APP_VERSION', '3.4.1+jsnetworkcorp.testrev');
+    mockGitHubLatest('v3.4.1');
 
     await checkAndNotifyVersion();
 
