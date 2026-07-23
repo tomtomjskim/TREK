@@ -186,8 +186,9 @@ Compose image 이름은 실제 Docker reference가 소문자여야 하므로 배
 - per-user ntfy가 admin topic으로 fallback하지 않는 negative privacy test를 필수 gate로
   둔다. transit arrive-by, AirTrail closed-to-open, accommodation morning leg, Synology
   streaming/log redaction, Atlas bundle과 plugin registry 테스트도 함께 실행한다.
-- schema가 175로 유지되므로 배포 rollback은 현재 v3.4.0 R2 image로의 code-only 교체다.
-  그래도 운영 교체 전 owner-only SQLite online backup과 public app version을 확인한다.
+- v3.4.1 통합 당시 schema가 175로 유지돼 rollback은 v3.4.0 R2 image로의 code-only
+  교체였다. 현재 custom-version patch의 즉시 rollback은 아래 v3.4.1 image이며,
+  운영 교체 전 owner-only SQLite online backup과 public app version을 확인한다.
 - 포크 merge commit `e1be01e`와 ARM64 image
   `trek:3.4.1-upstream-integration-e1be01e`는 전체 test/typecheck/i18n/build, 격리
   smoke와 운영 backup/public browser gate를 통과해 2026-07-20 배포했다.
@@ -195,3 +196,7 @@ Compose image 이름은 실제 Docker reference가 소문자여야 하므로 배
   통과했고 PR #1을 merge commit `86d3e9a0`로 포크 `main`에 병합했다. 병합 뒤 임시
   branch와 block-volume worktree는 삭제했으며 공식 upstream에는 branch나 PR을 만들지
   않았다. 다음 공식 release도 이 v3.4.1 기준점에서 exact tag를 병합한다.
+- 2026-07-23 포크 PR #9의 custom-version SemVer patch를 `e0c4ee55`로 병합하고
+  `trek:3.4.1-jsnetworkcorp-e0c4ee55`를 운영에 배포했다. 공식 `v3.4.1`과 같은 base의
+  build metadata는 update precedence가 같고, 즉시 rollback은 위
+  `trek:3.4.1-upstream-integration-e1be01e`다. 공식 upstream에는 PR을 만들지 않았다.
