@@ -167,3 +167,20 @@ no migration file is changed. Request an independent read-only review before mer
 - Production build completed. Existing non-blocking migration-test duplicate-column
   warnings, an intentional demo-module error-path message, dynamic-import warnings, and
   bundle-size warnings remain unchanged by this patch.
+
+## Production result
+
+- Fork PR #9 passed server/client/shared/i18n/lint checks and was squash-merged only to
+  `tomtomjskim/TREK` as `e0c4ee5501bbb73505078b5cc8bcf6b925c34306`.
+- Native ARM64 image `trek:3.4.1-jsnetworkcorp-e0c4ee55` preserves the exact public
+  `APP_VERSION=3.4.1+jsnetworkcorp.e0c4ee55`; isolated tmpfs health/config smoke passed.
+- An owner-only online backup matched the live schema, fork-migration, integrity,
+  foreign-key, packing and usage aggregates before deployment.
+- Production is healthy with restart count 0 and the original block-volume mounts.
+  Local/public health, HTTPS, canonical HTTP redirect, exact public version,
+  registration-off and unauthenticated admin guards passed.
+- Public Chromium login, secure context, manifest and service worker passed with no page
+  errors. The only console failures were expected pre-login 401 responses from the
+  system-notice and current-user endpoints.
+- Immediate rollback is code-only to `trek:3.4.1-upstream-integration-e1be01e`; database
+  restore is not required unless an independent integrity problem is confirmed.

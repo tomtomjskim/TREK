@@ -9,11 +9,13 @@
 | ----------------------- | -------------------------------------------------------------------- |
 | 애플리케이션 버전       | `3.4.1`                                                              |
 | v3.4.x 통합 기준 commit | `86d3e9a01c73f0de1aeaa73031353a2ddb3373cd`                           |
-| 운영 runtime source     | `e1be01e27b602b34f307bc8e8a678622b3c91588`                           |
-| 운영 image              | `trek:3.4.1-upstream-integration-e1be01e`                            |
+| 운영 runtime source     | `e0c4ee5501bbb73505078b5cc8bcf6b925c34306`                           |
+| 운영 image              | `trek:3.4.1-jsnetworkcorp-e0c4ee55`                                  |
 | 공식 release 기준       | exact `v3.4.1` tag target `a0994658890eae96624fb9cbe7f55867f047fea2` |
 
-통합 뒤의 formatting, CI 설정과 문서 commit은 runtime contract를 바꾸지 않는다.
+현재 runtime은 공식 v3.4.1 통합 위에 custom version SemVer correctness patch를
+적용한 포크 PR #9 기준이다. 이후의 formatting, CI 설정과 문서 commit은 runtime
+contract를 바꾸지 않는다.
 현재 운영·롤백 상태는 별도 운영 위키가, 코드와 Git 이력은 이 저장소가 source of
 truth다.
 
