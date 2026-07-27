@@ -1,5 +1,5 @@
-// FE-ADMIN-PKG-001 to FE-ADMIN-PKG-020
-import { render, screen, waitFor } from '../../../tests/helpers/render';
+// FE-ADMIN-PKG-001 to FE-ADMIN-PKG-034
+import { act, fireEvent, render, screen, waitFor } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../tests/helpers/msw/server';
@@ -13,6 +13,14 @@ const tmpl2 = { id: 2, name: 'City Break', item_count: 3, category_count: 1, cre
 const cat1 = { id: 10, template_id: 1, name: 'Clothing', sort_order: 0 }
 const item1 = { id: 100, category_id: 10, name: 'T-shirt', sort_order: 0 }
 const item2 = { id: 101, category_id: 10, name: 'Shorts', sort_order: 1 }
+
+function deferredRequest() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 beforeEach(() => {
   resetAllStores();
@@ -154,10 +162,6 @@ describe('PackingTemplateManager', () => {
     await screen.findByText('Beach Trip');
     expect(screen.getByText('City Break')).toBeInTheDocument();
 
-    // Find all Trash2 (delete) buttons — there are 2 (one per template)
-    const deleteButtons = screen.getAllByRole('button').filter(b =>
-      b.className.includes('hover:bg-red-50') || b.querySelector('svg')
-    );
     // Click the delete button for "Beach Trip" (first template row's trash button)
     // The buttons layout in each row: [chevron, edit, delete]
     // We find rows first
@@ -234,6 +238,7 @@ describe('PackingTemplateManager', () => {
     const catInput = screen.getByPlaceholderText('Category name (e.g. Clothing)');
     await user.type(catInput, 'Electronics{Enter}');
     await screen.findByText('Electronics');
+    expect(screen.getByText(/3 categories · 5 items/i)).toBeInTheDocument();
   });
 
   it('FE-ADMIN-PKG-012: adding an item to a category', async () => {
@@ -264,6 +269,7 @@ describe('PackingTemplateManager', () => {
     // Submit via Enter key (the input's onKeyDown handler triggers handleAddItem)
     await user.type(itemInput, '{Enter}');
     await screen.findByText('Sandals');
+    expect(screen.getByText(/2 categories · 6 items/i)).toBeInTheDocument();
   });
 
   it('FE-ADMIN-PKG-013: renaming a category inline updates its name', async () => {
@@ -326,6 +332,7 @@ describe('PackingTemplateManager', () => {
       expect(screen.queryByText('Clothing')).not.toBeInTheDocument();
       expect(screen.queryByText('T-shirt')).not.toBeInTheDocument();
     });
+    expect(screen.getByText(/1 categories · 3 items/i)).toBeInTheDocument();
   });
 
   it('FE-ADMIN-PKG-015: renaming an item inline updates its name', async () => {
@@ -395,6 +402,7 @@ describe('PackingTemplateManager', () => {
 
     await waitFor(() => expect(screen.queryByText('T-shirt')).not.toBeInTheDocument());
     expect(screen.getByText('Shorts')).toBeInTheDocument();
+    expect(screen.getByText(/2 categories · 4 items/i)).toBeInTheDocument();
   });
 
   it('FE-ADMIN-PKG-017: Escape cancels add category without saving', async () => {
@@ -507,5 +515,530 @@ describe('PackingTemplateManager', () => {
     await waitFor(() =>
       expect(screen.queryByPlaceholderText('Template name (e.g. Beach Holiday)')).not.toBeInTheDocument()
     );
+  });
+
+  it('FE-ADMIN-PKG-021: rapid duplicate Enter creates one template request', async () => {
+    const user = userEvent.setup();
+    const gate = deferredRequest();
+    let postCount = 0;
+    server.use(
+      http.post('/api/admin/packing-templates', async () => {
+        postCount += 1;
+        await gate.promise;
+        return HttpResponse.json({ template: { id: 99, name: 'New Template' } });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('No templates created yet');
+    await user.click(screen.getByRole('button', { name: /new template/i }));
+    const input = screen.getByPlaceholderText('Template name (e.g. Beach Holiday)');
+    fireEvent.change(input, { target: { value: 'New Template' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+
+    await waitFor(() => expect(postCount).toBeGreaterThanOrEqual(1));
+    gate.resolve();
+    await waitFor(() => expect(postCount).toBe(1));
+  });
+
+  it('FE-ADMIN-PKG-022: category submit ignores IME and repeated Enter events', async () => {
+    const user = userEvent.setup();
+    let postCount = 0;
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1] })
+      ),
+      http.get('/api/admin/packing-templates/1', () =>
+        HttpResponse.json({ categories: [], items: [] })
+      ),
+      http.post('/api/admin/packing-templates/1/categories', () => {
+        postCount += 1;
+        return HttpResponse.json({
+          category: { id: 20, template_id: 1, name: 'Electronics', sort_order: 1 },
+        });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await user.click(await screen.findByText('Add category'));
+    const input = screen.getByPlaceholderText('Category name (e.g. Clothing)');
+    fireEvent.change(input, { target: { value: 'Electronics' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', keyCode: 229 });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter', repeat: true });
+
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(postCount).toBe(0);
+  });
+
+  it('FE-ADMIN-PKG-023: rapid duplicate Enter creates one category request', async () => {
+    const user = userEvent.setup();
+    const gate = deferredRequest();
+    let postCount = 0;
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1] })
+      ),
+      http.get('/api/admin/packing-templates/1', () =>
+        HttpResponse.json({ categories: [], items: [] })
+      ),
+      http.post('/api/admin/packing-templates/1/categories', async () => {
+        postCount += 1;
+        await gate.promise;
+        return HttpResponse.json({
+          category: { id: 20, template_id: 1, name: 'Electronics', sort_order: 1 },
+        });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await user.click(await screen.findByText('Add category'));
+    const input = screen.getByPlaceholderText('Category name (e.g. Clothing)');
+    fireEvent.change(input, { target: { value: 'Electronics' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+
+    await waitFor(() => expect(postCount).toBeGreaterThanOrEqual(1));
+    gate.resolve();
+    await waitFor(() => expect(postCount).toBe(1));
+  });
+
+  it('FE-ADMIN-PKG-024: rapid duplicate Enter creates one item request', async () => {
+    const user = userEvent.setup();
+    const gate = deferredRequest();
+    let postCount = 0;
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1] })
+      ),
+      http.get('/api/admin/packing-templates/1', () =>
+        HttpResponse.json({ categories: [cat1], items: [] })
+      ),
+      http.post('/api/admin/packing-templates/1/categories/10/items', async () => {
+        postCount += 1;
+        await gate.promise;
+        return HttpResponse.json({
+          item: { id: 102, category_id: 10, name: 'Sandals', sort_order: 2 },
+        });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await screen.findByText('Clothing');
+    const clothingHeader = screen.getByText('Clothing').closest('div')!;
+    await user.click(clothingHeader.querySelector('button') as HTMLElement);
+    const input = screen.getByPlaceholderText('Item name');
+    fireEvent.change(input, { target: { value: 'Sandals' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+
+    await waitFor(() => expect(postCount).toBeGreaterThanOrEqual(1));
+    gate.resolve();
+    await waitFor(() => expect(postCount).toBe(1));
+  });
+
+  it('FE-ADMIN-PKG-025: template Enter followed by blur saves once', async () => {
+    const user = userEvent.setup();
+    const gate = deferredRequest();
+    let putCount = 0;
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1] })
+      ),
+      http.put('/api/admin/packing-templates/1', async () => {
+        putCount += 1;
+        await gate.promise;
+        return HttpResponse.json({ success: true });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    const row = screen.getByText('Beach Trip').closest('div')!.parentElement!;
+    await user.click(row.querySelector('button.hover\\:bg-slate-100') as HTMLElement);
+    const input = screen.getByDisplayValue('Beach Trip');
+    fireEvent.change(input, { target: { value: 'Summer Packing' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(putCount).toBeGreaterThanOrEqual(1));
+    gate.resolve();
+    await waitFor(() => expect(putCount).toBe(1));
+  });
+
+  it('FE-ADMIN-PKG-026: category Enter followed by blur saves once', async () => {
+    const user = userEvent.setup();
+    const gate = deferredRequest();
+    let putCount = 0;
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1] })
+      ),
+      http.get('/api/admin/packing-templates/1', () =>
+        HttpResponse.json({ categories: [cat1], items: [] })
+      ),
+      http.put('/api/admin/packing-templates/1/categories/10', async () => {
+        putCount += 1;
+        await gate.promise;
+        return HttpResponse.json({ success: true });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await screen.findByText('Clothing');
+    const categoryHeader = screen.getByText('Clothing').closest('div')!;
+    const editButtons = Array.from(categoryHeader.querySelectorAll('button')).filter(button =>
+      button.className.includes('hover:text-slate-700')
+    );
+    await user.click(editButtons[1]);
+    const input = screen.getByDisplayValue('Clothing');
+    fireEvent.change(input, { target: { value: 'Shoes' } });
+
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(putCount).toBeGreaterThanOrEqual(1));
+    gate.resolve();
+    await waitFor(() => expect(putCount).toBe(1));
+  });
+
+  it('FE-ADMIN-PKG-027: a stale detail response cannot overwrite the active template', async () => {
+    const user = userEvent.setup();
+    const beachGate = deferredRequest();
+    const cityGate = deferredRequest();
+    let beachStarted = false;
+    let cityStarted = false;
+    const cityCategory = { id: 20, template_id: 2, name: 'City Essentials', sort_order: 0 };
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1, tmpl2] })
+      ),
+      http.get('/api/admin/packing-templates/1', async () => {
+        beachStarted = true;
+        await beachGate.promise;
+        return HttpResponse.json({ categories: [cat1], items: [item1] });
+      }),
+      http.get('/api/admin/packing-templates/2', async () => {
+        cityStarted = true;
+        await cityGate.promise;
+        return HttpResponse.json({ categories: [cityCategory], items: [] });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await waitFor(() => expect(beachStarted).toBe(true));
+
+    await user.click(screen.getByText('City Break'));
+    await waitFor(() => expect(cityStarted).toBe(true));
+    await act(async () => {
+      cityGate.resolve();
+      await new Promise(resolve => setTimeout(resolve, 25));
+    });
+    expect(screen.getByText('City Essentials')).toBeInTheDocument();
+
+    await act(async () => {
+      beachGate.resolve();
+      await new Promise(resolve => setTimeout(resolve, 25));
+    });
+    expect(screen.getByText('City Essentials')).toBeInTheDocument();
+    expect(screen.queryByText('Clothing')).not.toBeInTheDocument();
+  });
+
+  it('FE-ADMIN-PKG-028: a pending category response cannot pollute the next template detail', async () => {
+    const user = userEvent.setup();
+    const createGate = deferredRequest();
+    let createStarted = false;
+    const cityCategory = { id: 20, template_id: 2, name: 'City Essentials', sort_order: 0 };
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1, tmpl2] })
+      ),
+      http.get('/api/admin/packing-templates/1', () =>
+        HttpResponse.json({ categories: [], items: [] })
+      ),
+      http.get('/api/admin/packing-templates/2', () =>
+        HttpResponse.json({ categories: [cityCategory], items: [] })
+      ),
+      http.post('/api/admin/packing-templates/1/categories', async () => {
+        createStarted = true;
+        await createGate.promise;
+        return HttpResponse.json({
+          category: { id: 30, template_id: 1, name: 'Late Beach Category', sort_order: 0 },
+        });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await user.click(await screen.findByText('Add category'));
+    const input = screen.getByPlaceholderText('Category name (e.g. Clothing)');
+    await user.type(input, 'Late Beach Category{Enter}');
+    await waitFor(() => expect(createStarted).toBe(true));
+
+    await user.click(screen.getByText('City Break'));
+    await screen.findByText('City Essentials');
+    await act(async () => {
+      createGate.resolve();
+      await new Promise(resolve => setTimeout(resolve, 25));
+    });
+
+    expect(screen.getByText('City Essentials')).toBeInTheDocument();
+    expect(screen.queryByText('Late Beach Category')).not.toBeInTheDocument();
+    expect(screen.getByText(/3 categories · 5 items/i)).toBeInTheDocument();
+    expect(screen.getByText(/1 categories · 3 items/i)).toBeInTheDocument();
+  });
+
+  it('FE-ADMIN-PKG-029: deleting a previously active template cannot collapse the current detail', async () => {
+    const user = userEvent.setup();
+    const deleteGate = deferredRequest();
+    let deleteStarted = false;
+    const cityCategory = { id: 20, template_id: 2, name: 'City Essentials', sort_order: 0 };
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1, tmpl2] })
+      ),
+      http.get('/api/admin/packing-templates/1', () =>
+        HttpResponse.json({ categories: [cat1], items: [] })
+      ),
+      http.get('/api/admin/packing-templates/2', () =>
+        HttpResponse.json({ categories: [cityCategory], items: [] })
+      ),
+      http.delete('/api/admin/packing-templates/1', async () => {
+        deleteStarted = true;
+        await deleteGate.promise;
+        return HttpResponse.json({ success: true });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await screen.findByText('Clothing');
+    const beachRow = screen.getByText('Beach Trip').closest('div')!;
+    const deleteButton = beachRow.querySelector('button.hover\\:bg-red-50') as HTMLElement;
+    await user.click(deleteButton);
+    await waitFor(() => expect(deleteStarted).toBe(true));
+
+    await user.click(screen.getByText('City Break'));
+    await screen.findByText('City Essentials');
+    await act(async () => {
+      deleteGate.resolve();
+      await new Promise(resolve => setTimeout(resolve, 25));
+    });
+
+    expect(screen.queryByText('Beach Trip')).not.toBeInTheDocument();
+    expect(screen.getByText('City Essentials')).toBeInTheDocument();
+  });
+
+  it('FE-ADMIN-PKG-030: one template cannot start overlapping nested mutations', async () => {
+    const user = userEvent.setup();
+    const itemGate = deferredRequest();
+    let itemCreateStarted = false;
+    let categoryDeleteCount = 0;
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1] })
+      ),
+      http.get('/api/admin/packing-templates/1', () =>
+        HttpResponse.json({ categories: [cat1], items: [item1, item2] })
+      ),
+      http.post('/api/admin/packing-templates/1/categories/10/items', async () => {
+        itemCreateStarted = true;
+        await itemGate.promise;
+        return HttpResponse.json({
+          item: { id: 102, category_id: 10, name: 'Sandals', sort_order: 2 },
+        });
+      }),
+      http.delete('/api/admin/packing-templates/1/categories/10', () => {
+        categoryDeleteCount += 1;
+        return HttpResponse.json({ success: true });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await screen.findByText('Clothing');
+    const categoryHeader = screen.getByText('Clothing').closest('div')!;
+    const categoryButtons = categoryHeader.querySelectorAll('button');
+    await user.click(categoryButtons[0]);
+    const input = screen.getByPlaceholderText('Item name');
+    await user.type(input, 'Sandals{Enter}');
+    await waitFor(() => expect(itemCreateStarted).toBe(true));
+
+    const deleteButton = categoryHeader.querySelector('button.hover\\:text-red-500') as HTMLButtonElement;
+    expect(deleteButton).toBeDisabled();
+    fireEvent.click(deleteButton);
+    expect(categoryDeleteCount).toBe(0);
+
+    await act(async () => {
+      itemGate.resolve();
+      await new Promise(resolve => setTimeout(resolve, 25));
+    });
+    expect(await screen.findByText('Sandals')).toBeInTheDocument();
+    expect(screen.getByText(/2 categories · 6 items/i)).toBeInTheDocument();
+  });
+
+  it('FE-ADMIN-PKG-031: a mutation result is upserted after reopening the same template', async () => {
+    const user = userEvent.setup();
+    const createGate = deferredRequest();
+    let createStarted = false;
+    let createCompleted = false;
+    let detailGetCount = 0;
+    const createdCategory = {
+      id: 30,
+      template_id: 1,
+      name: 'Reopened Category',
+      sort_order: 0,
+    };
+    const canonicalCategory = {
+      id: 31,
+      template_id: 1,
+      name: 'Canonical Companion',
+      sort_order: 1,
+    };
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1] })
+      ),
+      http.get('/api/admin/packing-templates/1', () => {
+        detailGetCount += 1;
+        return HttpResponse.json({
+          categories: createCompleted ? [createdCategory, canonicalCategory] : [],
+          items: [],
+        });
+      }),
+      http.post('/api/admin/packing-templates/1/categories', async () => {
+        createStarted = true;
+        await createGate.promise;
+        createCompleted = true;
+        return HttpResponse.json({ category: createdCategory });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await user.click(await screen.findByText('Add category'));
+    const input = screen.getByPlaceholderText('Category name (e.g. Clothing)');
+    await user.type(input, 'Reopened Category{Enter}');
+    await waitFor(() => expect(createStarted).toBe(true));
+
+    await user.click(screen.getByText('Beach Trip'));
+    await user.click(screen.getByText('Beach Trip'));
+    await screen.findByText('Add category');
+    await act(async () => {
+      createGate.resolve();
+      await new Promise(resolve => setTimeout(resolve, 25));
+    });
+
+    expect(screen.getAllByText('Reopened Category')).toHaveLength(1);
+    expect(screen.getByText('Canonical Companion')).toBeInTheDocument();
+    expect(detailGetCount).toBe(3);
+    expect(screen.getByText(/3 categories · 5 items/i)).toBeInTheDocument();
+  });
+
+  it('FE-ADMIN-PKG-032: nested writes stay disabled until template detail finishes loading', async () => {
+    const user = userEvent.setup();
+    const detailGate = deferredRequest();
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1] })
+      ),
+      http.get('/api/admin/packing-templates/1', async () => {
+        await detailGate.promise;
+        return HttpResponse.json({ categories: [cat1], items: [] });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    const addCategoryButton = await screen.findByText('Add category');
+    expect(addCategoryButton).toBeDisabled();
+
+    await act(async () => {
+      detailGate.resolve();
+      await new Promise(resolve => setTimeout(resolve, 25));
+    });
+    expect(addCategoryButton).not.toBeDisabled();
+    expect(screen.getByText('Clothing')).toBeInTheDocument();
+  });
+
+  it('FE-ADMIN-PKG-033: a failed template rename can be retried', async () => {
+    const user = userEvent.setup();
+    let putCount = 0;
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1] })
+      ),
+      http.put('/api/admin/packing-templates/1', () => {
+        putCount += 1;
+        return putCount === 1
+          ? HttpResponse.json({ error: 'temporary failure' }, { status: 500 })
+          : HttpResponse.json({ success: true });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    const row = screen.getByText('Beach Trip').closest('div')!;
+    await user.click(row.querySelector('button.hover\\:bg-slate-100') as HTMLElement);
+    const input = screen.getByDisplayValue('Beach Trip');
+    fireEvent.change(input, { target: { value: 'Retry Packing' } });
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    await waitFor(() => expect(putCount).toBe(1));
+    await waitFor(() => expect(input).not.toBeDisabled());
+
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    await waitFor(() => expect(putCount).toBe(2));
+    expect(await screen.findByText('Retry Packing')).toBeInTheDocument();
+  });
+
+  it('FE-ADMIN-PKG-034: a failed category create leaves summary counts unchanged', async () => {
+    const user = userEvent.setup();
+    let postCount = 0;
+    server.use(
+      http.get('/api/admin/packing-templates', () =>
+        HttpResponse.json({ templates: [tmpl1] })
+      ),
+      http.get('/api/admin/packing-templates/1', () =>
+        HttpResponse.json({ categories: [], items: [] })
+      ),
+      http.post('/api/admin/packing-templates/1/categories', () => {
+        postCount += 1;
+        return HttpResponse.json({ error: 'temporary failure' }, { status: 500 });
+      })
+    );
+
+    render(<PackingTemplateManager />);
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await user.click(await screen.findByText('Add category'));
+    const input = screen.getByPlaceholderText('Category name (e.g. Clothing)');
+    await user.type(input, 'Not Created{Enter}');
+    await waitFor(() => expect(postCount).toBe(1));
+    await waitFor(() => expect(input).not.toBeDisabled());
+
+    expect(screen.getByText(/2 categories · 5 items/i)).toBeInTheDocument();
+    expect(screen.queryByText('Not Created')).not.toBeInTheDocument();
+    expect(input).toHaveValue('Not Created');
   });
 });

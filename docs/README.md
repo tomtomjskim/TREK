@@ -41,6 +41,8 @@ truth다.
   PlaceAvatar observer callback·disconnect 계약과 test mock alias lint 오류 게이트
 - [Custom version SemVer comparison](plans/2026-07-23-custom-version-semver-comparison.md):
   포크 build metadata를 보존하면서 공식 release update와 관리자 알림을 판정하는 계약
+- [Packing template admin submission guard](plans/2026-07-27-packing-template-admin-submission-guard.md):
+  생성·이름 변경 exact-once, 상세 응답 경합과 관리자 집계 배지 동기화 계약
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계
