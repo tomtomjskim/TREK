@@ -5,6 +5,7 @@
 > 기준: fork `main` `c5ff1d27`, upstream `dev` `292f1b18`
 > 결과: 최초 `FAIL` → 3차 blocker closure 후 문서 gate `PASS`
 > 구현 상태: source code, migration, 게시, push, PR, 배포 모두 미실행
+> 실행 정책: 로컬·개인 포크 pilot 허용, 공식 게시·branch·PR 보류
 
 ## 판정
 
@@ -24,10 +25,12 @@ blocker-first 리뷰를 수행했다. 세 리뷰 모두 최초 문서 그대로 
 법정 자동 산정은 만들지 않되, 첫 write 전에 필요한 데이터 불변식·권한·감사
 경계는 축소하지 않는다.
 
-이 `PASS`는 설계·계획 문서의 material blocker가 닫혔다는 뜻일 뿐 구현 승인이나
-실행 성공을 의미하지 않는다. correctness PR의 carry 의미와 feature core 수용
-여부는 upstream maintainer가 결정해야 하며, Discord 승인과 TOM의 별도 게시
-승인이 없으면 코드를 작성하거나 공식 저장소에 게시하지 않는다.
+이 `PASS`는 설계·계획 문서의 material blocker가 닫혔다는 뜻일 뿐 구현 성공을
+의미하지 않는다. TOM은 이후 로컬·개인 포크 pilot을 승인했으므로 코드는
+[fork-first validation policy](../upstream/fork-first-validation-policy.md) 안에서
+구현할 수 있다. correctness의 공식 의미와 feature core 수용 여부는 향후 upstream
+maintainer가 결정하며, 기여 재개와 별도 게시 승인 전에는 Discord·공식 branch·PR
+작업을 하지 않는다.
 
 ## 리뷰 루프
 

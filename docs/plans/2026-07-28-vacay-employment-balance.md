@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Fix the current Vacay data-correctness hazards first, then add a backwards-compatible employment, leave-period, and personal balance model in maintainer-approved upstream slices.
+**Goal:** Fix the current Vacay data-correctness hazards first, then add a backwards-compatible employment, leave-period, and personal balance model in fork-validated slices that can later be extracted for maintainer-approved upstream contributions.
 
 **Architecture:** Keep plans as collaboration projections while users own employment, policy, entries, and balances. Ship the smallest usable single-employment slice, use immutable period and minute-basis snapshots, an append-only adjustment journal, entry-owned usage, shared authorization across REST/MCP/plugin surfaces, and a confirmed one-way legacy activation.
 
@@ -11,25 +11,52 @@
 ---
 
 > 작성일: 2026-07-28
-> 상태: 3관점 적대 리뷰 PASS, Discord 승인 전 코드 실행 금지
+> 상태: 3관점 적대 리뷰 PASS, fork-first pilot 실행 가능, 공식 기여 보류
 > 설계: [Vacay employment and balance design](2026-07-28-vacay-employment-balance-design.md)
 > 제안: [Vacay upstream correctness proposal](2026-07-28-vacay-upstream-correctness-proposal.md)
 > 리뷰: [Vacay adversarial review](2026-07-28-vacay-employment-balance-adversarial-review.md)
+> 정책: [Fork-first validation policy](../upstream/fork-first-validation-policy.md)
 
 ## 실행 원칙
 
-- 아래 correctness 항목은 각각 별도 `upstream/dev` worktree, branch, commit, PR이다.
-- Discord에서 승인된 한 항목만 구현한다. 승인되지 않은 다음 항목을 미리 코딩하지
-  않는다.
-- feature slice는 correctness 결과와 maintainer 피드백 뒤에 파일·migration slot을
-  다시 확인하고 실행한다.
-- 공식 branch push와 PR 생성은 Discord 승인과 별개로 TOM의 명시 승인을 다시 받는다.
-- 포크 `main`, 운영 DB, Compose와 이미지는 이 계획의 대상이 아니다.
+- 현재 실행은 `origin/main` 기반의 격리 worktree에서 하는 로컬·개인 포크
+  pilot이다. 아래 correctness 항목은 각각 별도 test와 commit으로 유지한다.
+- feature slice는 correctness 결과 뒤에 파일과 fork migration ID를 다시 확인하고
+  실행한다. 포크 migration은 공식 numeric slot을 사용하지 않는다.
+- Discord 게시, 공식 issue/discussion, `upstream-contrib` branch와 공식 PR 작업은
+  현재 실행 대상이 아니다.
+- 향후 공식 기여를 재개할 때 아래 `upstream/dev`·Discord·PR 지시는 “기여 재개용
+  extraction lane”에만 적용한다. 포크 feature branch를 그대로 공식 PR로 보내지 않는다.
+- 개인 포크 push/PR, 포크 `main`, 운영 DB, Compose와 이미지는 각각 TOM의 해당
+  작업 명시 승인 없이는 이 계획의 대상이 아니다.
 - Architecture gate는 `full_gate_required`, rollback class는 `data_migration`이다.
 - upstream의 one-change-per-PR과 제품의 usable release를 구분한다. 여러 작은
   feature PR이 합쳐져도 R1 수직 흐름을 통과하기 전에는 MVP 완료로 부르지 않는다.
 
-### Task 0: Refresh The Contribution Gate And Select One Scope
+### Task 0A: Refresh The Fork Pilot Baseline And Select One Scope
+
+**Files:**
+
+- Read: `AGENTS.md`
+- Read: `docs/upstream/fork-first-validation-policy.md`
+- Read: current fork `package.json` and relevant workspace package/config files
+- Read: relevant Vacay source and tests listed in Task 0B
+
+**Steps:**
+
+1. Confirm the worktree is based on the intended `origin/main` and both remotes
+   still have the documented roles.
+2. Fetch `upstream/dev` read-only to detect source or contract drift; do not
+   create an upstream branch or external post.
+3. Select exactly one correctness item or one dependency-ordered feature slice.
+4. Record lane, fork migration ownership, focused RED test, full-gate impact and
+   retirement signal.
+5. Implement only that slice, then stop before personal-fork push, `main`
+   integration or deployment unless TOM separately requests it.
+
+### Task 0B: Future Upstream Contribution Gate
+
+Run this task only after TOM explicitly reactivates official contribution.
 
 **Files:**
 
@@ -61,9 +88,18 @@
 3. Search open issues, PRs, and Discord for the four proposed corrections.
 4. Post only the first Discord draft from the proposal document.
 5. Record the maintainer response and select exactly one approved PR scope.
-6. Stop if no scope is approved. Do not substitute a fork implementation.
+6. Stop the upstream extraction lane if no scope is approved. The already
+   authorized fork pilot remains a separate workflow.
 
 ### Task 1: Create An Isolated Approved-PR Worktree
+
+Run this task only after Task 0B approval. For the current fork pilot, use the
+existing block-volume fork worktree and do not create `upstream-contrib/*`.
+
+Tasks 1–12 below preserve the future upstream extraction sequence. A current
+fork pilot may reuse the matching RED specification and technical checks, but
+must replace PR/Discord steps with Task 0A, use fork migration ownership and
+record the selected slice in a fork-pilot evidence update before implementation.
 
 **Files:**
 
@@ -742,3 +778,7 @@ Even after upstream PR acceptance, do not deploy `upstream/dev` to the
 JSNetworkCorp service. Wait for an official release tag, integrate it in the
 fork release-sync worktree, run migration/backup/rollback gates, and obtain a
 separate production deployment approval.
+
+During the current publication hold, a fork pilot reaching this boundary still
+stops before personal-fork push, `main` integration and deployment unless TOM
+explicitly authorizes the corresponding action.

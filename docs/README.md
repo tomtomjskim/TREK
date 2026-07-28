@@ -26,6 +26,8 @@ truth다.
   요청·데이터 흐름, 포크 hotspot과 검증 경로
 - [Fork and upstream strategy](upstream/README.md): 저장소 역할, 변경 lane,
   migration namespace와 release 통합 절차
+- [Fork-first validation policy](upstream/fork-first-validation-policy.md):
+  로컬·개인 포크 검증 범위, 원격 작업 경계, 코드 컨벤션과 향후 공식 기여 재개 조건
 - [v3.4.x integration evidence](plans/2026-07-19-upstream-v3.4-integration-evidence.md):
   통합·테스트·이미지·배포·PR closeout 증거
 - [Client test warning cleanup](plans/2026-07-20-client-test-warning-cleanup.md):

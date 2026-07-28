@@ -7,6 +7,9 @@
 현재 runtime 진입점과 fork hotspot은 [`docs/project-source-map.md`](../project-source-map.md)를
 먼저 확인한다.
 
+현재 로컬·개인 포크 검증과 공식 기여 보류 경계는
+[`fork-first-validation-policy.md`](fork-first-validation-policy.md)가 우선한다.
+
 ## Repository roles
 
 | 이름 | 저장소/기준 | 역할 |
@@ -22,10 +25,22 @@
 fast-forward하지 않고 격리 브랜치에서 merge한다. 이미 공개된 포크 `main`은
 rebase하지 않는다.
 
+## Current publication mode
+
+2026-07-28부터 TOM이 해제한다고 명시할 때까지 고도화는 로컬 worktree와
+`origin` 개인 포크에서 먼저 검증한다. `upstream` fetch·diff는 읽기 전용으로
+허용하지만 Discord 게시, 공식 issue/discussion, 공식 branch push와 PR 생성은
+보류한다.
+
+이 방식은 change lane을 바꾸지 않는다. 일반 기능은 계속
+`upstream-contrib` 후보로 분류할 수 있지만 현재 구현 branch는 `origin/main`
+기반의 포크 검증 branch다. 향후 공식 기여를 재개하면 해당 branch를 직접 PR로
+보내지 않고 최신 `upstream/dev`에서 일반화된 최소 변경을 새로 추출한다.
+
 ## Official contribution gate
 
 공식 `CONTRIBUTING.md`, PR template, target-branch workflow를 2026-07-28
-`upstream/dev` `351b5fb4`에서 다시 확인했다. 현재 계약은 다음과 같다.
+`upstream/dev` `292f1b18`에서 다시 확인했다. 현재 계약은 다음과 같다.
 
 1. 구현 전에 Discord `#github-pr`에서 아이디어와 범위를 승인받는다.
 2. PR 하나에는 관련된 변경 한 가지만 포함한다.

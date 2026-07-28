@@ -1,8 +1,13 @@
 # Vacay Upstream Correctness Proposal
 
 > 작성일: 2026-07-28
-> 상태: 적대 리뷰 보완된 Discord 제안 초안, 게시·코드 작성·공식 PR 미실행
+> 상태: 향후 기여 재개용 Discord 제안 초안, 게시·공식 branch·PR 미실행
 > 조사 기준: `liketrek/TREK` `upstream/dev` `292f1b18`
+
+현재 로컬·개인 포크 pilot은
+[fork-first validation policy](../upstream/fork-first-validation-policy.md)를
+따른다. 이 초안은 보존하되 TOM이 공식 기여를 재개하기 전에는 게시하거나
+공식 작업 흐름을 시작하지 않는다.
 
 ## 목적
 
@@ -10,8 +15,9 @@ Employment/period/balance 기능을 추가하기 전에 현재 Vacay 데이터 �
 작은 독립 PR로 분리한다. 공식 규칙에 따라 Discord `#github-pr`에서 maintainer가
 원하는 범위를 먼저 확인하며, 서로 다른 수정이나 신규 기능을 한 PR에 묶지 않는다.
 
-이 문서의 테스트는 구현 전 RED specification이다. upstream 승인을 받지 않았으므로
-실제 테스트 파일이나 소스는 아직 수정하지 않았다.
+이 문서의 테스트는 upstream extraction을 위한 RED specification이다. 포크
+pilot에서 같은 문제를 먼저 검증할 수 있지만, 공식 기여 시에는 maintainer 승인
+범위와 최신 `upstream/dev`에 맞춰 별도 test·implementation으로 재구성한다.
 
 ## 확인된 기존 동작
 

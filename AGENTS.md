@@ -10,6 +10,21 @@
   `docs/upstream/README.md`, 현재 작업과 관련된 `docs/plans/`, 그리고
   `/home/ubuntu/personal-wiki/wiki/{reviewed,generated}/llm/codebase/trek/`의 관련 문서를 읽는다.
 
+## Current publication hold
+
+- 2026-07-28부터 TOM이 해제한다고 명시할 때까지 기능 고도화와 검증은 로컬
+  worktree와 개인 포크 `origin`(`tomtomjskim/TREK`) 안에서만 진행한다.
+- 최신 코드·정책 확인을 위한 `upstream` fetch와 diff는 허용하지만, Discord 게시,
+  공식 issue/discussion 작성, 공식 저장소 branch push와
+  `liketrek/TREK` pull request 생성은 수행하지 않는다.
+- 개인 포크 push/PR, 포크 `main` 통합과 운영 배포도 각각 TOM의 해당 작업 명시
+  요청이 있을 때만 실행한다.
+- `fork-first validation`은 임시 게시 방식이지 새 change lane이 아니다. 변경은
+  아래 네 lane 중 하나로 계속 분류하고, 향후 공식 기여 시 최신 `upstream/dev`에서
+  일반화된 최소 변경을 새로 추출한다.
+- 상세 실행·검증·기여 재개 조건은
+  `docs/upstream/fork-first-validation-policy.md`를 따른다.
+
 ## Change lanes
 
 변경을 시작하기 전에 다음 중 하나로 분류하고, 서로 다른 lane을 한 커밋이나 공식 PR에 섞지 않는다.

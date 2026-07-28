@@ -1,7 +1,7 @@
 # Vacay Employment and Balance Design
 
 > 작성일: 2026-07-28
-> 상태: 3관점 적대 리뷰 PASS, 구현 전 upstream Discord 범위 승인 대기
+> 상태: 3관점 적대 리뷰 PASS, 로컬·개인 포크 pilot 허용, 공식 기여 보류
 > 기준: fork `main` `c5ff1d27`, upstream `dev` `292f1b18`
 
 ## 결론
@@ -15,6 +15,12 @@ Vacay를 단순한 `연도별 부여일수 - 달력 항목 수` 계산기에서 
 코어 조건문이 아니라 사용자 확인형 policy provider로 분리한다. 현재 plugin
 계약만으로는 native Vacay UI, core DB transaction, 공유·MCP 권한을 함께 보장할 수
 없으므로 장기 원장을 plugin-owned DB에 먼저 구현하지 않는다.
+
+현재 실행 방식은
+[fork-first validation policy](../upstream/fork-first-validation-policy.md)를
+따른다. `upstream-contrib`는 장기 lane 분류이며 지금 공식 PR을 연다는 뜻이
+아니다. 로컬·개인 포크에서는 작은 slice를 구현·검증할 수 있고, Discord 게시와
+공식 issue/branch/PR은 TOM이 기여를 재개할 때까지 보류한다.
 
 첫 release의 대상은 한 회사에 재직하며 HR이 알려 준 특정일 현재 잔여를
 종일·반일로 기록하려는 개인 사용자다. 완전한 원장을 먼저 만들지 않고
@@ -442,7 +448,8 @@ activation, opening, planned/taken 정정, holiday pending과 오류 상태의 �
 - join/leave/rejoin 전체에서 보존되는 fusion user-year
 - 출처 없는 entry를 이동하지 않는 trip date change
 
-각 항목은 별도 maintainer 승인과 별도 PR이다. R1 holiday import는 entry
+포크 pilot에서는 각 항목을 별도 test·commit으로 유지한다. 향후 공식 기여에서는
+별도 maintainer 승인과 별도 PR로 추출한다. R1 holiday import는 entry
 preservation, trip-linked leave는 unlinked shift 차단을 선행한다. R1 activation은
 원래 신규·solo 사용자만 허용하며, fusion correctness가 없으면 dissolution을 통한
 solo 전환도 제공하지 않는다. 수용되지 않은 관련 legacy bridge/provider/trip
@@ -625,10 +632,15 @@ plugin-only 원장은 채택하지 않는다.
 
 ## 구현 gate
 
-공식 프로젝트 규칙상 코드 작성 전에 Discord `#github-pr` 승인이 필요하다. 먼저
-독립 correctness PR 후보와 generic v2 방향을 제안하고, maintainer가 선택한 가장
-작은 범위만 최신 `upstream/dev`의 별도 worktree에서 구현한다. 이 문서 작성만으로
-공식 저장소 push, PR 생성 또는 포크 운영 배포를 승인한 것으로 보지 않는다.
+현재 포크 pilot은 `origin/main` 기반의 격리 worktree에서 독립 correctness와
+generic v2 slice를 작게 구현·검증할 수 있다. 포크 schema는 공식 migration slot을
+차지하지 않고 fork namespace를 사용한다. 각 correctness 항목은 향후 한 변경씩
+추출할 수 있도록 test와 commit을 분리한다.
+
+공식 기여를 재개할 때는 Discord `#github-pr`에서 범위를 먼저 승인받고,
+maintainer가 선택한 가장 작은 한 항목만 최신 `upstream/dev`의 새 worktree에서
+재구성한다. 이 문서와 포크 pilot은 Discord 게시, 공식 저장소 push·PR 또는 포크
+운영 배포를 승인한 것으로 보지 않는다.
 
 Architecture readiness는 `full_gate_required`, rollback class는
 `data_migration`이다. shared schema, SQLite DDL, auth/privacy, REST, MCP, plugin,
