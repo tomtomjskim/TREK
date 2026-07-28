@@ -201,3 +201,7 @@ Compose image 이름은 실제 Docker reference가 소문자여야 하므로 배
   `trek:3.4.1-jsnetworkcorp-e0c4ee55`를 운영에 배포했다. 공식 `v3.4.1`과 같은 base의
   build metadata는 update precedence가 같고, 즉시 rollback은 위
   `trek:3.4.1-upstream-integration-e1be01e`다. 공식 upstream에는 PR을 만들지 않았다.
+- 2026-07-28 packing-template 관리자 exact-once/race guard commit `1747b8a6`을 포크
+  `main`에 fast-forward하고 `trek:3.4.1-jsnetworkcorp-1747b8a6`로 배포했다. DB/API/
+  permission 변경은 없으며 즉시 rollback은 `trek:3.4.1-jsnetworkcorp-e0c4ee55`다.
+  공식 upstream에는 branch나 PR을 만들지 않았다.
