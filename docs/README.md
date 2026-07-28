@@ -44,6 +44,14 @@ truth다.
   포크 build metadata를 보존하면서 공식 release update와 관리자 알림을 판정하는 계약
 - [Packing template admin submission guard](plans/2026-07-27-packing-template-admin-submission-guard.md):
   생성·이름 변경 exact-once, 상세 응답 경합과 관리자 집계 배지 동기화 계약
+- [Vacay employment and balance design](plans/2026-07-28-vacay-employment-balance-design.md):
+  회사·입사일 기준기간, opening balance, planned/taken 상태, self-only 권한과
+  한국 정책 provider 경계
+- [Vacay upstream correctness proposal](plans/2026-07-28-vacay-upstream-correctness-proposal.md):
+  read purity, holiday data loss, fusion 상태 보존, 무관한 trip shift를 분리한
+  공식 Discord 제안과 RED specification
+- [Vacay employment and balance implementation plan](plans/2026-07-28-vacay-employment-balance.md):
+  Discord gate 뒤 독립 correctness PR과 generic v2 slice를 실행하는 TDD 순서
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

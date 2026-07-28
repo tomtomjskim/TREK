@@ -24,8 +24,8 @@ rebase하지 않는다.
 
 ## Official contribution gate
 
-공식 `CONTRIBUTING.md`, PR template, target-branch workflow를 2026-07-19
-`upstream/dev` `483b2b1d`에서 다시 확인했다. 현재 계약은 다음과 같다.
+공식 `CONTRIBUTING.md`, PR template, target-branch workflow를 2026-07-28
+`upstream/dev` `351b5fb4`에서 다시 확인했다. 현재 계약은 다음과 같다.
 
 1. 구현 전에 Discord `#github-pr`에서 아이디어와 범위를 승인받는다.
 2. PR 하나에는 관련된 변경 한 가지만 포함한다.
@@ -93,6 +93,7 @@ v3.4의 실제 SDK/host 계약을 기준으로 한 판단이다. 다음 release�
 | Google place enrichment | `http:outbound:<host>`, `db:own` usage ledger/migration, user/instance settings, settings action, authenticated route, `ctx.places.update`, `ctx.meta` external ID | native import modal과 admin usage panel에 provider UI를 주입하는 전용 hook이 없다. provider/ledger를 먼저 plugin service로 추출하고 native UI adapter는 얇은 fork-core로 남기는 hybrid가 현실적이다. |
 | Google hard cap | plugin-owned DB의 선예약과 외부 호출 wrapper | 앱 core의 다른 Google 호출까지 한 plugin이 강제할 수 없다. 모든 provider call이 plugin을 통과하기 전에는 core guard를 유지한다. |
 | packing personal templates/privacy | 별도 plugin DB와 독립 page는 가능 | core packing table, native list/template UI, REST/MCP/plugin write 권한을 일관되게 바꾸는 hook이 없다. 보안 contract를 포함한 단독 upstream PR 또는 최소 fork-core가 맞다. |
+| Vacay employment/period/balance | 별도 plugin page와 plugin-owned journal prototype은 가능 | core Vacay entry·공유·MCP와 이중 source가 되고 별도 SQLite라 원자적 transaction이 불가능하다. generic core는 upstream contribution, 한국 규칙은 core contract 뒤 policy provider가 맞다. |
 | 지도 label locale | plugin frame 안의 별도 지도만 가능 | 공통 MapLibre/Mapbox style expression과 Settings를 바꾸므로 단독 upstream PR 후보다. |
 | Fold adaptive controls | table contributor로 대체 불가 | planner의 공통 responsive layout이므로 단독 upstream PR 후보다. |
 | Android/Cloudflare/Compose | 해당 없음 | package identity, signing, domain, reverse proxy는 instance-only로 유지한다. |
@@ -150,6 +151,8 @@ v3.4 통합부터 다음 계약을 사용한다.
 | Client observer test-mock alias lint guardrail | fork core maintenance | 높음 | 공식 release가 PlaceAvatar intersection callback의 photo fetch·disconnect 계약을 보존하고 `no-this-alias` 위반을 없애면 local test patch 제거 |
 | Custom `APP_VERSION` SemVer comparison | fork core | 높음 | 공식 release가 build metadata를 update precedence에서 제외하고 same-release API·notification 회귀를 통과하면 local patch 제거 |
 | Packing template admin submission/race guard | fork core | 높음 | 공식 release가 create exact-request-count, IME/repeat, Enter+blur rename, 역순 상세 응답, CRUD count와 390px nested editor 회귀를 통과하면 local patch 제거 |
+| Vacay stats read purity·holiday entry 보존·fusion user-year 보존·unlinked trip shift 제거 | upstream contribution 후보 | 높음, correctness/data safety | Discord에서 각 범위를 별도 승인받고 한 수정당 한 PR; 수용 release 통합 뒤 동등성 검증 |
+| Vacay employment/period/balance v2 | upstream contribution 후보 | 중간, 제품 방향 승인 필요 | [generic design](../plans/2026-07-28-vacay-employment-balance-design.md)과 [correctness proposal](../plans/2026-07-28-vacay-upstream-correctness-proposal.md)을 기준으로 core와 한국 policy provider를 분리 |
 | packing Personal/Shared privacy | upstream contribution 후보 | 높음, security fix | 공식 privacy contract와 negative tests가 수용된 release 후 local patch 제거 |
 | packing template scope R1 | fork core / upstream discussion | 중간 | 개인 템플릿 제품 방향 승인 전 writer는 비활성, migration은 fork namespace 유지 |
 | Google place enrichment와 app hard cap | fork core, plugin 추출 검토 | 중간 | provider 호출·usage ledger를 plugin-owned DB/action으로 옮길 SDK gap 분석 필요 |
