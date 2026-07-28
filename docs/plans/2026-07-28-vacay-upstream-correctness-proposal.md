@@ -1,8 +1,8 @@
 # Vacay Upstream Correctness Proposal
 
 > 작성일: 2026-07-28
-> 상태: Discord 제안 초안, 게시·코드 작성·공식 PR 미실행
-> 조사 기준: `liketrek/TREK` `upstream/dev` `351b5fb4`
+> 상태: 적대 리뷰 보완된 Discord 제안 초안, 게시·코드 작성·공식 PR 미실행
+> 조사 기준: `liketrek/TREK` `upstream/dev` `292f1b18`
 
 ## 목적
 
@@ -23,22 +23,33 @@ Employment/period/balance 기능을 추가하기 전에 현재 Vacay 데이터 �
 | fusion 해제 시 user-year를 개인 plan으로 돌려놓지 않음 | `acceptInvite()` `:637-679`, `dissolvePlan()` `:704-730`                     | dissolution 후 allowance/carry 보존 테스트 없음        |
 | trip 시작일 변경이 출처 없는 Vacay entry를 이동        | `tripService.updateTrip()` `server/src/services/tripService.ts:234-308`      | MCP `update_trip`과 bridge 테스트가 이동을 기대        |
 
-## PR 1 — stats projection을 side-effect free로 변경
+추가로 REST stats controller는 `getActivePlanId()`를 거치며 개인 plan이 없을 때
+legacy plan/year/color를 생성할 수 있다. 따라서 `getStats()`의 carry UPSERT 제거와
+“모든 stats endpoint가 어떤 상태에서도 완전 무쓰기”는 같은 범위가 아니다. 이
+제안은 established plan의 carry projection만 다루고 lazy personal-plan
+provisioning은 별도 legacy debt로 기록한다.
+
+## PR 1 — carry projection을 stale하지 않은 pure read로 변경
 
 권장 제목:
 
 ```text
-fix(vacay): make stats projection side-effect free
+fix(vacay): keep carry projection read-only
 ```
 
 ### 범위
 
-- `VacayService.getStats()`에서 다음 연도 `vacay_user_years` UPSERT를 제거한다.
+- **구현 전에** maintainer가 legacy `carried_over`의 authoritative 의미를
+  확인한다. 권장안은 이전 기간 allowance와 실제 사용에서 carry를 요청 시
+  계산하고 다음 연도 row에 쓰지 않는 pure projection이다.
+- 다음 연도 row가 이미 있어도 이전 기간 entry·allowance 변경을 다음 stats에
+  반영한다. UPSERT만 제거해 stale 값을 남기는 수정은 금지한다.
 - REST `GET /api/addons/vacay/stats/:year`와 MCP `get_vacay_stats`가 같은 pure
   projection을 사용하게 유지한다.
-- 현재 요청의 response shape와 수치는 바꾸지 않는다.
+- response shape와 carry 외의 산술은 유지한다. 기존 row가 stale했다면 carry
+  수치는 의도적으로 교정될 수 있다.
 - `GET /plan`의 legacy lazy provisioning은 별도 제품 계약이므로 이 PR에 넣지 않는다.
-- carry 확정 command 또는 전체 ledger 모델은 별도 논의로 남긴다.
+- carry 확정 command, expiry/FIFO 또는 전체 ledger 모델은 별도 논의로 남긴다.
 
 ### RED specification
 
@@ -50,17 +61,23 @@ fix(vacay): make stats projection side-effect free
 
 테스트:
 
-1. 현재 연도와 다음 연도 row를 seed한다.
-2. 관련 row snapshot과 `SELECT total_changes()`를 저장한다.
-3. service `getStats`, REST GET, MCP read를 각각 호출한다.
-4. response는 기존 수치와 같고 `total_changes()` 및 모든 row snapshot은
-   불변임을 확인한다.
-5. read-only MCP annotation과 실제 DB 동작이 일치함을 확인한다.
+1. established personal plan에 현재 연도와 다음 연도 row를 seed한다.
+2. service test는 관련 row snapshot과 `SELECT total_changes()`를 저장한다.
+3. `getStats()` 뒤 response와 `total_changes()` 및 row snapshot이 불변인지
+   확인한다.
+4. 다음 연도 row를 만든 뒤 이전 연도 entry/allowance를 변경하고 다음 연도
+   stats가 새 carry를 반환하면서 row를 쓰지 않는지 확인한다.
+5. REST/MCP integration은 session, request audit 같은 비-Vacay write가 있을 수
+   있으므로 global `total_changes()` 대신 정확한 Vacay table snapshot을
+   비교한다.
+6. personal plan이 없는 첫 GET의 lazy provisioning은 별도 characterization
+   test로 남겨 이 PR의 pure carry 주장과 섞지 않는다.
+7. read-only MCP annotation과 established-plan DB 동작이 일치함을 확인한다.
 
 ### 비목표
 
 - plan 최초 조회의 auto-create 제거
-- carry policy 재설계
+- entitlement lot, expiry/FIFO와 법정 carry policy 재설계
 - employment/ledger schema 추가
 
 ## PR 2 — holiday overlay가 개인 entry를 삭제하지 않도록 변경
@@ -77,8 +94,11 @@ fix(vacay): preserve entries under holiday overlays
 - public holiday refresh 시 `vacay_entries`와 수동 company holiday를 삭제하지
   않는다.
 - entry와 holiday가 겹치면 둘 다 보존한다.
-- 자동 잔액 보정, conflict UI와 provider 결과 영구 저장은 이 PR에 묶지 않는다.
-  이 수정은 우선 사용자의 기록을 잃지 않는 data-safety 경계만 고정한다.
+- 영속된 수동 company holiday와 겹친 vacation entry만 기존 “비차감” 의미로
+  projection한다.
+- provider 날짜를 영구 저장하지 않는 현재 구조에서는 public holiday의 과거
+  비차감을 재현할 수 없다. 이 PR은 provider entry 보존만 보장하고 public
+  occurrence 저장·conflict resolution·비차감은 별도 PR로 남긴다.
 
 ### RED specification
 
@@ -94,13 +114,18 @@ fix(vacay): preserve entries under holiday overlays
    그대로다.
 3. provider가 global holiday를 반환해도 entry와 수동 company holiday가
    그대로다.
-4. provider refresh를 반복해도 row count와 내용이 변하지 않는다.
-5. 다른 plan의 같은 날짜 row는 절대 변경되지 않는다.
+4. 영속된 수동 company holiday가 활성인 동안 stats used/carry에서 해당 vacation
+   entry가 제외되고, holiday 제거 뒤 같은 entry가 다시 계산에 포함된다.
+5. public provider refresh는 entry를 보존한다. durable occurrence가 없으므로
+   재시작 뒤 historical 비차감까지 보장한다고 주장하지 않는다.
+6. provider refresh를 반복해도 row count와 entry 내용이 변하지 않는다.
+7. 다른 plan의 같은 날짜 row는 절대 변경되지 않는다.
 
 ### 비목표
 
 - public holiday provider 데이터의 새 저장 schema
-- 겹침을 자동으로 paid/unpaid로 바꾸는 정책
+- public holiday의 immutable historical non-deduction
+- annual-leave substitution과 paid company day를 자동 판정하는 정책
 - holiday conflict UI
 
 ## PR 3 — fusion/dissolution에서 user-year 상태 보존
@@ -116,6 +141,9 @@ fix(vacay): preserve user-year state after plan dissolution
 - member가 fusion 중 사용한 최신 `vacation_days`와 `carried_over`를 해제 시
   개인 plan에 transaction으로 upsert한다.
 - owner가 plan 전체를 dissolve하는 경로와 member가 나가는 경로를 모두 다룬다.
+- member가 나갈 때 shared plan의 해당 user-year row를 제거하거나, 재가입 시 개인
+  최신값을 authoritative하게 upsert한다. `INSERT OR IGNORE`로 stale shared
+  값을 재사용하지 않는다.
 - entry 이동, membership 삭제와 user-year 복구가 하나의 transaction에서
   성공하거나 함께 rollback한다.
 - fusion의 광범위한 cross-user edit 권한은 신규 access-model 논의로 분리한다.
@@ -137,6 +165,8 @@ fix(vacay): preserve user-year state after plan dissolution
 6. 중간 upsert를 강제로 실패시키면 entry, membership, user-year가 모두
    사전 상태로 rollback된다.
 7. 재호출해도 중복 user-year row가 생기지 않는다.
+8. join → fused edit → leave → solo edit → 같은 plan rejoin 뒤 개인 최신값이
+   유지되고 stale shared member row가 없다.
 
 ### 비목표
 
@@ -221,12 +251,20 @@ independently:
    window even though entries have no trip link.
 
 I would keep each fix in a separate PR, preserve existing response shapes, add
-focused regression/negative tests, and avoid unrelated refactors. For #4 my
-suggested safe behaviour is to stop moving unlinked entries; explicit trip
-linking could be a later feature.
+focused regression/negative tests, and avoid unrelated refactors. For #1 I
+would not simply remove the write: the next-year value must still reflect later
+changes to the previous year, preferably through a pure projection. For #2 I
+would preserve every entry and retain non-deduction for durable manual company
+holidays. Public-provider dates are not currently stored, so durable public
+holiday projection should be a later occurrence-model PR. For #3 I would cover
+leave/solo-edit/rejoin so a stale shared row cannot win. For #4 my suggested
+safe behaviour is to stop moving unlinked entries; explicit trip linking could
+be a later feature.
 
 Would any of these PRs be welcome? If so, which single one should I start with,
-and is there a preferred behaviour for the stats carry projection?
+and is there a preferred authoritative behaviour for the stats carry
+projection? I also noticed that first plan lookup lazily provisions legacy
+rows; I would keep that separate from the established-plan carry fix.
 ```
 
 ## Discord 초안 2 — generic v2 방향
@@ -238,18 +276,21 @@ Separately, would you be open to a staged generic Vacay model for users who
 change employers or leave-year policies over time?
 
 The product boundary would remain a personal leave/travel availability tracker,
-not HR approval, payroll, attendance, or a legal-compliance engine. The generic
-core would add effective-dated employment, immutable leave periods, an opening/
-grant/adjustment balance journal, and planned/taken entries. Existing half-day,
-comp/flex, calendar sharing, and legacy APIs would remain compatible.
+not HR approval, payroll, attendance, or a legal-compliance engine. The first
+usable slice would target one employer and one explicit current leave period,
+with an as-of opening balance and full/half-day planned/taken entries. The
+generic core would keep immutable period and minute-basis snapshots. Sharing,
+automatic migration, and automatic carry/expiry would be later slices.
 
 Country-specific rules (for example Korean statutory accrual suggestions) would
 live behind a policy-provider contract and would only create user-confirmed
 proposals, never automatic legal entitlements.
 
-I would propose one backwards-compatible slice per PR, starting with only the
-smallest model/compatibility seam the maintainers prefer. Is that direction
-within TREK's scope, or should it remain an external plugin/fork feature?
+I would propose one backwards-compatible change per PR (schema invariants,
+self-only API, balance commands, confirmed importer, then UI), starting with
+only the smallest model/compatibility seam the maintainers prefer. Is that
+direction within TREK's scope, or should it remain an external plugin/fork
+feature?
 ```
 
 ## 게시 전 확인

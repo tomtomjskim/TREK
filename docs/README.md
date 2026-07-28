@@ -47,9 +47,11 @@ truth다.
 - [Vacay employment and balance design](plans/2026-07-28-vacay-employment-balance-design.md):
   회사·입사일 기준기간, opening balance, planned/taken 상태, self-only 권한과
   한국 정책 provider 경계
+- [Vacay employment and balance adversarial review](plans/2026-07-28-vacay-employment-balance-adversarial-review.md):
+  한국 휴가 도메인·제품 UX·아키텍처 blocker와 균형형 최소 수직 기능 결정
 - [Vacay upstream correctness proposal](plans/2026-07-28-vacay-upstream-correctness-proposal.md):
-  read purity, holiday data loss, fusion 상태 보존, 무관한 trip shift를 분리한
-  공식 Discord 제안과 RED specification
+  fresh carry projection, holiday 보존·비차감, fusion 재가입과 무관한 trip
+  shift를 분리한 공식 Discord 제안과 RED specification
 - [Vacay employment and balance implementation plan](plans/2026-07-28-vacay-employment-balance.md):
   Discord gate 뒤 독립 correctness PR과 generic v2 slice를 실행하는 TDD 순서
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
