@@ -157,6 +157,7 @@ export function notifyPlanUsers(planId: number, excludeSid: string | undefined, 
 // ---------------------------------------------------------------------------
 
 export async function applyHolidayCalendars(planId: number): Promise<void> {
+  // Provider holidays are a read-only cache overlay; refreshing must never mutate personal or manual rows.
   const plan = db.prepare('SELECT holidays_enabled FROM vacay_plans WHERE id = ?').get(planId) as { holidays_enabled: number } | undefined;
   if (!plan?.holidays_enabled) return;
   const calendars = db.prepare('SELECT * FROM vacay_holiday_calendars WHERE plan_id = ? ORDER BY sort_order, id').all(planId) as VacayHolidayCalendar[];
@@ -164,7 +165,6 @@ export async function applyHolidayCalendars(planId: number): Promise<void> {
   const years = db.prepare('SELECT year FROM vacay_years WHERE plan_id = ?').all(planId) as { year: number }[];
   for (const cal of calendars) {
     const country = cal.region.split('-')[0];
-    const region = cal.region.includes('-') ? cal.region : null;
     for (const { year } of years) {
       try {
         const cacheKey = `${year}-${country}`;
@@ -173,14 +173,6 @@ export async function applyHolidayCalendars(planId: number): Promise<void> {
           const resp = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/${country}`);
           holidays = await resp.json() as Holiday[];
           holidayCache.set(cacheKey, { data: holidays, time: Date.now() });
-        }
-        const hasRegions = holidays.some((h: Holiday) => h.counties && h.counties.length > 0);
-        if (hasRegions && !region) continue;
-        for (const h of holidays) {
-          if (h.global || !h.counties || (region && h.counties.includes(region))) {
-            db.prepare('DELETE FROM vacay_entries WHERE plan_id = ? AND date = ?').run(planId, h.date);
-            db.prepare('DELETE FROM vacay_company_holidays WHERE plan_id = ? AND date = ?').run(planId, h.date);
-          }
         }
       } catch { /* API error, skip */ }
     }
@@ -195,6 +187,24 @@ export async function migrateHolidayCalendars(planId: number, plan: VacayPlan): 
       'INSERT INTO vacay_holiday_calendars (plan_id, region, label, color, sort_order) VALUES (?, ?, NULL, ?, 0)'
     ).run(planId, plan.holidays_region, '#fecaca');
   }
+}
+
+function countDeductingEntries(userId: number, planId: number, year: number): number {
+  return (db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM vacay_entries e
+    WHERE e.user_id = ?
+      AND e.plan_id = ?
+      AND e.date LIKE ?
+      AND NOT EXISTS (
+        SELECT 1
+        FROM vacay_company_holidays h
+        JOIN vacay_plans p ON p.id = h.plan_id
+        WHERE h.plan_id = e.plan_id
+          AND h.date = e.date
+          AND p.company_holidays_enabled = 1
+      )
+  `).get(userId, planId, `${year}-%`) as { count: number }).count;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,13 +239,6 @@ export async function updatePlan(planId: number, body: UpdatePlanBody, socketId:
     db.prepare(`UPDATE vacay_plans SET ${updates.join(', ')} WHERE id = ?`).run(...params);
   }
 
-  if (company_holidays_enabled === true) {
-    const companyDates = db.prepare('SELECT date FROM vacay_company_holidays WHERE plan_id = ?').all(planId) as { date: string }[];
-    for (const { date } of companyDates) {
-      db.prepare('DELETE FROM vacay_entries WHERE plan_id = ? AND date = ?').run(planId, date);
-    }
-  }
-
   const updatedPlan = db.prepare('SELECT * FROM vacay_plans WHERE id = ?').get(planId) as VacayPlan;
   await migrateHolidayCalendars(planId, updatedPlan);
   await applyHolidayCalendars(planId);
@@ -251,7 +254,7 @@ export async function updatePlan(planId: number, body: UpdatePlanBody, socketId:
       const yr = years[i].year;
       const nextYr = years[i + 1].year;
       for (const u of users) {
-        const used = (db.prepare("SELECT COUNT(*) as count FROM vacay_entries WHERE user_id = ? AND plan_id = ? AND date LIKE ?").get(u.id, planId, `${yr}-%`) as { count: number }).count;
+        const used = countDeductingEntries(u.id, planId, yr);
         const config = db.prepare('SELECT * FROM vacay_user_years WHERE user_id = ? AND plan_id = ? AND year = ?').get(u.id, planId, yr) as VacayUserYear | undefined;
         const total = (config ? config.vacation_days : 30) + (config ? config.carried_over : 0);
         const carry = Math.max(0, total - used);
@@ -505,7 +508,7 @@ export function addYear(planId: number, year: number, socketId: string | undefin
       if (carryOverEnabled) {
         const prevConfig = db.prepare('SELECT * FROM vacay_user_years WHERE user_id = ? AND plan_id = ? AND year = ?').get(u.id, planId, year - 1) as VacayUserYear | undefined;
         if (prevConfig) {
-          const used = (db.prepare("SELECT COUNT(*) as count FROM vacay_entries WHERE user_id = ? AND plan_id = ? AND date LIKE ?").get(u.id, planId, `${year - 1}-%`) as { count: number }).count;
+          const used = countDeductingEntries(u.id, planId, year - 1);
           const total = prevConfig.vacation_days + prevConfig.carried_over;
           carriedOver = Math.max(0, total - used);
         }
@@ -536,7 +539,7 @@ export function deleteYear(planId: number, year: number, socketId: string | unde
       if (carryOverEnabled && prevYear) {
         const prevConfig = db.prepare('SELECT * FROM vacay_user_years WHERE user_id = ? AND plan_id = ? AND year = ?').get(u.id, planId, prevYear.year) as VacayUserYear | undefined;
         if (prevConfig) {
-          const used = (db.prepare("SELECT COUNT(*) as count FROM vacay_entries WHERE user_id = ? AND plan_id = ? AND date LIKE ?").get(u.id, planId, `${prevYear.year}-%`) as { count: number }).count;
+          const used = countDeductingEntries(u.id, planId, prevYear.year);
           const total = prevConfig.vacation_days + prevConfig.carried_over;
           carry = Math.max(0, total - used);
         }
@@ -586,7 +589,6 @@ export function toggleCompanyHoliday(planId: number, date: string, note: string 
     return { action: 'removed' };
   } else {
     db.prepare('INSERT INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)').run(planId, date, note || '');
-    db.prepare('DELETE FROM vacay_entries WHERE plan_id = ? AND date = ?').run(planId, date);
     notifyPlanUsers(planId, socketId);
     return { action: 'added' };
   }
@@ -602,7 +604,7 @@ export function getStats(planId: number, year: number) {
   const users = getPlanUsers(planId);
 
   return users.map(u => {
-    const used = (db.prepare("SELECT COUNT(*) as count FROM vacay_entries WHERE user_id = ? AND plan_id = ? AND date LIKE ?").get(u.id, planId, `${year}-%`) as { count: number }).count;
+    const used = countDeductingEntries(u.id, planId, year);
     const config = db.prepare('SELECT * FROM vacay_user_years WHERE user_id = ? AND plan_id = ? AND year = ?').get(u.id, planId, year) as VacayUserYear | undefined;
     const vacationDays = config ? config.vacation_days : 30;
     const carriedOver = carryOverEnabled ? (config ? config.carried_over : 0) : 0;

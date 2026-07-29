@@ -439,6 +439,61 @@ describe('Vacay company holidays', () => {
     expect(res.status).toBe(200);
   });
 
+  it('VACAY-032a — company holiday overlay preserves the entry and only changes its balance effect', async () => {
+    const { user } = createUser(testDb);
+    const planRes = await request(app)
+      .get('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(user.id));
+    const planId = planRes.body.plan.id as number;
+    const date = '2025-05-01';
+    await request(app).post('/api/addons/vacay/years').set('Cookie', authCookie(user.id)).send({ year: 2025 });
+
+    const entryRes = await request(app)
+      .post('/api/addons/vacay/entries/toggle')
+      .set('Cookie', authCookie(user.id))
+      .send({ date });
+    expect(entryRes.status).toBe(200);
+    const before = testDb.prepare(`
+      SELECT id, plan_id, user_id, date, note
+      FROM vacay_entries
+      WHERE plan_id = ? AND user_id = ? AND date = ?
+    `).get(planId, user.id, date);
+
+    const addHolidayRes = await request(app)
+      .post('/api/addons/vacay/entries/company-holiday')
+      .set('Cookie', authCookie(user.id))
+      .send({ date, note: 'Labour Day' });
+    expect(addHolidayRes.status).toBe(200);
+    expect(addHolidayRes.body.action).toBe('added');
+    expect(testDb.prepare(`
+      SELECT id, plan_id, user_id, date, note
+      FROM vacay_entries
+      WHERE plan_id = ? AND user_id = ? AND date = ?
+    `).get(planId, user.id, date)).toEqual(before);
+
+    const holidayStats = await request(app)
+      .get('/api/addons/vacay/stats/2025')
+      .set('Cookie', authCookie(user.id));
+    expect(holidayStats.body.stats[0].used).toBe(0);
+
+    const removeHolidayRes = await request(app)
+      .post('/api/addons/vacay/entries/company-holiday')
+      .set('Cookie', authCookie(user.id))
+      .send({ date });
+    expect(removeHolidayRes.status).toBe(200);
+    expect(removeHolidayRes.body.action).toBe('removed');
+    expect(testDb.prepare(`
+      SELECT id, plan_id, user_id, date, note
+      FROM vacay_entries
+      WHERE plan_id = ? AND user_id = ? AND date = ?
+    `).get(planId, user.id, date)).toEqual(before);
+
+    const restoredStats = await request(app)
+      .get('/api/addons/vacay/stats/2025')
+      .set('Cookie', authCookie(user.id));
+    expect(restoredStats.body.stats[0].used).toBe(1);
+  });
+
   it('VACAY-033 — POST /entries/toggle with target_user_id not in plan returns 403', async () => {
     const { user: owner } = createUser(testDb);
     const { user: outsider } = createUser(testDb);

@@ -56,6 +56,8 @@ truth다.
   shift를 분리한 공식 Discord 제안과 RED specification
 - [Vacay employment and balance implementation plan](plans/2026-07-28-vacay-employment-balance.md):
   Discord gate 뒤 독립 correctness PR과 generic v2 slice를 실행하는 TDD 순서
+- [Vacay holiday entry preservation](plans/2026-07-29-vacay-holiday-entry-preservation.md):
+  회사·public holiday overlay가 개인 입력을 삭제하지 않도록 하는 fork-first R0 증거
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

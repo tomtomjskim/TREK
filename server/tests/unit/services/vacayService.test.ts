@@ -306,6 +306,44 @@ describe('updatePlan', () => {
       .get(user.id, plan.id, yr) as { carried_over: number };
     expect(row.carried_over).toBe(0);
   });
+
+  it('VACAY-SVC-018a: enabling company holidays preserves entries and excludes overlaps from carry', async () => {
+    const { user, plan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+    const nextYear = year + 1;
+    const date = `${year}-05-01`;
+
+    testDb.prepare('UPDATE vacay_plans SET company_holidays_enabled = 0 WHERE id = ?').run(plan.id);
+    testDb.prepare('UPDATE vacay_user_years SET vacation_days = 10 WHERE user_id = ? AND plan_id = ? AND year = ?')
+      .run(user.id, plan.id, year);
+    testDb.prepare('INSERT OR IGNORE INTO vacay_years (plan_id, year) VALUES (?, ?)').run(plan.id, nextYear);
+    testDb.prepare(`
+      INSERT OR IGNORE INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over)
+      VALUES (?, ?, ?, 30, 0)
+    `).run(user.id, plan.id, nextYear);
+    testDb.prepare('INSERT INTO vacay_entries (plan_id, user_id, date, note) VALUES (?, ?, ?, ?)')
+      .run(plan.id, user.id, date, 'personal note');
+    testDb.prepare('INSERT INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)')
+      .run(plan.id, date, 'Labour Day');
+
+    const before = testDb.prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?')
+      .get(plan.id, date);
+
+    await updatePlan(
+      plan.id,
+      { company_holidays_enabled: true, carry_over_enabled: true },
+      undefined,
+    );
+
+    const after = testDb.prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?')
+      .get(plan.id, date);
+    const next = testDb.prepare(`
+      SELECT carried_over FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(user.id, plan.id, nextYear) as { carried_over: number };
+    expect(after).toEqual(before);
+    expect(next.carried_over).toBe(10);
+  });
 });
 
 // ── addHolidayCalendar ────────────────────────────────────────────────────────
@@ -435,7 +473,7 @@ describe('addYear', () => {
     expect(userYear!.vacation_days).toBe(30);
   });
 
-  it('VACAY-SVC-029: carries over remaining days to the new year when carry_over_enabled is true', () => {
+  it('VACAY-SVC-029: carries over remaining deducting days when company holidays overlap entries', () => {
     const { user, plan } = setupUserWithPlan();
     const currentYear = new Date().getFullYear();
     const nextYear = currentYear + 1;
@@ -452,14 +490,16 @@ describe('addYear', () => {
       const dateStr = `${currentYear}-06-0${day}`;
       testDb.prepare('INSERT OR IGNORE INTO vacay_entries (plan_id, user_id, date, note) VALUES (?, ?, ?, ?)').run(plan.id, user.id, dateStr, '');
     }
+    testDb.prepare('INSERT INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)')
+      .run(plan.id, `${currentYear}-06-01`, 'Company shutdown');
 
     addYear(plan.id, nextYear, undefined);
 
     const userYear = testDb
       .prepare('SELECT carried_over FROM vacay_user_years WHERE user_id = ? AND plan_id = ? AND year = ?')
       .get(user.id, plan.id, nextYear) as { carried_over: number } | undefined;
-    // 10 vacation days - 3 used = 7 carried over
-    expect(userYear?.carried_over).toBe(7);
+    // The overlapping company holiday is non-deducting: 10 - 2 = 8.
+    expect(userYear?.carried_over).toBe(8);
   });
 });
 
@@ -485,6 +525,35 @@ describe('deleteYear', () => {
       .prepare("SELECT * FROM vacay_entries WHERE plan_id = ? AND date LIKE ?")
       .all(plan.id, `${targetYear}-%`);
     expect(entries).toHaveLength(0);
+  });
+
+  it('VACAY-SVC-030a: carry recompute after year deletion excludes manual company holidays', () => {
+    const { user, plan } = setupUserWithPlan();
+    const currentYear = new Date().getFullYear();
+    const previousYear = currentYear - 2;
+    const removedYear = currentYear - 1;
+    const date = `${previousYear}-06-01`;
+
+    testDb.prepare('INSERT INTO vacay_years (plan_id, year) VALUES (?, ?)').run(plan.id, previousYear);
+    testDb.prepare('INSERT INTO vacay_years (plan_id, year) VALUES (?, ?)').run(plan.id, removedYear);
+    testDb.prepare(`
+      INSERT INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over)
+      VALUES (?, ?, ?, 10, 0)
+    `).run(user.id, plan.id, previousYear);
+    testDb.prepare('INSERT OR IGNORE INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over) VALUES (?, ?, ?, 30, 0)')
+      .run(user.id, plan.id, removedYear);
+    testDb.prepare('INSERT INTO vacay_entries (plan_id, user_id, date, note) VALUES (?, ?, ?, ?)')
+      .run(plan.id, user.id, date, '');
+    testDb.prepare('INSERT INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)')
+      .run(plan.id, date, 'Company shutdown');
+
+    deleteYear(plan.id, removedYear, undefined);
+
+    const current = testDb.prepare(`
+      SELECT carried_over FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(user.id, plan.id, currentYear) as { carried_over: number };
+    expect(current.carried_over).toBe(10);
   });
 });
 
@@ -557,19 +626,82 @@ describe('toggleCompanyHoliday', () => {
     expect(row).toBeUndefined();
   });
 
-  it('VACAY-SVC-036: adding a company holiday removes any existing vacay_entry on that date', () => {
+  it('VACAY-SVC-036: company holiday add and remove preserve same-date entries across users and plans', () => {
+    const { user: owner, plan } = setupUserWithPlan();
+    const { user: member } = createUser(testDb);
+    const { user: otherOwner, plan: otherPlan } = setupUserWithPlan();
+    const date = '2025-05-01';
+    insertMember(plan.id, member.id, 'accepted');
+
+    toggleEntry(owner.id, plan.id, date, undefined);
+    toggleEntry(member.id, plan.id, date, undefined);
+    toggleEntry(otherOwner.id, otherPlan.id, date, undefined);
+    testDb.prepare('UPDATE vacay_entries SET note = ? WHERE user_id = ? AND plan_id = ? AND date = ?')
+      .run('owner note', owner.id, plan.id, date);
+    testDb.prepare('UPDATE vacay_entries SET note = ? WHERE user_id = ? AND plan_id = ? AND date = ?')
+      .run('member note', member.id, plan.id, date);
+    testDb.prepare('UPDATE vacay_entries SET note = ? WHERE user_id = ? AND plan_id = ? AND date = ?')
+      .run('other plan note', otherOwner.id, otherPlan.id, date);
+
+    const snapshot = () => testDb.prepare(`
+      SELECT id, plan_id, user_id, date, note
+      FROM vacay_entries
+      WHERE date = ?
+      ORDER BY plan_id, user_id
+    `).all(date);
+    const before = snapshot();
+
+    toggleCompanyHoliday(plan.id, date, 'Labour Day', undefined);
+    expect(snapshot()).toEqual(before);
+
+    toggleCompanyHoliday(plan.id, date, undefined, undefined);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('VACAY-SVC-036a: manual company holiday state controls stats and carry without deleting the entry', async () => {
     const { user, plan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+    const nextYear = year + 1;
+    const date = `${year}-05-01`;
 
-    // First add a personal entry on that date
-    toggleEntry(user.id, plan.id, '2025-05-01', undefined);
+    testDb.prepare('UPDATE vacay_user_years SET vacation_days = 10 WHERE user_id = ? AND plan_id = ? AND year = ?')
+      .run(user.id, plan.id, year);
+    testDb.prepare('INSERT OR IGNORE INTO vacay_years (plan_id, year) VALUES (?, ?)').run(plan.id, nextYear);
+    testDb.prepare(`
+      INSERT OR IGNORE INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over)
+      VALUES (?, ?, ?, 30, 0)
+    `).run(user.id, plan.id, nextYear);
+    toggleEntry(user.id, plan.id, date, undefined);
+    const before = testDb.prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?')
+      .get(plan.id, date);
 
-    // Now declare it a company holiday — the personal entry should be wiped
-    toggleCompanyHoliday(plan.id, '2025-05-01', 'Labour Day', undefined);
+    expect(getStats(plan.id, year)[0]).toMatchObject({ used: 1, remaining: 9 });
 
-    const personalEntry = testDb
-      .prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?')
-      .get(plan.id, '2025-05-01');
-    expect(personalEntry).toBeUndefined();
+    toggleCompanyHoliday(plan.id, date, 'Labour Day', undefined);
+    expect(testDb.prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?').get(plan.id, date))
+      .toEqual(before);
+    expect(getStats(plan.id, year)[0]).toMatchObject({ used: 0, remaining: 10 });
+    expect((testDb.prepare(`
+      SELECT carried_over FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(user.id, plan.id, nextYear) as { carried_over: number }).carried_over).toBe(10);
+
+    await updatePlan(plan.id, { company_holidays_enabled: false }, undefined);
+    expect(getStats(plan.id, year)[0]).toMatchObject({ used: 1, remaining: 9 });
+
+    await updatePlan(plan.id, { company_holidays_enabled: true }, undefined);
+    expect(testDb.prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?').get(plan.id, date))
+      .toEqual(before);
+    expect(getStats(plan.id, year)[0]).toMatchObject({ used: 0, remaining: 10 });
+
+    toggleCompanyHoliday(plan.id, date, undefined, undefined);
+    expect(testDb.prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?').get(plan.id, date))
+      .toEqual(before);
+    expect(getStats(plan.id, year)[0]).toMatchObject({ used: 1, remaining: 9 });
+    expect((testDb.prepare(`
+      SELECT carried_over FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(user.id, plan.id, nextYear) as { carried_over: number }).carried_over).toBe(9);
   });
 });
 
@@ -715,31 +847,49 @@ describe('applyHolidayCalendars', () => {
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
-  it('VACAY-SVC-047: deletes matching vacay_entries for a global holiday date returned by the API', async () => {
-    const { user, plan } = setupUserWithPlan();
+  it('VACAY-SVC-047: provider refresh preserves entries and manual holidays across users and plans', async () => {
+    const { user: owner, plan } = setupUserWithPlan();
+    const { user: member } = createUser(testDb);
+    const { user: otherOwner, plan: otherPlan } = setupUserWithPlan();
     const yr = new Date().getFullYear();
+    const holidayDate = `${yr}-01-01`;
+    insertMember(plan.id, member.id, 'accepted');
 
-    // Enable holidays and add a calendar
     testDb.prepare('UPDATE vacay_plans SET holidays_enabled = 1 WHERE id = ?').run(plan.id);
     addHolidayCalendar(plan.id, 'DE', null, undefined, 0, undefined);
+    toggleEntry(owner.id, plan.id, holidayDate, undefined);
+    toggleEntry(member.id, plan.id, holidayDate, undefined);
+    toggleEntry(otherOwner.id, otherPlan.id, holidayDate, undefined);
+    testDb.prepare('INSERT INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)')
+      .run(plan.id, holidayDate, 'Manual company holiday');
+    testDb.prepare('INSERT INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)')
+      .run(otherPlan.id, holidayDate, 'Other plan holiday');
 
-    // Add a vacay entry on the holiday date
-    const holidayDate = `${yr}-01-01`;
-    testDb
-      .prepare('INSERT INTO vacay_entries (plan_id, user_id, date, note) VALUES (?, ?, ?, ?)')
-      .run(plan.id, user.id, holidayDate, '');
+    const entrySnapshot = () => testDb.prepare(`
+      SELECT id, plan_id, user_id, date, note
+      FROM vacay_entries
+      WHERE date = ?
+      ORDER BY plan_id, user_id
+    `).all(holidayDate);
+    const companyHolidaySnapshot = () => testDb.prepare(`
+      SELECT id, plan_id, date, note
+      FROM vacay_company_holidays
+      WHERE date = ?
+      ORDER BY plan_id
+    `).all(holidayDate);
+    const entriesBefore = entrySnapshot();
+    const companyHolidaysBefore = companyHolidaySnapshot();
 
-    // Override fetch to return one global holiday matching that entry
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       json: async () => [{ date: holidayDate, global: true }],
     }));
 
     await applyHolidayCalendars(plan.id);
+    await applyHolidayCalendars(plan.id);
 
-    const remaining = testDb
-      .prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?')
-      .all(plan.id, holidayDate);
-    expect(remaining).toHaveLength(0);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(entrySnapshot()).toEqual(entriesBefore);
+    expect(companyHolidaySnapshot()).toEqual(companyHolidaysBefore);
   });
 });
