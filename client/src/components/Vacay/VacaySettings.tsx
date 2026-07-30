@@ -134,8 +134,17 @@ export default function VacaySettings({ onClose }: VacaySettingsProps) {
           hint={t('vacay.companyHolidaysHint')}
           value={plan.company_holidays_enabled}
           onChange={() => toggle('company_holidays_enabled')}
+          disabled={isFused}
+          disabledHint={t('shared.readOnly')}
         />
-        {plan.company_holidays_enabled && (
+        {isFused ? (
+          <div className="ml-7 mt-2">
+            <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-surface-secondary">
+              <AlertCircle size={12} className="shrink-0 text-content-faint" />
+              <span className="text-[10px] text-content-faint">{t('shared.readOnly')}</span>
+            </div>
+          </div>
+        ) : plan.company_holidays_enabled && (
           <div className="ml-7 mt-2">
             <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md bg-surface-secondary">
               <AlertCircle size={12} className="text-content-faint" />
@@ -235,9 +244,11 @@ interface SettingToggleProps {
   hint: string
   value: boolean
   onChange: () => void
+  disabled?: boolean
+  disabledHint?: string
 }
 
-function SettingToggle({ icon: Icon, label, hint, value, onChange }: SettingToggleProps) {
+function SettingToggle({ icon: Icon, label, hint, value, onChange, disabled = false, disabledHint }: SettingToggleProps) {
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-2 min-w-0">
@@ -247,8 +258,13 @@ function SettingToggle({ icon: Icon, label, hint, value, onChange }: SettingTogg
           <p className="text-[11px] text-content-faint">{hint}</p>
         </div>
       </div>
-      <button onClick={onChange}
-        className={`relative shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors ${value ? 'bg-content' : 'bg-edge'}`}>
+      <button
+        type="button"
+        onClick={onChange}
+        disabled={disabled}
+        aria-label={disabled ? `${label}: ${disabledHint ?? hint}` : label}
+        title={disabled ? disabledHint : undefined}
+        className={`relative shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors ${value ? 'bg-content' : 'bg-edge'} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}>
         <span className="absolute left-1 h-4 w-4 rounded-full transition-transform duration-200 bg-surface-card"
           style={{ transform: value ? 'translateX(20px)' : 'translateX(0)' }} />
       </button>

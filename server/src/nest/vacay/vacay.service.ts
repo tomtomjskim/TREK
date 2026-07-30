@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import * as svc from '../../services/vacayService';
 
+export { VacayFusedCompanyHolidaysReadOnlyError } from '../../services/vacayService';
+
 type UpdatePlanBody = Parameters<typeof svc.updatePlan>[1];
 
 /**

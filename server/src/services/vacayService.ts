@@ -53,6 +53,18 @@ export interface VacayHolidayCalendar {
   sort_order: number;
 }
 
+export const VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY =
+  'VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY';
+
+export class VacayFusedCompanyHolidaysReadOnlyError extends Error {
+  readonly code = VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY;
+
+  constructor() {
+    super('Company holidays are read-only while Vacay plans are fused');
+    this.name = 'VacayFusedCompanyHolidaysReadOnlyError';
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Holiday cache (shared in-process)
 // ---------------------------------------------------------------------------
@@ -134,6 +146,12 @@ export function getPlanUsers(planId: number): VacayUser[] {
     WHERE m.plan_id = ? AND m.status = 'accepted'
   `).all(planId) as VacayUser[];
   return [owner, ...members];
+}
+
+function assertCompanyHolidayMutationAllowed(planId: number): void {
+  if (getPlanUsers(planId).length > 1) {
+    throw new VacayFusedCompanyHolidaysReadOnlyError();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +240,10 @@ export interface UpdatePlanBody {
 }
 
 export async function updatePlan(planId: number, body: UpdatePlanBody, socketId: string | undefined) {
+  if (body.company_holidays_enabled !== undefined) {
+    assertCompanyHolidayMutationAllowed(planId);
+  }
+
   const { block_weekends, holidays_enabled, holidays_region, company_holidays_enabled, carry_over_enabled, weekend_days, week_start } = body;
 
   const updates: string[] = [];
@@ -582,6 +604,8 @@ export function toggleEntry(userId: number, planId: number, date: string, socket
 }
 
 export function toggleCompanyHoliday(planId: number, date: string, note: string | undefined, socketId: string | undefined): { action: string } {
+  assertCompanyHolidayMutationAllowed(planId);
+
   const existing = db.prepare('SELECT id FROM vacay_company_holidays WHERE plan_id = ? AND date = ?').get(planId, date) as { id: number } | undefined;
   if (existing) {
     db.prepare('DELETE FROM vacay_company_holidays WHERE id = ?').run(existing.id);

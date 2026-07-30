@@ -267,4 +267,68 @@ describe('VacayCalendar', () => {
     )
     expect(colorDot).toBeDefined()
   })
+
+  it('FE-COMP-VACAYCALENDAR-011: fused plans expose company mode as read-only', async () => {
+    const user = userEvent.setup()
+    const toggleEntry = vi.fn().mockResolvedValue(undefined)
+    const toggleCompanyHoliday = vi.fn().mockResolvedValue(undefined)
+    seedStore(useVacayStore, {
+      selectedYear: 2025,
+      entries: [],
+      companyHolidays: [],
+      holidays: {},
+      plan: { ...basePlan, block_weekends: false, company_holidays_enabled: true },
+      users: [],
+      selectedUserId: null,
+      isFused: true,
+      toggleEntry,
+      toggleCompanyHoliday,
+    })
+
+    render(<VacayCalendar />)
+
+    const toolbarButtons = screen.getAllByRole('button')
+      .filter(button => !button.textContent?.startsWith('click-'))
+    expect(toolbarButtons[1]).toBeDisabled()
+    expect(toolbarButtons[1]).toHaveAttribute('title')
+
+    await user.click(toolbarButtons[1])
+    await user.click(screen.getByText('click-0'))
+
+    expect(toggleCompanyHoliday).not.toHaveBeenCalled()
+    expect(toggleEntry).toHaveBeenCalledWith('2025-01-01', undefined)
+  })
+
+  it('FE-COMP-VACAYCALENDAR-012: a live solo-to-fused transition clears company edit mode', async () => {
+    const user = userEvent.setup()
+    const toggleEntry = vi.fn().mockResolvedValue(undefined)
+    const toggleCompanyHoliday = vi.fn().mockResolvedValue(undefined)
+    seedStore(useVacayStore, {
+      selectedYear: 2025,
+      entries: [],
+      companyHolidays: [],
+      holidays: {},
+      plan: { ...basePlan, block_weekends: false, company_holidays_enabled: true },
+      users: [],
+      selectedUserId: null,
+      isFused: false,
+      toggleEntry,
+      toggleCompanyHoliday,
+    })
+    const { rerender } = render(<VacayCalendar />)
+    const toolbarButtons = screen.getAllByRole('button')
+      .filter(button => !button.textContent?.startsWith('click-'))
+
+    await user.click(toolbarButtons[1])
+    expect(toolbarButtons[1]).toHaveClass('bg-[#d97706]')
+
+    seedStore(useVacayStore, { isFused: true })
+    rerender(<VacayCalendar />)
+    await user.click(screen.getByText('click-0'))
+
+    expect(screen.getAllByRole('button')
+      .filter(button => !button.textContent?.startsWith('click-'))[1]).toBeDisabled()
+    expect(toggleCompanyHoliday).not.toHaveBeenCalled()
+    expect(toggleEntry).toHaveBeenCalledWith('2025-01-01', undefined)
+  })
 })

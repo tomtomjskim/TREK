@@ -494,6 +494,68 @@ describe('Vacay company holidays', () => {
     expect(restoredStats.body.stats[0].used).toBe(1);
   });
 
+  it('VACAY-032b — fused plans reject company-holiday entry and setting changes with a stable conflict', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const planRes = await request(app)
+      .get('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(owner.id));
+    const planId = planRes.body.plan.id as number;
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'accepted')
+    `).run(planId, member.id);
+    const before = testDb.prepare(`
+      SELECT block_weekends, company_holidays_enabled
+      FROM vacay_plans
+      WHERE id = ?
+    `).get(planId);
+
+    const entryRes = await request(app)
+      .post('/api/addons/vacay/entries/company-holiday')
+      .set('Cookie', authCookie(owner.id))
+      .send({ date: '2025-12-25', note: 'Christmas' });
+    expect(entryRes.status).toBe(409);
+    expect(entryRes.body).toEqual({
+      error: 'Company holidays are read-only while Vacay plans are fused',
+      code: 'VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY',
+    });
+    expect(testDb.prepare(`
+      SELECT id
+      FROM vacay_company_holidays
+      WHERE plan_id = ? AND date = ?
+    `).get(planId, '2025-12-25')).toBeUndefined();
+
+    const settingRes = await request(app)
+      .put('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(member.id))
+      .send({
+        block_weekends: true,
+        company_holidays_enabled: false,
+      });
+    expect(settingRes.status).toBe(409);
+    expect(settingRes.body.code).toBe('VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY');
+    expect(testDb.prepare(`
+      SELECT block_weekends, company_holidays_enabled
+      FROM vacay_plans
+      WHERE id = ?
+    `).get(planId)).toEqual(before);
+
+    const unrelatedSettingRes = await request(app)
+      .put('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(member.id))
+      .send({ block_weekends: true });
+    expect(unrelatedSettingRes.status).toBe(200);
+    expect(testDb.prepare(`
+      SELECT block_weekends, company_holidays_enabled
+      FROM vacay_plans
+      WHERE id = ?
+    `).get(planId)).toEqual({
+      block_weekends: 1,
+      company_holidays_enabled: (before as { company_holidays_enabled: number }).company_holidays_enabled,
+    });
+  });
+
   it('VACAY-033 — POST /entries/toggle with target_user_id not in plan returns 403', async () => {
     const { user: owner } = createUser(testDb);
     const { user: outsider } = createUser(testDb);

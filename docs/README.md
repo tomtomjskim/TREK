@@ -61,6 +61,9 @@ truth다.
 - [Vacay company holiday ownership](plans/2026-07-30-vacay-company-holiday-ownership.md):
   회사 휴일을 plan/admin 설정이 아닌 개인 employment 데이터로 소유하고,
   mixed-company fusion legacy row를 명시적으로 확인·이관하는 권한 계약
+- [Vacay fused company holiday guard](plans/2026-07-30-vacay-fused-company-holiday-guard.md):
+  융합 plan의 회사 휴일 변경을 service·REST·MCP·plugin RPC·반응형 UI에서
+  실패-폐쇄하는 R0.1 호환 경계
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

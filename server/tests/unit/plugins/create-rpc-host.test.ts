@@ -237,12 +237,28 @@ vi.mock('../../../src/services/atlasService', () => ({
   createBucketItem: vi.fn((uid: number, data: { name: string }) => ({ id: 110, user_id: uid, name: data.name })),
   deleteBucketItem: vi.fn((_uid: number, itemId: number) => Number(itemId) !== 404),
 }));
-vi.mock('../../../src/services/vacayService', () => ({
-  getPlanData: vi.fn((uid: number) => ({ plan: { id: 1, owner: uid } })),
-  getActivePlanId: vi.fn(() => 77),
-  toggleEntry: vi.fn((uid: number, planId: number) => ({ action: 'added', uid, planId })),
-  toggleCompanyHoliday: vi.fn((planId: number) => ({ action: 'added', planId })),
+const { rejectVacayCompanyHoliday } = vi.hoisted(() => ({
+  rejectVacayCompanyHoliday: vi.fn(() => false),
 }));
+vi.mock('../../../src/services/vacayService', () => {
+  class VacayFusedCompanyHolidaysReadOnlyError extends Error {
+    readonly code = 'VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY';
+  }
+  return {
+    getPlanData: vi.fn((uid: number) => ({ plan: { id: 1, owner: uid } })),
+    getActivePlanId: vi.fn(() => 77),
+    toggleEntry: vi.fn((uid: number, planId: number) => ({ action: 'added', uid, planId })),
+    toggleCompanyHoliday: vi.fn((planId: number) => {
+      if (rejectVacayCompanyHoliday()) {
+        throw new VacayFusedCompanyHolidaysReadOnlyError(
+          'Company holidays are read-only while Vacay plans are fused',
+        );
+      }
+      return { action: 'added', planId };
+    }),
+    VacayFusedCompanyHolidaysReadOnlyError,
+  };
+});
 vi.mock('../../../src/services/collectionsService', () => {
   const httpError = (status: number, message: string) => { const e = new Error(message) as Error & { status: number }; e.status = status; throw e; };
   return {
@@ -690,7 +706,14 @@ describe('create-rpc-host — Wave 2 wiring (atlas/vacay/journal/collections wri
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const call = async (h: ReturnType<typeof host>, method: string, params: Record<string, unknown>, uid: number | undefined = 5): Promise<any> =>
     h.dispatch({ k: 'req', id: 'x', method, params }, uid)
-  beforeEach(() => { checkPermission.mockReset(); checkPermission.mockReturnValue(true); isAddonEnabled.mockReset(); isAddonEnabled.mockReturnValue(true) })
+  beforeEach(() => {
+    checkPermission.mockReset();
+    checkPermission.mockReturnValue(true);
+    isAddonEnabled.mockReset();
+    isAddonEnabled.mockReturnValue(true);
+    rejectVacayCompanyHoliday.mockReset();
+    rejectVacayCompanyHoliday.mockReturnValue(false);
+  })
   afterAll(() => closePluginDataDb('w2'))
 
   it('atlas writes delegate uid-scoped; disabled addon refused; missing bucket item forbidden', async () => {
@@ -711,6 +734,10 @@ describe('create-rpc-host — Wave 2 wiring (atlas/vacay/journal/collections wri
     expect(r.ok).toBe(true)
     expect(r.result).toMatchObject({ uid: 5, planId: 77 }) // uid + the user's own active plan, never a plugin-named one
     expect((await call(h, 'vacay.toggleCompanyHoliday', { date: '2026-12-24' })).ok).toBe(true)
+
+    rejectVacayCompanyHoliday.mockReturnValue(true)
+    expect(((await call(h, 'vacay.toggleCompanyHoliday', { date: '2026-12-25' })) as { error: { code: string } }).error.code)
+      .toBe('RESOURCE_FORBIDDEN')
   })
 
   it('journal writes map an uneditable journey/entry to RESOURCE_FORBIDDEN', async () => {

@@ -29,7 +29,13 @@ import { isDemoEmail } from '../../../services/demo';
 import { ADDON_IDS } from '../../../addons';
 import { listJourneys, listEntries as listJournalEntriesSvc, createEntry as createJournalEntrySvc, updateEntry as updateJournalEntrySvc, deleteEntry as deleteJournalEntrySvc, createJourney as createJourneySvc, deleteJourney as deleteJourneySvc } from '../../../services/journeyService';
 import { listVisitedCountries, listManuallyVisitedRegions, listBucketList, markCountryVisited, unmarkCountryVisited, markRegionVisited, unmarkRegionVisited, createBucketItem as createBucketItemSvc, deleteBucketItem as deleteBucketItemSvc } from '../../../services/atlasService';
-import { getPlanData, getActivePlanId, toggleEntry as vacayToggleEntrySvc, toggleCompanyHoliday as vacayToggleCompanyHolidaySvc } from '../../../services/vacayService';
+import {
+  getPlanData,
+  getActivePlanId,
+  toggleEntry as vacayToggleEntrySvc,
+  toggleCompanyHoliday as vacayToggleCompanyHolidaySvc,
+  VacayFusedCompanyHolidaysReadOnlyError,
+} from '../../../services/vacayService';
 import { listNotes, createNote, getNote, updateNote, deleteNote, dayExists as dayNoteDayExists } from '../../../services/dayNoteService';
 import { listCollections, getCollection, createCollection, updateCollection, savePlace as saveCollectionPlaceSvc, copyToTrip as copyCollectionToTripSvc, deletePlace as deleteCollectionPlaceSvc } from '../../../services/collectionsService';
 import { BudgetService } from '../../budget/budget.service';
@@ -692,7 +698,14 @@ export function createRealRpcHost(id: string, granted: ReadonlySet<string>, rout
     vacayToggleEntry: (userId, date) => { requireAddon(ADDON_IDS.VACAY, 'vacay'); return vacayToggleEntrySvc(userId, getActivePlanId(userId), date, undefined); },
     vacayToggleCompanyHoliday: (userId, date, note) => {
       requireAddon(ADDON_IDS.VACAY, 'vacay');
-      return vacayToggleCompanyHolidaySvc(getActivePlanId(userId), date, note, undefined);
+      try {
+        return vacayToggleCompanyHolidaySvc(getActivePlanId(userId), date, note, undefined);
+      } catch (error) {
+        if (error instanceof VacayFusedCompanyHolidaysReadOnlyError) {
+          throw new ForbiddenResource(error.message);
+        }
+        throw error;
+      }
     },
     // --- Journal write: journeyService.canEdit self-gates each call (owner/contributor). ---
     createJournalEntry: (userId, journeyId, input) => {

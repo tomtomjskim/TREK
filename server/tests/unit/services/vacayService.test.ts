@@ -23,8 +23,10 @@ vi.mock('../../../src/config', () => ({
   ENCRYPTION_KEY: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2a3b4c5d6a7b8c9d0e1f2',
   updateJwtSecret: () => {},
 }));
-// Mock websocket so notifyPlanUsers doesn't throw
-vi.mock('../../../src/websocket', () => ({ broadcastToUser: vi.fn() }));
+// Mock websocket so notifyPlanUsers doesn't throw and rejected writes can assert
+// that no update escaped the domain guard.
+const { broadcastToUserMock } = vi.hoisted(() => ({ broadcastToUserMock: vi.fn() }));
+vi.mock('../../../src/websocket', () => ({ broadcastToUser: broadcastToUserMock }));
 
 import { createTables } from '../../../src/db/schema';
 import { runMigrations } from '../../../src/db/migrationRunner';
@@ -64,6 +66,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   resetTestDb(testDb);
+  broadcastToUserMock.mockClear();
   // Stub fetch with empty holiday list by default so updatePlan / applyHolidayCalendars
   // never makes real network calls.
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
@@ -343,6 +346,48 @@ describe('updatePlan', () => {
     `).get(user.id, plan.id, nextYear) as { carried_over: number };
     expect(after).toEqual(before);
     expect(next.carried_over).toBe(10);
+  });
+
+  it('VACAY-SVC-018b: rejects the entire company-holiday settings update for a fused plan before side effects', async () => {
+    const { user: owner, plan } = setupUserWithPlan();
+    const { user: member } = createUser(testDb);
+    const year = new Date().getFullYear();
+    insertMember(plan.id, member.id, 'accepted');
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET carried_over = 7
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(owner.id, plan.id, year);
+
+    const beforePlan = testDb.prepare(`
+      SELECT block_weekends, company_holidays_enabled, carry_over_enabled
+      FROM vacay_plans
+      WHERE id = ?
+    `).get(plan.id);
+
+    await expect(updatePlan(
+      plan.id,
+      {
+        block_weekends: true,
+        company_holidays_enabled: false,
+        carry_over_enabled: false,
+      },
+      undefined,
+    )).rejects.toMatchObject({
+      code: 'VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY',
+    });
+
+    expect(testDb.prepare(`
+      SELECT block_weekends, company_holidays_enabled, carry_over_enabled
+      FROM vacay_plans
+      WHERE id = ?
+    `).get(plan.id)).toEqual(beforePlan);
+    expect(testDb.prepare(`
+      SELECT carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(owner.id, plan.id, year)).toEqual({ carried_over: 7 });
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
   });
 });
 
@@ -626,20 +671,15 @@ describe('toggleCompanyHoliday', () => {
     expect(row).toBeUndefined();
   });
 
-  it('VACAY-SVC-036: company holiday add and remove preserve same-date entries across users and plans', () => {
+  it('VACAY-SVC-036: solo-plan company holiday add and remove preserve same-date entries across plans', () => {
     const { user: owner, plan } = setupUserWithPlan();
-    const { user: member } = createUser(testDb);
     const { user: otherOwner, plan: otherPlan } = setupUserWithPlan();
     const date = '2025-05-01';
-    insertMember(plan.id, member.id, 'accepted');
 
     toggleEntry(owner.id, plan.id, date, undefined);
-    toggleEntry(member.id, plan.id, date, undefined);
     toggleEntry(otherOwner.id, otherPlan.id, date, undefined);
     testDb.prepare('UPDATE vacay_entries SET note = ? WHERE user_id = ? AND plan_id = ? AND date = ?')
       .run('owner note', owner.id, plan.id, date);
-    testDb.prepare('UPDATE vacay_entries SET note = ? WHERE user_id = ? AND plan_id = ? AND date = ?')
-      .run('member note', member.id, plan.id, date);
     testDb.prepare('UPDATE vacay_entries SET note = ? WHERE user_id = ? AND plan_id = ? AND date = ?')
       .run('other plan note', otherOwner.id, otherPlan.id, date);
 
@@ -656,6 +696,46 @@ describe('toggleCompanyHoliday', () => {
 
     toggleCompanyHoliday(plan.id, date, undefined, undefined);
     expect(snapshot()).toEqual(before);
+  });
+
+  it('VACAY-SVC-036b: rejects company-holiday toggles for a fused plan without changing rows or broadcasting', () => {
+    const { plan } = setupUserWithPlan();
+    const { user: member } = createUser(testDb);
+    const date = '2025-05-01';
+    insertMember(plan.id, member.id, 'accepted');
+    testDb.prepare(`
+      INSERT INTO vacay_company_holidays (plan_id, date, note)
+      VALUES (?, ?, ?)
+    `).run(plan.id, date, 'Existing');
+    const before = testDb.prepare(`
+      SELECT id, plan_id, date, note
+      FROM vacay_company_holidays
+      WHERE plan_id = ?
+      ORDER BY id
+    `).all(plan.id);
+
+    expect(() => toggleCompanyHoliday(plan.id, date, undefined, undefined)).toThrowError(
+      expect.objectContaining({
+        code: 'VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY',
+      }),
+    );
+
+    expect(testDb.prepare(`
+      SELECT id, plan_id, date, note
+      FROM vacay_company_holidays
+      WHERE plan_id = ?
+      ORDER BY id
+    `).all(plan.id)).toEqual(before);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-036c: pending invitations do not make company holidays read-only', () => {
+    const { plan } = setupUserWithPlan();
+    const { user: invitee } = createUser(testDb);
+    insertMember(plan.id, invitee.id, 'pending');
+
+    expect(toggleCompanyHoliday(plan.id, '2025-05-01', 'Labour Day', undefined))
+      .toEqual({ action: 'added' });
   });
 
   it('VACAY-SVC-036a: manual company holiday state controls stats and carry without deleting the entry', async () => {

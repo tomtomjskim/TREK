@@ -1,11 +1,13 @@
 # Vacay Holiday Entry Preservation
 
 > 작성일: 2026-07-29
-> 상태: fork-first R0 로컬 검증 및 회사 휴일 소유권 재검토 완료, 배포 보류
+> 상태: fork-first R0 검증 및 fused R0.1 fail-closed 로컬 구현, 배포 보류
 > 기준: `origin/main` `c5ff1d27`, 설계 기준 `4e2be6d1`
 > 최신 공식 비교: `upstream/dev` `57017b8a`
 > 후속 권한 결정:
 > [Vacay company holiday ownership](2026-07-30-vacay-company-holiday-ownership.md)
+> 후속 호환 guard:
+> [Vacay fused company holiday guard](2026-07-30-vacay-fused-company-holiday-guard.md)
 
 ## 문제
 
@@ -149,3 +151,14 @@ dependency는 바뀌지 않았다. 배포·개인 포크 push·공식 PR은 수�
 휴일은 `legacy_plan_overlay/unverified`인 transitional projection이며, 개인 회사
 데이터 모델이 아니다. solo row도 사용자 확인 없이 회사 사실로 승격하지 않고,
 fused row는 모든 구성원에게 자동 복제·활성화하지 않는다.
+
+후속 R0.1은 accepted member가 있는 fused plan에서 수동 회사 휴일 toggle과
+`company_holidays_enabled` 변경을 core service에서 선제 거부한다. REST `409`,
+MCP tool error, plugin `RESOURCE_FORBIDDEN`과 반응형 UI read-only 상태를 같은
+계약으로 고정했다. 기존 row와 plan-wide 비차감 projection은 보존하고 solo
+동작은 바꾸지 않는다. 따라서 “일반 plan 구성원이 fused 회사 휴일을 계속
+변경한다”는 위험은 신규 write에 대해 완화됐지만, 기존 row의 귀속 불명과 약한
+date validation은 각각 v2 importer와 Task 8A에 남는다. 또한 별도 `deleteYear`
+경로는 fused plan의 해당 연도 사용자 entry와 회사 휴일을 함께 삭제하므로,
+R0.1을 shared-year 삭제 안전성으로 확대 해석하지 않고 배포 전 R0.2 권한
+결정으로 분리한다.

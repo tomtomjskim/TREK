@@ -8,9 +8,13 @@ import { Building2, MousePointer2 } from 'lucide-react'
 
 export default function VacayCalendar() {
   const { t } = useTranslation()
-  const { selectedYear, selectedUserId, entries, companyHolidays, toggleEntry, toggleCompanyHoliday, plan, users, holidays } = useVacayStore()
+  const { selectedYear, selectedUserId, entries, companyHolidays, toggleEntry, toggleCompanyHoliday, plan, users, holidays, isFused } = useVacayStore()
   const [companyMode, setCompanyMode] = useState(false)
   const [tripDates, setTripDates] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (isFused) setCompanyMode(false)
+  }, [isFused])
 
   useEffect(() => {
     let cancelled = false
@@ -56,14 +60,14 @@ export default function VacayCalendar() {
 
   const handleCellClick = useCallback(async (dateStr) => {
     if (companyMode) {
-      if (!companyHolidaysEnabled) return
+      if (isFused || !companyHolidaysEnabled) return
       await toggleCompanyHoliday(dateStr)
       return
     }
     if (blockWeekends && isWeekend(dateStr, weekendDays)) return
     if (companyHolidaysEnabled && companyHolidaySet.has(dateStr)) return
     await toggleEntry(dateStr, selectedUserId || undefined)
-  }, [companyMode, toggleEntry, toggleCompanyHoliday, companyHolidaySet, blockWeekends, companyHolidaysEnabled, selectedUserId])
+  }, [companyMode, isFused, toggleEntry, toggleCompanyHoliday, companyHolidaySet, blockWeekends, companyHolidaysEnabled, selectedUserId])
 
   const selectedUser = users.find(u => u.id === selectedUserId)
 
@@ -102,7 +106,9 @@ export default function VacayCalendar() {
           {companyHolidaysEnabled && (
             <button
               onClick={() => setCompanyMode(true)}
-              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-[11px] sm:text-xs font-medium transition-[background-color,color,border-color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] border ${companyMode ? 'bg-[#d97706] text-[#fff] border-transparent' : 'bg-transparent text-content-muted border-edge'}`}>
+              disabled={isFused}
+              title={isFused ? `${t('vacay.companyHolidays')}: ${t('shared.readOnly')}` : undefined}
+              className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-lg text-[11px] sm:text-xs font-medium transition-[background-color,color,border-color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] border ${companyMode ? 'bg-[#d97706] text-[#fff] border-transparent' : 'bg-transparent text-content-muted border-edge'} ${isFused ? 'opacity-50 cursor-not-allowed' : ''}`}>
               <Building2 size={13} />
               {t('vacay.modeCompany')}
             </button>

@@ -12,9 +12,22 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { User } from '../../types';
-import { VacayService } from './vacay.service';
+import {
+  VacayFusedCompanyHolidaysReadOnlyError,
+  VacayService,
+} from './vacay.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
+
+function rethrowCompanyHolidayConflict(error: unknown): never {
+  if (error instanceof VacayFusedCompanyHolidaysReadOnlyError) {
+    throw new HttpException({
+      error: error.message,
+      code: error.code,
+    }, 409);
+  }
+  throw error;
+}
 
 /**
  * /api/addons/vacay — shared vacation-day planner.
@@ -38,7 +51,11 @@ export class VacayController {
   @Put('plan')
   async updatePlan(@CurrentUser() user: User, @Body() body: Record<string, unknown>, @Headers('x-socket-id') socketId?: string) {
     const planId = this.vacay.getActivePlanId(user.id);
-    return this.vacay.updatePlan(planId, body, socketId);
+    try {
+      return await this.vacay.updatePlan(planId, body, socketId);
+    } catch (error) {
+      rethrowCompanyHolidayConflict(error);
+    }
   }
 
   @Post('plan/holiday-calendars')
@@ -208,7 +225,11 @@ export class VacayController {
     @Headers('x-socket-id') socketId?: string,
   ) {
     const planId = this.vacay.getActivePlanId(user.id);
-    return this.vacay.toggleCompanyHoliday(planId, body.date as string, body.note, socketId);
+    try {
+      return this.vacay.toggleCompanyHoliday(planId, body.date as string, body.note, socketId);
+    } catch (error) {
+      rethrowCompanyHolidayConflict(error);
+    }
   }
 
   @Get('stats/:year')

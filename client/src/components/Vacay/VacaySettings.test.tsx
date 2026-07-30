@@ -469,4 +469,33 @@ describe('VacaySettings', () => {
 
     expect(updatePlan).toHaveBeenCalledWith({ weekend_days: expect.stringContaining('0') })
   })
+
+  it('FE-COMP-VACAYSETTINGS-021: fused plans disable only the company-holiday setting and explain the read-only state', async () => {
+    const user = userEvent.setup()
+    const updatePlan = vi.fn().mockResolvedValue(undefined)
+    seedStore(useVacayStore, {
+      plan: { ...basePlan, block_weekends: false, company_holidays_enabled: true },
+      isFused: true,
+      users: [],
+      updatePlan,
+    })
+    render(<VacaySettings onClose={vi.fn()} />)
+
+    const toggleButtons = screen.getAllByRole('button').filter(button =>
+      button.className.includes('inline-flex') && button.className.includes('rounded-full')
+    )
+    const carryOverToggle = toggleButtons[1]
+    const companyHolidayToggle = toggleButtons[2]
+
+    expect(companyHolidayToggle).toBeDisabled()
+    expect(companyHolidayToggle).toHaveAttribute('title')
+    expect(carryOverToggle).not.toBeDisabled()
+    expect(screen.getByText(/Read-only shared view|shared\.readOnly/i)).toBeInTheDocument()
+
+    await user.click(companyHolidayToggle)
+    expect(updatePlan).not.toHaveBeenCalledWith({ company_holidays_enabled: false })
+
+    await user.click(carryOverToggle)
+    expect(updatePlan).toHaveBeenCalledWith({ carry_over_enabled: true })
+  })
 })

@@ -49,9 +49,6 @@ vi.mock('../../../src/services/vacayService', async (importOriginal) => {
   const original = await importOriginal() as Record<string, unknown>;
   return {
     ...original,
-    updatePlan: vi.fn().mockResolvedValue({
-      plan: { id: 1, block_weekends: true, holidays_enabled: false, company_holidays_enabled: false, carry_over_enabled: false, holiday_calendars: [] },
-    }),
     getCountries: vi.fn().mockResolvedValue({ data: [{ code: 'US', name: 'United States' }] }),
     getHolidays: vi.fn().mockResolvedValue({ data: [{ date: '2025-01-01', name: 'New Year' }] }),
   };
@@ -71,10 +68,15 @@ beforeAll(() => {
 beforeEach(() => {
   resetTestDb(testDb);
   broadcastMock.mockClear();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => [],
+  }));
   delete process.env.DEMO_MODE;
 });
 
 afterAll(() => {
+  vi.unstubAllGlobals();
   testDb.close();
 });
 
@@ -130,6 +132,40 @@ describe('Tool: update_vacay_plan', () => {
     await withHarness(user.id, async (h) => {
       const result = await h.client.callTool({ name: 'update_vacay_plan', arguments: { block_weekends: true } });
       expect(result.isError).toBe(true);
+    });
+  });
+
+  it('returns a tool error without partial settings updates for a fused plan', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+      const plan = testDb.prepare('SELECT * FROM vacay_plans WHERE owner_id = ?')
+        .get(owner.id) as { id: number };
+      testDb.prepare(`
+        INSERT INTO vacay_plan_members (plan_id, user_id, status)
+        VALUES (?, ?, 'accepted')
+      `).run(plan.id, member.id);
+      const before = testDb.prepare(`
+        SELECT block_weekends, company_holidays_enabled
+        FROM vacay_plans
+        WHERE id = ?
+      `).get(plan.id);
+
+      const result = await h.client.callTool({
+        name: 'update_vacay_plan',
+        arguments: {
+          block_weekends: true,
+          company_holidays_enabled: false,
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(testDb.prepare(`
+        SELECT block_weekends, company_holidays_enabled
+        FROM vacay_plans
+        WHERE id = ?
+      `).get(plan.id)).toEqual(before);
     });
   });
 });
@@ -289,6 +325,32 @@ describe('Tool: toggle_company_holiday', () => {
     await withHarness(user.id, async (h) => {
       const result = await h.client.callTool({ name: 'toggle_company_holiday', arguments: { date: '2025-12-25' } });
       expect(result.isError).toBe(true);
+    });
+  });
+
+  it('returns a tool error and preserves rows for a fused plan', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+      const plan = testDb.prepare('SELECT * FROM vacay_plans WHERE owner_id = ?')
+        .get(owner.id) as { id: number };
+      testDb.prepare(`
+        INSERT INTO vacay_plan_members (plan_id, user_id, status)
+        VALUES (?, ?, 'accepted')
+      `).run(plan.id, member.id);
+
+      const result = await h.client.callTool({
+        name: 'toggle_company_holiday',
+        arguments: { date: '2025-12-25', note: 'Christmas' },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(testDb.prepare(`
+        SELECT id
+        FROM vacay_company_holidays
+        WHERE plan_id = ? AND date = ?
+      `).get(plan.id, '2025-12-25')).toBeUndefined();
     });
   });
 });

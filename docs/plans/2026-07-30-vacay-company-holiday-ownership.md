@@ -118,12 +118,32 @@ overlay로 취급한다.
 - solo plan은 현재 동작을 개인 legacy overlay로 계속 사용할 수 있지만,
   employment 귀속과 확정된 법적·회사 사실을 보장한다고 표시하지 않는다.
 - fused plan에서는 서로 다른 회사일 수 있으므로 회사 휴일 편집을 plan
-  owner/admin에게 넘기지 않는다. 별도 승인된 최소 R0.1이 필요하면 company mode를
-  read-only/fail-closed하고 legacy 상태를 설명하는 방식을 우선 검토한다.
+  owner/admin에게 넘기지 않는다. 로컬 R0.1은 company mode와 설정을 read-only로
+  표시하고 모든 write surface를 fail-closed한다.
 - 기존 row와 개인 entry는 보존한다. 권한 모델을 고친다는 이유로 자동 삭제·복제·
   재분류하지 않는다.
 - 현재 R0 비차감은 fused plan 전체에 적용되는 호환 projection이며, 사용자별
   정확한 회사 휴일 계산으로 표현하지 않는다.
+
+### R0.1 로컬 구현 경계
+
+`fix/vacay-preserve-holiday-entries`의 후속 로컬 commit은 schema 변경 없이 다음
+호환 경계를 적용한다.
+
+- `getPlanUsers(planId).length > 1`인 accepted fusion만 read-only로 판정한다.
+  pending invite는 solo 동작을 막지 않는다.
+- 수동 회사 휴일 toggle과 `company_holidays_enabled` 변경은 core service에서
+  DB write·carry 재계산·WebSocket broadcast 전에 거부한다.
+- REST는 `409`와
+  `VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY`, MCP는 tool error, plugin RPC는
+  `RESOURCE_FORBIDDEN`을 반환한다.
+- 반응형 calendar의 회사 모드와 설정 toggle만 비활성화한다. 공휴일 calendar,
+  이월, 주말 등 다른 설정과 기존 row 조회는 유지한다.
+- solo plan은 기존 R0 보존·비차감 동작을 유지한다.
+
+이 경계는 새 의미 오염을 줄이지만 기존 fused row의 귀속이나 plan-wide 비차감
+projection을 수정하지 않는다. 로컬 브랜치 검증만 수행하며 개인 포크 push,
+`main` 통합, 운영 배포와 공식 게시/PR은 별도 승인 전까지 제외한다.
 
 ## Legacy plan holiday 이관
 
@@ -198,20 +218,26 @@ REST/MCP/plugin 권한을 함께 바꾸므로 plugin-only 기능으로 분리하
 ```text
 Review result: pass (설계·계획 gate)
 Blockers: 0
-Major residual risks: 3
+Major residual risks: 4
 Decision: 문서 확정 가능, 구현·migration·배포는 후속 승인 전 보류
 ```
 
-1. **현재 fused v1 의미 오염:** plan-wide row와 비차감이 모든 구성원에게
-   적용된다. 소유자를 복원할 증거가 없으므로 자동 attribution을 금지하고,
-   필요 시 별도 R0.1에서 fused mutation을 fail-closed하는 방안을 우선한다.
-2. **운영자 지원 요구 미확정:** server admin의 사용자 데이터 대리 수정이 향후
+1. **fused 연도 삭제 권한:** `deleteYear`는 REST/MCP/UI에서 해당 plan의
+   사용자 entry, user-year와 회사 휴일을 한꺼번에 삭제한다. R0.1의 직접
+   회사 휴일 mutation guard 범위가 아니므로 배포 전에 별도 R0.2에서 fused
+   삭제 권한, 확인 UX와 negative test를 결정한다.
+2. **현재 fused v1 의미 오염:** R0.1이 새 mutation은 fail-closed하지만 기존
+   plan-wide row와 비차감은 모든 구성원에게 계속 적용된다. 소유자를 복원할
+   증거가 없으므로 자동 attribution을 금지하고 v2 importer에서 명시적으로
+   확인한다.
+3. **운영자 지원 요구 미확정:** server admin의 사용자 데이터 대리 수정이 향후
    필요할 수 있다. 일반 admin 우회로 열지 않고 실제 요구가 확인될 때
    break-glass·audit 계약을 별도 검토한다.
-3. **공동 회사 calendar 비목표:** 같은 회사 사용자의 중복 입력을 줄이는 기능은
+4. **공동 회사 calendar 비목표:** 같은 회사 사용자의 중복 입력을 줄이는 기능은
    유용하지만 R1에 넣으면 권한과 개인 잔액 확정이 다시 섞인다. source calendar
    역할과 개인 projection을 분리하는 후속 기능으로 유지한다.
 
-이 PASS는 현재 코드가 새 권한 모델을 구현했다는 뜻이 아니다. R0 보존 patch는
-그대로 유효하지만 legacy plan-wide 모델은 transitional이며, Task 8A 이전에는
-employment holiday의 self-only 보장을 주장하지 않는다.
+이 PASS와 R0.1은 employment 소유권 모델이 구현됐다는 뜻이 아니다. R0 보존
+patch와 fused mutation guard는 유효하지만 legacy plan-wide 모델은
+transitional이며, Task 8A 이전에는 employment holiday의 self-only 보장을
+주장하지 않는다.
