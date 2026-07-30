@@ -58,6 +58,9 @@ truth다.
   Discord gate 뒤 독립 correctness PR과 generic v2 slice를 실행하는 TDD 순서
 - [Vacay holiday entry preservation](plans/2026-07-29-vacay-holiday-entry-preservation.md):
   회사·public holiday overlay가 개인 입력을 삭제하지 않도록 하는 fork-first R0 증거
+- [Vacay company holiday ownership](plans/2026-07-30-vacay-company-holiday-ownership.md):
+  회사 휴일을 plan/admin 설정이 아닌 개인 employment 데이터로 소유하고,
+  mixed-company fusion legacy row를 명시적으로 확인·이관하는 권한 계약
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

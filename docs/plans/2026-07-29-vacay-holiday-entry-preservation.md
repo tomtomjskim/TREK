@@ -1,9 +1,11 @@
 # Vacay Holiday Entry Preservation
 
 > 작성일: 2026-07-29
-> 상태: fork-first R0 로컬 검증 완료, 배포 보류
+> 상태: fork-first R0 로컬 검증 및 회사 휴일 소유권 재검토 완료, 배포 보류
 > 기준: `origin/main` `c5ff1d27`, 설계 기준 `4e2be6d1`
-> 최신 공식 비교: `upstream/dev` `287dceb5`
+> 최신 공식 비교: `upstream/dev` `57017b8a`
+> 후속 권한 결정:
+> [Vacay company holiday ownership](2026-07-30-vacay-company-holiday-ownership.md)
 
 ## 문제
 
@@ -12,7 +14,7 @@
 수동 `vacay_company_holidays`도 삭제한다. 사용자가 입력한 휴가 기록이 설정 변경이나
 외부 데이터 갱신으로 사라지고, 삭제 전 값은 애플리케이션에서 복구할 수 없다.
 
-이 동작은 최신 `upstream/dev`의 Nest `VacayService`와 공식
+이 동작은 2026-07-30 최신 `upstream/dev`의 Nest `VacayService`와 공식
 `feat/vacay-leave-and-year` 브랜치에도 남아 있다. 포크 `origin/main`에서는 SQL
 소유 경로가 아직 `server/src/services/vacayService.ts`이고 Nest service는 얇은
 위임 계층이므로, 이번 pilot은 실제 포크 소유 경로를 수정한다. 향후 공식 기여가
@@ -132,11 +134,18 @@ Decision: 로컬 브랜치 정리 진행, 배포는 후속 gate 전 보류
    필요하다.
 2. 기존 REST/MCP/plugin 경로는 active plan의 일반 구성원도 plan-wide 회사 휴일을
    변경할 수 있고 REST 경로의 date validation도 약하다. 이번 patch는 기존 auth
-   경계를 의도적으로 바꾸지 않았지만, 넓은 사용자 공개 전 owner/admin 권한과
-   `YYYY-MM-DD` validation을 별도 correctness gate로 고정해야 한다.
+   경계를 의도적으로 바꾸지 않았다. 후속 재검토 결과 plan owner/server admin
+   제한도 mixed-company fusion의 소유권을 해결하지 못하므로, 넓은 사용자 공개
+   전 회사 휴일을 employment 소유·기본 본인 전용으로 이관하고 strict
+   `YYYY-MM-DD`·coverage validation을 같은 권한 gate로 검증해야 한다.
 3. 과거 destructive 동작으로 이미 삭제된 entry는 이 patch로 복구되지 않는다.
    운영 적용 전 backup에서 복구 가능한 row가 있는지 별도 read-only audit가
    필요하다.
 
 UX, API response, WebSocket event, provider 호출 수, migration과 production
 dependency는 바뀌지 않았다. 배포·개인 포크 push·공식 PR은 수행하지 않았다.
+
+2026-07-30 재검토는 R0 patch를 되돌릴 이유를 찾지 못했다. 다만 현재 plan-wide
+휴일은 `legacy_plan_overlay/unverified`인 transitional projection이며, 개인 회사
+데이터 모델이 아니다. solo row도 사용자 확인 없이 회사 사실로 승격하지 않고,
+fused row는 모든 구성원에게 자동 복제·활성화하지 않는다.

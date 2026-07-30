@@ -13,6 +13,8 @@
 > 작성일: 2026-07-28
 > 상태: 3관점 적대 리뷰 PASS, fork-first pilot 실행 가능, 공식 기여 보류
 > 설계: [Vacay employment and balance design](2026-07-28-vacay-employment-balance-design.md)
+> 휴일 권한:
+> [Vacay company holiday ownership](2026-07-30-vacay-company-holiday-ownership.md)
 > 제안: [Vacay upstream correctness proposal](2026-07-28-vacay-upstream-correctness-proposal.md)
 > 리뷰: [Vacay adversarial review](2026-07-28-vacay-employment-balance-adversarial-review.md)
 > 정책: [Fork-first validation policy](../upstream/fork-first-validation-policy.md)
@@ -558,7 +560,10 @@ Execute as a separate approved PR after the v2 read/write contract is accepted.
    rows, interrupted/resumed runs and connected fusion activation refusal.
 3. Preview source value, period, entry/holiday counts, opening result and every
    conflict while existing v1 writes remain enabled. Keep plan holidays as
-   `legacy_plan_overlay/unverified`.
+   `legacy_plan_overlay/unverified`. A solo plan may preview a candidate only
+   against one confirmed employment with matching coverage and still requires
+   its owner to claim it. Never copy or activate a fused plan holiday for every
+   member; each user may independently claim or reject the source later.
 4. Reconcile owner/FK, source uniqueness, signed sum, quantities, dates,
    conflicts and row counts exactly.
 5. R1 activates only new or solo users. In the final write transaction, acquire
@@ -619,37 +624,113 @@ claiming existing-user R1 completion.
    git commit -m "feat(vacay): add legacy activation review"
    ```
 
-### Task 8: Add Employment Holiday Classification And Projection
+### Task 8A: Add Self-Owned Manual Employment Holidays
 
-Execute as its own approved PR; do not combine it with UI or sharing.
+Execute after the Task 5B access policy and Task 6 entry projection are
+accepted. Do not combine this slice with provider ingestion, legacy import, UI
+or sharing.
 
 **Files:**
 
 - Modify: Vacay DDL/schema/service/controller/DTO owning files
-- Modify: provider adapter and owning unit/integration tests selected by the
-  accepted contract
+- Create: the shared Vacay employment access policy or extend the policy
+  accepted in Task 5B
+- Modify: owning migration, unit, integration, MCP and plugin capability tests
+
+For a local fork pilot, put additive DDL in `server/src/db/forkMigrations.ts`
+under one stable `jsnetworkcorp.*` ID. A future upstream extraction must
+rebuild the migration against the then-current official migration owner and
+slot; do not copy the fork migration marker.
 
 **Steps:**
 
-1. Add RED tests for `public_holiday`, `paid_company_day`,
-   `annual_leave_substitution` and `unknown` provenance.
-2. Persist versioned holiday occurrences with provider/source identity,
+1. Add RED permission tests across REST/MCP/plugin proving employment owner
+   success and fusion member, trip owner/participant, unrelated user and
+   server-admin automatic-bypass failure. Validate strict `YYYY-MM-DD`,
+   employment coverage, revision and idempotency in the application service.
+2. Add manual `EmploymentHoliday` rows owned by exactly one employment with
+   `paid_company_day | annual_leave_substitution | unknown`,
+   `balance_treatment=pending | non_deduct | deduct`, provenance and aggregate
+   revision. Keep calendar subscriptions and company-holiday enablement
+   employment-scoped rather than plan-scoped.
+3. Preserve every entry on create/confirm/revoke. Apply non-deduction only
+   after the owner explicitly confirms it; deduct keeps the ordinary entry
+   calculation.
+4. Do not infer annual-leave substitution from a date or label. Confirm it only
+   with an explicitly linked deducting vacation entry.
+5. Do not infer ownership from plan owner, fusion, trip membership, email
+   domain or server admin. Global admin surfaces may manage addon operation but
+   must not edit user employment holidays.
+6. Run fresh/current/replay/crash migration tests, cross-surface negative
+   permission tests, privacy projection tests and Task 3 gate.
+7. Commit only the manual holiday ownership slice:
+
+   ```bash
+   git commit -m "feat(vacay): add self-owned employment holidays"
+   ```
+
+### Task 8B: Persist Provider Holiday Occurrences
+
+Execute as a separate approved PR after Task 8A. Do not combine it with legacy
+activation or shared-calendar roles.
+
+**Files:**
+
+- Modify: provider adapter and Vacay occurrence owning files
+- Modify: owning unit/integration/MCP/plugin tests
+
+**Steps:**
+
+1. Add RED classification tests for `public_holiday`, provider/source
+   provenance and partial failure.
+2. Persist versioned provider occurrences owned by exactly one employment with
+   provider/source identity,
    observed/effective dates, active/superseded state and
    `balance_treatment=pending | non_deduct | deduct` so restart or provider
    failure cannot silently reinterpret past balances.
 3. Provider occurrences start as `pending`, preserve every entry and do not
    change balance projection. Apply non-deduction only after explicit user
    confirmation; confirmed deduct keeps the ordinary entry calculation.
-4. Do not infer annual-leave substitution from a date or provider label.
-   Confirm it only with an explicitly linked deducting vacation entry.
-5. Keep provider partial failure and unresolved pending conflicts isolated from
-   core balance reads and manual
-   entry writes.
-6. Run focused tests and Task 3 gate.
-7. Commit only the durable occurrence slice:
+4. Keep provider partial failure and unresolved pending conflicts isolated from
+   core balance reads and manual entry writes.
+5. If a later shared company calendar is added, let scoped managers edit source
+   occurrences only. They must not confirm another user's balance treatment.
+6. Run focused restart/supersession/partial-failure tests and Task 3 gate.
+7. Commit only the durable provider occurrence slice:
 
    ```bash
-   git commit -m "feat(vacay): persist employment holidays"
+   git commit -m "feat(vacay): persist employment holiday occurrences"
+   ```
+
+### Task 8C: Add Explicit Legacy Holiday Claim
+
+Execute as a separate approved PR after Tasks 7, 8A and the R0 dissolve
+correctness seam are accepted. Do not combine it with provider ingestion or UI.
+
+**Files:**
+
+- Modify: the Task 7 importer/reconciliation service and owning tests
+- Modify: Vacay legacy projection/dissolve owning files
+
+**Steps:**
+
+1. Project `legacy_plan_overlay/unverified` rows without activating them.
+   A solo candidate needs one matching confirmed employment plus owner
+   confirmation. A fused row must not be copied or activated for every member;
+   preserve source row/checksum and let each user claim or reject it
+   independently. Repeat and interrupted import must be idempotent.
+2. Change dissolve/rejoin projection so new employment-owned holidays are
+   neither blindly copied nor lost. Keep legacy tables for at least two
+   releases and do not introduce long-lived dual-write.
+3. Recheck source checksum, revision, membership and target employment ownership
+   in the final transaction. Mismatch returns to `review_required`.
+4. Test solo/no-employment/multiple-employment, same- and different-company
+   fusion fixtures, repeat/interruption, dissolve/rejoin and cancellation.
+5. Run importer and activation rollback reports plus Task 3 gate.
+6. Commit only the legacy holiday claim slice:
+
+   ```bash
+   git commit -m "feat(vacay): add legacy holiday claim"
    ```
 
 ### Task 9A: Add The Minimal Desktop Flow

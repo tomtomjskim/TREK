@@ -3,6 +3,9 @@
 > 작성일: 2026-07-28
 > 상태: 3관점 적대 리뷰 PASS, 로컬·개인 포크 pilot 허용, 공식 기여 보류
 > 기준: fork `main` `c5ff1d27`, upstream `dev` `292f1b18`
+> 회사 휴일 권한 재검토: 2026-07-30, upstream `dev` `57017b8a`
+> 결정:
+> [Vacay company holiday ownership](2026-07-30-vacay-company-holiday-ownership.md)
 
 ## 결론
 
@@ -217,6 +220,12 @@ observed/effective dates와 active/superseded 상태를 가진 durable occurrenc
 과거 잔액을 재해석하지 않는다. `annual_leave_substitution`은 사용자가 명시적인
 deducting vacation entry를 연결한 경우에만 확정할 수 있다.
 
+기본 관리자는 server admin이나 plan owner가 아니라 해당 employment의 소유
+사용자다. fusion과 trip membership은 holiday 조회·write를 허용하지 않는다.
+server admin은 addon/provider 운영 설정만 관리하고 사용자 holiday를 자동
+우회하지 않는다. 같은 회사의 공동 달력이 필요하면 후속 explicit
+`manager | editor | viewer` grant로 만들며 기존 역할에서 추론하지 않는다.
+
 ### `EmploymentAccess`
 
 첫 수직 기능 뒤의 grant는 employment별 `busy_dates` 읽기만 제공한다. planned와
@@ -308,14 +317,16 @@ column을 constraint/trigger로 방어한다. Zod와 service 검증만으로 이
 
 ## 권한 계약
 
-| 데이터/동작           | 본인                       | fusion 사용자                      | busy-date viewer | 관리자 일반 API |
-| --------------------- | -------------------------- | ---------------------------------- | ---------------- | --------------- |
-| employment·입사일     | create/read/archive        | 불가                               | 불가             | 자동 우회 불가  |
-| policy·period         | create/read/close          | 불가                               | 불가             | 자동 우회 불가  |
-| journal·잔액 조정     | create/read/reverse        | 불가                               | 불가             | 자동 우회 불가  |
-| 본인 entry            | create/read/cancel/correct | R1 불가; R1+ `edit_events` grant만 | 불가             | 자동 우회 불가  |
-| busy dates            | 조회                       | plan 표시 범위에서 조회            | 허용             | 자동 우회 불가  |
-| 회사명·정책·잔액·메모 | 조회                       | 본인 소유만                        | 불가             | 자동 우회 불가  |
+| 데이터/동작                | 본인                       | fusion 사용자                      | busy-date viewer | 관리자 일반 API |
+| -------------------------- | -------------------------- | ---------------------------------- | ---------------- | --------------- |
+| employment·입사일          | create/read/archive        | 불가                               | 불가             | 자동 우회 불가  |
+| policy·period              | create/read/close          | 불가                               | 불가             | 자동 우회 불가  |
+| journal·잔액 조정          | create/read/reverse        | 불가                               | 불가             | 자동 우회 불가  |
+| 본인 entry                 | create/read/cancel/correct | R1 불가; R1+ `edit_events` grant만 | 불가             | 자동 우회 불가  |
+| 본인 employment holiday    | create/read/confirm/revoke | 불가                               | 불가             | 자동 우회 불가  |
+| busy dates                 | 조회                       | 명시적 access 범위만               | 허용             | 자동 우회 불가  |
+| 회사명·정책·휴일·잔액·메모 | 조회                       | 본인 소유만                        | 불가             | 자동 우회 불가  |
+| addon·provider 운영 설정   | 불가                       | 불가                               | 불가             | 허용            |
 
 R1의 REST, MCP와 host-mediated plugin command가 같은 application service 권한
 판정을 사용한다. unsupported plugin write는 fail-closed하고 v2 WebSocket은
@@ -396,7 +407,12 @@ Vacay 안에 전역 메뉴를 늘리지 않고 기간 중심 캘린더를 유지
 - 상단 context: 재직처와 정확한 휴가기간
 - 요약: 현재 잔여, 예정 반영 가용량, 사용, 부여·이월·조정
 - 본문: 캘린더와 잔액 변동 drawer/sheet
-- 설정: 재직처·정책과 휴일 overlay
+- 설정: 재직처·정책과 **선택한 본인 employment의** 휴일 overlay
+
+fusion 상대의 캘린더를 보고 있을 때 회사 휴일 편집 control을 제공하지 않는다.
+공유 projection에는 busy date만 포함하고 회사명, 휴일명·종류, 처리 방식과 note를
+노출하지 않는다. server admin UI는 addon/provider 운영 상태를 관리하되 사용자별
+회사 휴일 편집기를 제공하지 않는다.
 
 R1 UI에는 후속 기능인 회사 변경·공유·custom period의 비활성 placeholder나 CTA를
 렌더링하지 않는다.
@@ -455,6 +471,11 @@ preservation, trip-linked leave는 unlinked shift 차단을 선행한다. R1 act
 solo 전환도 제공하지 않는다. 수용되지 않은 관련 legacy bridge/provider/trip
 surface는 fail-closed한다.
 
+R0의 plan-wide manual holiday 비차감은 legacy 호환 projection일 뿐
+mixed-company fusion의 사용자별 회사 사실을 보장하지 않는다. v2 전 임시 안전
+조치가 필요하면 owner/admin 대리 편집이 아니라 fused company mode의
+read-only/fail-closed를 별도 최소 slice로 검토한다.
+
 ### R1 — 최소 사용 가능 release
 
 - 단일 active employment와 명시적 현재 leave period
@@ -463,7 +484,8 @@ surface는 fail-closed한다.
 - signed opening/manual adjustment/reversal journal
 - planned/taken/cancelled 종일·반일 entry와 분 단위 snapshot
 - 비파괴 holiday overlay와 기존 `comp`의 비잔액 기록
-- self-only REST/MCP application service와 revision/idempotency 계약
+- employment holiday를 포함한 self-only REST/MCP application service와
+  revision/idempotency 계약
 - read-only v2 candidate preview, 확인 wizard와 transactional solo activation
 - 390px·실측 Fold·1440px의 최소 desktop/mobile UI
 
@@ -530,7 +552,10 @@ projection으로 시작한다. startup migration은 v2 table만 만들며 회사
 4. legacy entry는 기존 fraction/kind를 보존하고 opening cutoff 포함 여부를
    preview한다.
 5. plan company holiday는 회사 사실로 복사하지 않고
-   `legacy_plan_overlay/unverified`로 둔다.
+   `legacy_plan_overlay/unverified`로 둔다. solo의 단일 confirmed employment와
+   coverage가 맞아도 사용자 claim 전에는 pending이다. connected fusion row는
+   모든 구성원에게 자동 복제·활성화하지 않고 각 사용자가 독립적으로
+   claim/reject한다.
 6. wizard가 원본 값·기간·entry 수·예상 잔액·충돌과 변환 결과를 보여 준다.
 7. owner/FK, row count, source uniqueness, signed journal sum, entry 수량·날짜,
    orphan/conflict가 모두 맞아야 `reconciled`가 된다.
@@ -608,8 +633,9 @@ plugin-only 원장은 채택하지 않는다.
     carry projection을 반환하되 DB row를 쓰지 않는다.
 14. **[R0]** join → fused edit → leave → solo edit → rejoin 뒤 최신 user-year가
     유지되고 stale shared row나 중복 row가 없다.
-15. **[R1]** fusion membership, plugin 또는 admin route가 self-only employment,
-    policy, journal과 entry command를 우회하지 못한다.
+15. **[R1]** fusion membership, trip membership, plugin 또는 admin route가
+    self-only employment, policy, journal, entry와 employment holiday command를
+    우회하지 못한다.
 16. **[R1+]** busy-date viewer는 회사·재직기간·정책·잔액·fraction/status·메모를
     볼 수 없고 revoke 뒤 event/refetch도 받지 않는다.
 17. **[R1]** 같은 command key/같은 payload는 한 번만 반영되고, 같은 key/다른
