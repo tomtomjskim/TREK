@@ -64,6 +64,9 @@ truth다.
 - [Vacay fused company holiday guard](plans/2026-07-30-vacay-fused-company-holiday-guard.md):
   융합 plan의 회사 휴일 변경을 service·REST·MCP·plugin RPC·반응형 UI에서
   실패-폐쇄하는 R0.1 호환 경계
+- [Vacay year deletion safety](plans/2026-07-30-vacay-year-deletion-safety.md):
+  연도 전체 삭제를 actor-aware·원자적 명령으로 바꾸고 fusion·초대·legacy
+  멤버십을 실패-폐쇄하며 연쇄 이월과 반응형 확인 UX를 검증한 R0.2 경계
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

@@ -80,4 +80,25 @@ describe('Modal', () => {
     render(<Modal isOpen={true} onClose={onClose} />);
     expect(document.body.style.overflow).toBe('hidden');
   });
+
+  it('FE-COMP-MODAL-012: exposes linked alert-dialog semantics when requested', () => {
+    render(
+      <Modal
+        isOpen={true}
+        onClose={onClose}
+        title="Remove 2026"
+        dialogRole="alertdialog"
+        ariaDescribedBy="remove-year-description"
+      >
+        <p id="remove-year-description">This cannot be undone.</p>
+      </Modal>
+    );
+
+    const dialog = screen.getByRole('alertdialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAttribute('aria-describedby', 'remove-year-description');
+    const titleId = dialog.getAttribute('aria-labelledby');
+    expect(titleId).toBeTruthy();
+    expect(document.getElementById(titleId!)).toHaveTextContent('Remove 2026');
+  });
 });

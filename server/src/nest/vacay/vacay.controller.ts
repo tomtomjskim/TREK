@@ -14,19 +14,49 @@ import {
 import type { User } from '../../types';
 import {
   VacayFusedCompanyHolidaysReadOnlyError,
+  VacayFusedYearDeleteReadOnlyError,
+  VacayInvalidYearError,
   VacayService,
+  VacayYearDeleteReviewRequiredError,
 } from './vacay.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 
-function rethrowCompanyHolidayConflict(error: unknown): never {
-  if (error instanceof VacayFusedCompanyHolidaysReadOnlyError) {
+function rethrowVacayConflict(error: unknown): never {
+  if (error instanceof VacayInvalidYearError) {
+    throw new HttpException({
+      error: error.message,
+      code: error.code,
+    }, 400);
+  }
+  if (
+    error instanceof VacayFusedCompanyHolidaysReadOnlyError
+    || error instanceof VacayFusedYearDeleteReadOnlyError
+    || error instanceof VacayYearDeleteReviewRequiredError
+  ) {
     throw new HttpException({
       error: error.message,
       code: error.code,
     }, 409);
   }
   throw error;
+}
+
+function parseCanonicalYear(yearParam: string): number {
+  if (!/^(0|-?[1-9]\d*)$/.test(yearParam)) {
+    throw new HttpException({
+      error: 'Year must be a canonical safe integer',
+      code: 'VACAY_INVALID_YEAR',
+    }, 400);
+  }
+  const year = Number(yearParam);
+  if (!Number.isSafeInteger(year)) {
+    throw new HttpException({
+      error: 'Year must be a canonical safe integer',
+      code: 'VACAY_INVALID_YEAR',
+    }, 400);
+  }
+  return year;
 }
 
 /**
@@ -54,7 +84,7 @@ export class VacayController {
     try {
       return await this.vacay.updatePlan(planId, body, socketId);
     } catch (error) {
-      rethrowCompanyHolidayConflict(error);
+      rethrowVacayConflict(error);
     }
   }
 
@@ -174,19 +204,29 @@ export class VacayController {
 
   @Post('years')
   @HttpCode(200)
-  addYear(@CurrentUser() user: User, @Body('year') year?: number, @Headers('x-socket-id') socketId?: string) {
-    if (!year) {
-      throw new HttpException({ error: 'Year required' }, 400);
+  addYear(@CurrentUser() user: User, @Body('year') year?: unknown, @Headers('x-socket-id') socketId?: string) {
+    if (typeof year !== 'number' || !Number.isSafeInteger(year)) {
+      throw new HttpException({
+        error: 'Year must be a safe integer',
+        code: 'VACAY_INVALID_YEAR',
+      }, 400);
     }
     const planId = this.vacay.getActivePlanId(user.id);
-    return { years: this.vacay.addYear(planId, year, socketId) };
+    try {
+      return { years: this.vacay.addYear(planId, year, socketId) };
+    } catch (error) {
+      rethrowVacayConflict(error);
+    }
   }
 
   @Delete('years/:year')
   deleteYear(@CurrentUser() user: User, @Param('year') yearParam: string, @Headers('x-socket-id') socketId?: string) {
-    const year = parseInt(yearParam);
-    const planId = this.vacay.getActivePlanId(user.id);
-    return { years: this.vacay.deleteYear(planId, year, socketId) };
+    const year = parseCanonicalYear(yearParam);
+    try {
+      return { years: this.vacay.deleteActiveYear(user.id, year, socketId) };
+    } catch (error) {
+      rethrowVacayConflict(error);
+    }
   }
 
   @Get('entries/:year')
@@ -228,7 +268,7 @@ export class VacayController {
     try {
       return this.vacay.toggleCompanyHoliday(planId, body.date as string, body.note, socketId);
     } catch (error) {
-      rethrowCompanyHolidayConflict(error);
+      rethrowVacayConflict(error);
     }
   }
 

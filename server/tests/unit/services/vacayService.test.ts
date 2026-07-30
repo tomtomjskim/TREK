@@ -49,7 +49,7 @@ import {
   getAvailableUsers,
   listYears,
   addYear,
-  deleteYear,
+  deleteActiveYear,
   getEntries,
   toggleEntry,
   toggleCompanyHoliday,
@@ -94,6 +94,35 @@ function setupUserWithPlan() {
   const { user } = createUser(testDb);
   const plan = getOwnPlan(user.id);
   return { user, plan };
+}
+
+function snapshotYear(planId: number, year: number) {
+  return {
+    years: testDb.prepare(`
+      SELECT id, plan_id, year
+      FROM vacay_years
+      WHERE plan_id = ? AND year = ?
+      ORDER BY id
+    `).all(planId, year),
+    entries: testDb.prepare(`
+      SELECT id, plan_id, user_id, date, note
+      FROM vacay_entries
+      WHERE plan_id = ? AND date LIKE ?
+      ORDER BY id
+    `).all(planId, `${year}-%`),
+    companyHolidays: testDb.prepare(`
+      SELECT id, plan_id, date, note
+      FROM vacay_company_holidays
+      WHERE plan_id = ? AND date LIKE ?
+      ORDER BY id
+    `).all(planId, `${year}-%`),
+    userYears: testDb.prepare(`
+      SELECT id, user_id, plan_id, year, vacation_days, carried_over
+      FROM vacay_user_years
+      WHERE plan_id = ? AND year = ?
+      ORDER BY id
+    `).all(planId, year),
+  };
 }
 
 // ── getOwnPlan ────────────────────────────────────────────────────────────────
@@ -546,20 +575,45 @@ describe('addYear', () => {
     // The overlapping company holiday is non-deducting: 10 - 2 = 8.
     expect(userYear?.carried_over).toBe(8);
   });
+
+  it('VACAY-SVC-029a: rejects non-safe-integer years consistently for add and delete', () => {
+    const { user, plan } = setupUserWithPlan();
+    const before = listYears(plan.id);
+    broadcastToUserMock.mockClear();
+
+    for (const invalidYear of [2026.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => addYear(plan.id, invalidYear, undefined)).toThrowError(
+        expect.objectContaining({ code: 'VACAY_INVALID_YEAR' }),
+      );
+      expect(() => deleteActiveYear(user.id, invalidYear, undefined)).toThrowError(
+        expect.objectContaining({ code: 'VACAY_INVALID_YEAR' }),
+      );
+    }
+
+    expect(listYears(plan.id)).toEqual(before);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('deleteYear', () => {
-  it('VACAY-SVC-030: removes the year row and its associated entries', () => {
+  it('VACAY-SVC-030: atomically removes only the solo owner target year and broadcasts once', () => {
     const { user, plan } = setupUserWithPlan();
+    const { user: otherUser, plan: otherPlan } = setupUserWithPlan();
     const targetYear = new Date().getFullYear() + 3;
+    const adjacentYear = targetYear + 1;
 
     addYear(plan.id, targetYear, undefined);
-    // Insert an entry for that year
+    addYear(plan.id, adjacentYear, undefined);
+    addYear(otherPlan.id, targetYear, undefined);
     testDb
       .prepare('INSERT INTO vacay_entries (plan_id, user_id, date, note) VALUES (?, ?, ?, ?)')
       .run(plan.id, user.id, `${targetYear}-07-15`, '');
+    testDb
+      .prepare('INSERT INTO vacay_entries (plan_id, user_id, date, note) VALUES (?, ?, ?, ?)')
+      .run(otherPlan.id, otherUser.id, `${targetYear}-07-15`, 'other plan');
+    broadcastToUserMock.mockClear();
 
-    deleteYear(plan.id, targetYear, undefined);
+    deleteActiveYear(user.id, targetYear, undefined);
 
     const yearRow = testDb
       .prepare('SELECT * FROM vacay_years WHERE plan_id = ? AND year = ?')
@@ -570,6 +624,11 @@ describe('deleteYear', () => {
       .prepare("SELECT * FROM vacay_entries WHERE plan_id = ? AND date LIKE ?")
       .all(plan.id, `${targetYear}-%`);
     expect(entries).toHaveLength(0);
+    expect(testDb.prepare('SELECT id FROM vacay_years WHERE plan_id = ? AND year = ?')
+      .get(plan.id, adjacentYear)).toBeDefined();
+    expect(testDb.prepare('SELECT note FROM vacay_entries WHERE plan_id = ? AND date = ?')
+      .get(otherPlan.id, `${targetYear}-07-15`)).toEqual({ note: 'other plan' });
+    expect(broadcastToUserMock).toHaveBeenCalledTimes(1);
   });
 
   it('VACAY-SVC-030a: carry recompute after year deletion excludes manual company holidays', () => {
@@ -592,13 +651,288 @@ describe('deleteYear', () => {
     testDb.prepare('INSERT INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)')
       .run(plan.id, date, 'Company shutdown');
 
-    deleteYear(plan.id, removedYear, undefined);
+    deleteActiveYear(user.id, removedYear, undefined);
 
     const current = testDb.prepare(`
       SELECT carried_over FROM vacay_user_years
       WHERE user_id = ? AND plan_id = ? AND year = ?
     `).get(user.id, plan.id, currentYear) as { carried_over: number };
     expect(current.carried_over).toBe(10);
+  });
+
+  it('VACAY-SVC-030b: rejects fused owner and member before changing any target-year row', () => {
+    const { user: owner, plan } = setupUserWithPlan();
+    const { user: member } = createUser(testDb);
+    const year = new Date().getFullYear() + 3;
+
+    addYear(plan.id, year, undefined);
+    insertMember(plan.id, member.id, 'accepted');
+    testDb.prepare(`
+      INSERT INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over)
+      VALUES (?, ?, ?, 17, 4)
+    `).run(member.id, plan.id, year);
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?), (?, ?, ?, ?)
+    `).run(
+      plan.id, owner.id, `${year}-03-01`, 'owner',
+      plan.id, member.id, `${year}-03-02`, 'member',
+    );
+    testDb.prepare(`
+      INSERT INTO vacay_company_holidays (plan_id, date, note)
+      VALUES (?, ?, ?)
+    `).run(plan.id, `${year}-05-01`, 'shared legacy row');
+    const before = snapshotYear(plan.id, year);
+    broadcastToUserMock.mockClear();
+
+    for (const actorId of [owner.id, member.id]) {
+      expect(() => deleteActiveYear(actorId, year, undefined)).toThrowError(
+        expect.objectContaining({
+          code: 'VACAY_FUSED_YEAR_DELETE_READ_ONLY',
+        }),
+      );
+      expect(snapshotYear(plan.id, year)).toEqual(before);
+    }
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-030c: requires review while the target plan has an outgoing pending invite', () => {
+    const { user: owner, plan } = setupUserWithPlan();
+    const { user: invitee } = createUser(testDb);
+    const year = new Date().getFullYear() + 3;
+
+    addYear(plan.id, year, undefined);
+    insertMember(plan.id, invitee.id, 'pending');
+    const before = snapshotYear(plan.id, year);
+    broadcastToUserMock.mockClear();
+
+    expect(() => deleteActiveYear(owner.id, year, undefined)).toThrowError(
+      expect.objectContaining({
+        code: 'VACAY_YEAR_DELETE_REVIEW_REQUIRED',
+      }),
+    );
+    expect(snapshotYear(plan.id, year)).toEqual(before);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-030d: requires review for a dissolved-plan-style foreign target user-year', () => {
+    const { user: owner, plan } = setupUserWithPlan();
+    const { user: formerMember } = createUser(testDb);
+    const year = new Date().getFullYear() + 3;
+
+    addYear(plan.id, year, undefined);
+    testDb.prepare(`
+      INSERT INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over)
+      VALUES (?, ?, ?, 21, 2)
+    `).run(formerMember.id, plan.id, year);
+    const before = snapshotYear(plan.id, year);
+    broadcastToUserMock.mockClear();
+
+    expect(() => deleteActiveYear(owner.id, year, undefined)).toThrowError(
+      expect.objectContaining({
+        code: 'VACAY_YEAR_DELETE_REVIEW_REQUIRED',
+      }),
+    );
+    expect(snapshotYear(plan.id, year)).toEqual(before);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-030e: distinguishes a true no-op from orphan dependent rows', () => {
+    const { user, plan } = setupUserWithPlan();
+    const absentYear = new Date().getFullYear() + 7;
+    broadcastToUserMock.mockClear();
+
+    expect(deleteActiveYear(user.id, absentYear, undefined)).toEqual(listYears(plan.id));
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?)
+    `).run(plan.id, user.id, `${absentYear}-08-01`, 'orphan');
+    const before = snapshotYear(plan.id, absentYear);
+
+    expect(() => deleteActiveYear(user.id, absentYear, undefined)).toThrowError(
+      expect.objectContaining({
+        code: 'VACAY_YEAR_DELETE_REVIEW_REQUIRED',
+      }),
+    );
+    expect(snapshotYear(plan.id, absentYear)).toEqual(before);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-030f: rolls every delete back and does not broadcast when a middle statement fails', () => {
+    const { user, plan } = setupUserWithPlan();
+    const year = new Date().getFullYear() + 3;
+
+    addYear(plan.id, year, undefined);
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?)
+    `).run(plan.id, user.id, `${year}-04-01`, 'entry');
+    testDb.prepare(`
+      INSERT INTO vacay_company_holidays (plan_id, date, note)
+      VALUES (?, ?, ?)
+    `).run(plan.id, `${year}-05-01`, 'holiday');
+    testDb.exec(`
+      CREATE TRIGGER fail_vacay_company_holiday_delete
+      BEFORE DELETE ON vacay_company_holidays
+      BEGIN
+        SELECT RAISE(ABORT, 'forced year delete failure');
+      END
+    `);
+    const before = snapshotYear(plan.id, year);
+    broadcastToUserMock.mockClear();
+
+    try {
+      expect(() => deleteActiveYear(user.id, year, undefined))
+        .toThrow('forced year delete failure');
+      expect(snapshotYear(plan.id, year)).toEqual(before);
+      expect(broadcastToUserMock).not.toHaveBeenCalled();
+    } finally {
+      testDb.exec('DROP TRIGGER IF EXISTS fail_vacay_company_holiday_delete');
+    }
+  });
+
+  it('VACAY-SVC-030g: recomputes the full contiguous carry chain after deleting a middle year', () => {
+    const { user, plan } = setupUserWithPlan();
+    const previousYear = new Date().getFullYear() + 3;
+    const removedYear = previousYear + 1;
+    const firstSuccessor = removedYear + 1;
+    const secondSuccessor = firstSuccessor + 1;
+
+    for (const year of [previousYear, removedYear, firstSuccessor, secondSuccessor]) {
+      addYear(plan.id, year, undefined);
+    }
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 10, carried_over = 0
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, previousYear);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 20, carried_over = 99
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, firstSuccessor);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET carried_over = 99
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, secondSuccessor);
+    for (const day of [1, 2]) {
+      testDb.prepare(`
+        INSERT INTO vacay_entries (plan_id, user_id, date, note)
+        VALUES (?, ?, ?, '')
+      `).run(plan.id, user.id, `${previousYear}-04-0${day}`);
+    }
+    for (const day of [1, 2, 3, 4, 5]) {
+      testDb.prepare(`
+        INSERT INTO vacay_entries (plan_id, user_id, date, note)
+        VALUES (?, ?, ?, '')
+      `).run(plan.id, user.id, `${firstSuccessor}-06-0${day}`);
+    }
+    broadcastToUserMock.mockClear();
+
+    deleteActiveYear(user.id, removedYear, undefined);
+
+    const rows = testDb.prepare(`
+      SELECT year, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year IN (?, ?)
+      ORDER BY year
+    `).all(
+      user.id,
+      plan.id,
+      firstSuccessor,
+      secondSuccessor,
+    ) as { year: number; carried_over: number }[];
+    expect(rows).toEqual([
+      { year: firstSuccessor, carried_over: 8 },
+      { year: secondSuccessor, carried_over: 23 },
+    ]);
+    expect(broadcastToUserMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('VACAY-SVC-030h: rolls deletion and earlier carry updates back when a later carry update fails', () => {
+    const { user, plan } = setupUserWithPlan();
+    const removedYear = new Date().getFullYear() + 3;
+    const firstSuccessor = removedYear + 1;
+    const secondSuccessor = firstSuccessor + 1;
+
+    for (const year of [removedYear, firstSuccessor, secondSuccessor]) {
+      addYear(plan.id, year, undefined);
+    }
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET carried_over = 17
+      WHERE user_id = ? AND plan_id = ? AND year IN (?, ?)
+    `).run(user.id, plan.id, firstSuccessor, secondSuccessor);
+    const before = {
+      years: listYears(plan.id),
+      userYears: testDb.prepare(`
+        SELECT user_id, plan_id, year, vacation_days, carried_over
+        FROM vacay_user_years
+        WHERE plan_id = ?
+        ORDER BY user_id, year
+      `).all(plan.id),
+    };
+    testDb.exec(`
+      CREATE TRIGGER fail_later_vacay_carry_update
+      BEFORE UPDATE OF carried_over ON vacay_user_years
+      WHEN NEW.plan_id = ${plan.id} AND NEW.year = ${secondSuccessor}
+      BEGIN
+        SELECT RAISE(ABORT, 'forced later carry failure');
+      END
+    `);
+    broadcastToUserMock.mockClear();
+
+    try {
+      expect(() => deleteActiveYear(user.id, removedYear, undefined))
+        .toThrow('forced later carry failure');
+      expect({
+        years: listYears(plan.id),
+        userYears: testDb.prepare(`
+          SELECT user_id, plan_id, year, vacation_days, carried_over
+          FROM vacay_user_years
+          WHERE plan_id = ?
+          ORDER BY user_id, year
+        `).all(plan.id),
+      }).toEqual(before);
+      expect(broadcastToUserMock).not.toHaveBeenCalled();
+    } finally {
+      testDb.exec('DROP TRIGGER IF EXISTS fail_later_vacay_carry_update');
+    }
+  });
+
+  it('VACAY-SVC-030i: treats NULL and dangling accepted memberships as review-required legacy state', () => {
+    const { user, plan } = setupUserWithPlan();
+    const { plan: otherPlan } = setupUserWithPlan();
+    const targetYear = new Date().getFullYear() + 3;
+    addYear(plan.id, targetYear, undefined);
+    const before = snapshotYear(plan.id, targetYear);
+
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, NULL)
+    `).run(otherPlan.id, user.id);
+    expect(() => deleteActiveYear(user.id, targetYear, undefined)).toThrowError(
+      expect.objectContaining({ code: 'VACAY_YEAR_DELETE_REVIEW_REQUIRED' }),
+    );
+    expect(snapshotYear(plan.id, targetYear)).toEqual(before);
+
+    testDb.prepare('DELETE FROM vacay_plan_members WHERE user_id = ?').run(user.id);
+    testDb.pragma('foreign_keys = OFF');
+    try {
+      testDb.prepare(`
+        INSERT INTO vacay_plan_members (plan_id, user_id, status)
+        VALUES (?, ?, 'accepted')
+      `).run(999999, user.id);
+    } finally {
+      testDb.pragma('foreign_keys = ON');
+    }
+    expect(() => deleteActiveYear(user.id, targetYear, undefined)).toThrowError(
+      expect.objectContaining({ code: 'VACAY_YEAR_DELETE_REVIEW_REQUIRED' }),
+    );
+    expect(snapshotYear(plan.id, targetYear)).toEqual(before);
   });
 });
 
@@ -912,6 +1246,43 @@ describe('getStats', () => {
 
     expect(stats[0].used).toBe(2);
     expect(stats[0].remaining).toBe(28);
+  });
+
+  it('VACAY-SVC-045a: reading a deleted source year cannot overwrite successor carry', () => {
+    const { user, plan } = setupUserWithPlan();
+    const previousYear = new Date().getFullYear();
+    const deletedYear = previousYear + 1;
+    const successorYear = deletedYear + 1;
+
+    addYear(plan.id, deletedYear, undefined);
+    addYear(plan.id, successorYear, undefined);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 7, carried_over = 0
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, previousYear);
+    for (const day of [1, 2]) {
+      testDb.prepare(`
+        INSERT INTO vacay_entries (plan_id, user_id, date, note)
+        VALUES (?, ?, ?, '')
+      `).run(plan.id, user.id, `${previousYear}-03-0${day}`);
+    }
+
+    deleteActiveYear(user.id, deletedYear, undefined);
+    const afterDelete = testDb.prepare(`
+      SELECT carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(user.id, plan.id, successorYear);
+    expect(afterDelete).toEqual({ carried_over: 5 });
+
+    getStats(plan.id, deletedYear);
+
+    expect(testDb.prepare(`
+      SELECT carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(user.id, plan.id, successorYear)).toEqual(afterDelete);
   });
 });
 

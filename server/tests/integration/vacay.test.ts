@@ -163,6 +163,152 @@ describe('Vacay years', () => {
     expect(res.body.years).toBeDefined();
   });
 
+  it('VACAY-008a — fused owner and member receive a stable 409 without row loss', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const year = 2031;
+    const planResponse = await request(app)
+      .get('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(owner.id));
+    const planId = planResponse.body.plan.id as number;
+    await request(app)
+      .post('/api/addons/vacay/years')
+      .set('Cookie', authCookie(owner.id))
+      .send({ year });
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'accepted')
+    `).run(planId, member.id);
+    testDb.prepare(`
+      INSERT INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over)
+      VALUES (?, ?, ?, 19, 3)
+    `).run(member.id, planId, year);
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?), (?, ?, ?, ?)
+    `).run(
+      planId, owner.id, `${year}-04-01`, 'owner',
+      planId, member.id, `${year}-04-02`, 'member',
+    );
+    testDb.prepare(`
+      INSERT INTO vacay_company_holidays (plan_id, date, note)
+      VALUES (?, ?, ?)
+    `).run(planId, `${year}-05-01`, 'legacy shared holiday');
+    const snapshot = () => ({
+      years: testDb.prepare('SELECT * FROM vacay_years WHERE plan_id = ? AND year = ? ORDER BY id')
+        .all(planId, year),
+      entries: testDb.prepare("SELECT * FROM vacay_entries WHERE plan_id = ? AND date LIKE ? ORDER BY id")
+        .all(planId, `${year}-%`),
+      companyHolidays: testDb.prepare("SELECT * FROM vacay_company_holidays WHERE plan_id = ? AND date LIKE ? ORDER BY id")
+        .all(planId, `${year}-%`),
+      userYears: testDb.prepare('SELECT * FROM vacay_user_years WHERE plan_id = ? AND year = ? ORDER BY id')
+        .all(planId, year),
+    });
+    const before = snapshot();
+
+    for (const actor of [owner, member]) {
+      const res = await request(app)
+        .delete(`/api/addons/vacay/years/${year}`)
+        .set('Cookie', authCookie(actor.id));
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({
+        code: 'VACAY_FUSED_YEAR_DELETE_READ_ONLY',
+      });
+      expect(snapshot()).toEqual(before);
+    }
+  });
+
+  it('VACAY-008aa — pending fusion returns the review-required code without deleting the year', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: invitee } = createUser(testDb);
+    const year = 2034;
+    const planResponse = await request(app)
+      .get('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(owner.id));
+    const planId = planResponse.body.plan.id as number;
+    await request(app)
+      .post('/api/addons/vacay/years')
+      .set('Cookie', authCookie(owner.id))
+      .send({ year });
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'pending')
+    `).run(planId, invitee.id);
+
+    const before = testDb.prepare(
+      'SELECT * FROM vacay_years WHERE plan_id = ? AND year = ?'
+    ).get(planId, year);
+    const res = await request(app)
+      .delete(`/api/addons/vacay/years/${year}`)
+      .set('Cookie', authCookie(owner.id));
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      code: 'VACAY_YEAR_DELETE_REVIEW_REQUIRED',
+    });
+    expect(testDb.prepare(
+      'SELECT * FROM vacay_years WHERE plan_id = ? AND year = ?'
+    ).get(planId, year)).toEqual(before);
+  });
+
+  it('VACAY-008b — DELETE rejects a non-canonical year without truncating it', async () => {
+    const { user } = createUser(testDb);
+    const planResponse = await request(app)
+      .get('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(user.id));
+    const planId = planResponse.body.plan.id as number;
+    const year = 2032;
+    await request(app)
+      .post('/api/addons/vacay/years')
+      .set('Cookie', authCookie(user.id))
+      .send({ year });
+
+    const res = await request(app)
+      .delete(`/api/addons/vacay/years/${year}junk`)
+      .set('Cookie', authCookie(user.id));
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: 'Year must be a canonical safe integer',
+      code: 'VACAY_INVALID_YEAR',
+    });
+    expect(testDb.prepare('SELECT id FROM vacay_years WHERE plan_id = ? AND year = ?')
+      .get(planId, year)).toBeDefined();
+  });
+
+  it('VACAY-008c — POST rejects years that DELETE cannot address canonically', async () => {
+    const { user } = createUser(testDb);
+    const planResponse = await request(app)
+      .get('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(user.id));
+    const planId = planResponse.body.plan.id as number;
+    const before = testDb.prepare(`
+      SELECT year
+      FROM vacay_years
+      WHERE plan_id = ?
+      ORDER BY year
+    `).all(planId);
+
+    for (const year of [2032.5, '2032', Number.MAX_SAFE_INTEGER + 1]) {
+      const res = await request(app)
+        .post('/api/addons/vacay/years')
+        .set('Cookie', authCookie(user.id))
+        .send({ year });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({
+        error: 'Year must be a safe integer',
+        code: 'VACAY_INVALID_YEAR',
+      });
+    }
+    expect(testDb.prepare(`
+      SELECT year
+      FROM vacay_years
+      WHERE plan_id = ?
+      ORDER BY year
+    `).all(planId)).toEqual(before);
+  });
+
   it('VACAY-011 — PUT /api/addons/vacay/stats/:year updates allowance', async () => {
     const { user } = createUser(testDb);
     await request(app).get('/api/addons/vacay/plan').set('Cookie', authCookie(user.id));

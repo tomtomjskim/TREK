@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, waitFor, fireEvent } from '../../tests/helpers/render';
+import { act, render, screen, waitFor, fireEvent, within } from '../../tests/helpers/render';
 import { resetAllStores, seedStore } from '../../tests/helpers/store';
 import { buildUser } from '../../tests/helpers/factories';
 import { useAuthStore } from '../store/authStore';
@@ -43,6 +43,8 @@ const makeVacayState = (overrides = {}) => ({
   years: [2025],
   selectedYear: 2025,
   loading: false,
+  isFused: false,
+  pendingInvites: [] as any[],
   incomingInvites: [] as any[],
   plan: null,
   loadAll: vi.fn().mockResolvedValue(undefined),
@@ -105,7 +107,7 @@ describe('VacayPage', () => {
   // FE-PAGE-VACAY-005
   it('opens settings modal on settings button click', async () => {
     render(<VacayPage />);
-    fireEvent.click(screen.getByRole('button', { name: /settings/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /settings/i })[0]);
     await waitFor(() => {
       expect(screen.getByTestId('vacay-settings')).toBeInTheDocument();
     });
@@ -114,7 +116,7 @@ describe('VacayPage', () => {
   // FE-PAGE-VACAY-006
   it('closes settings modal via close callback', async () => {
     render(<VacayPage />);
-    fireEvent.click(screen.getByRole('button', { name: /settings/i }));
+    fireEvent.click(screen.getAllByRole('button', { name: /settings/i })[0]);
     await waitFor(() => {
       expect(screen.getByTestId('vacay-settings')).toBeInTheDocument();
     });
@@ -135,18 +137,11 @@ describe('VacayPage', () => {
   });
 
   // FE-PAGE-VACAY-008
-  it('opens delete year modal when minus button clicked on year tile', async () => {
+  it('opens the delete year modal from the selected-year removal action', async () => {
     seedStore(useVacayStore, makeVacayState({ years: [2024, 2025], selectedYear: 2025 }) as any);
-    const { container } = render(<VacayPage />);
-    await waitFor(() => {
-      expect(screen.getAllByText('2024')[0]).toBeInTheDocument();
-    });
-    const deleteBtn = container.querySelector('.bg-red-500');
-    expect(deleteBtn).toBeInTheDocument();
-    fireEvent.click(deleteBtn!);
-    await waitFor(() => {
-      expect(screen.getByText(/remove year/i)).toBeInTheDocument();
-    });
+    render(<VacayPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /remove 2025/i }));
+    expect(await screen.findByRole('alertdialog', { name: /remove 2025/i })).toBeInTheDocument();
   });
 
   // FE-PAGE-VACAY-009
@@ -319,31 +314,40 @@ describe('VacayPage', () => {
     });
   });
 
-  // FE-PAGE-VACAY-021: Mobile sidebar toggle opens drawer
-  it('opens mobile sidebar drawer when toggle button is clicked', async () => {
-    const { container } = render(<VacayPage />);
-    // The mobile sidebar toggle button has the SlidersHorizontal icon and no text
-    const mobileToggle = Array.from(container.querySelectorAll('button')).find(
-      btn => btn.className.includes('lg:hidden') || btn.className.includes('SlidersHorizontal')
-    ) ?? container.querySelector('.lg\\:hidden');
-    expect(mobileToggle).toBeInTheDocument();
-    fireEvent.click(mobileToggle as Element);
+  // FE-PAGE-VACAY-021: Mobile drawer is named, keyboard reachable, and reversible
+  it('moves focus into the mobile year drawer and restores it after Escape', async () => {
+    render(<VacayPage />);
+    const mobileToggle = screen.getByRole('button', { name: /year open/i });
+    mobileToggle.focus();
+    fireEvent.click(mobileToggle);
+
+    const drawer = await screen.findByRole('dialog', { name: /year settings/i });
+    const close = within(drawer).getByRole('button', { name: /close/i });
+    await waitFor(() => expect(close).toHaveFocus());
+
+    fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => {
-      // The mobile sidebar backdrop renders in document.body via portal
-      expect(document.body.querySelector('.fixed.inset-0')).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: /year settings/i })).not.toBeInTheDocument();
+      expect(mobileToggle).toHaveFocus();
     });
   });
 
   // FE-PAGE-VACAY-022: Delete year modal cancel button closes modal
-  it('closes delete year modal when cancel is clicked', async () => {
+  it('uses semantic year controls and restores focus after cancelling removal', async () => {
     seedStore(useVacayStore, makeVacayState({ years: [2024, 2025], selectedYear: 2025 }) as any);
-    const { container } = render(<VacayPage />);
-    await waitFor(() => expect(screen.getAllByText('2024')[0]).toBeInTheDocument());
-    fireEvent.click(container.querySelector('.bg-red-500')!);
-    await waitFor(() => expect(screen.getByText(/remove year/i)).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    render(<VacayPage />);
+    const yearButton = await screen.findByRole('button', { name: '2024' });
+    expect(yearButton).toHaveAttribute('aria-pressed', 'false');
+    const trigger = screen.getByRole('button', { name: /remove 2025/i });
+    expect(trigger).toHaveClass('min-h-11');
+    trigger.focus();
+    fireEvent.click(trigger);
+    const cancel = await screen.findByRole('button', { name: /cancel/i });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    fireEvent.click(cancel);
     await waitFor(() => {
       expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
+      expect(trigger).toHaveFocus();
     });
   });
 
@@ -351,16 +355,141 @@ describe('VacayPage', () => {
   it('calls removeYear when Remove button is clicked in delete modal', async () => {
     const mockRemoveYear = vi.fn().mockResolvedValue(undefined);
     seedStore(useVacayStore, makeVacayState({ years: [2024, 2025], selectedYear: 2025, removeYear: mockRemoveYear }) as any);
-    const { container } = render(<VacayPage />);
-    await waitFor(() => expect(screen.getAllByText('2024')[0]).toBeInTheDocument());
-    fireEvent.click(container.querySelector('.bg-red-500')!);
-    await waitFor(() => expect(screen.getByText(/remove year/i)).toBeInTheDocument());
-    // The Remove button is the red one in the modal footer (not the year tile delete button)
-    const removeBtn = screen.getByRole('button', { name: /^remove$/i }) ??
-      Array.from(document.querySelectorAll('button')).find(btn => /^remove$/i.test(btn.textContent ?? ''));
-    if (removeBtn) fireEvent.click(removeBtn);
+    render(<VacayPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /remove 2025/i }));
+    const dialog = await screen.findByRole('alertdialog', { name: /remove 2025/i });
+    fireEvent.click(within(dialog).getByRole('button', { name: /remove 2025/i }));
     await waitFor(() => {
-      expect(mockRemoveYear).toHaveBeenCalled();
+      expect(mockRemoveYear).toHaveBeenCalledOnce();
+    });
+  });
+
+  // FE-PAGE-VACAY-024: Accepted fusion is read-only for whole-year deletion
+  it('disables year removal for a fused plan and never opens confirmation', async () => {
+    seedStore(useVacayStore, makeVacayState({
+      years: [2024, 2025],
+      selectedYear: 2025,
+      isFused: true,
+    }) as any);
+    render(<VacayPage />);
+
+    const trigger = await screen.findByRole('button', { name: /remove 2025/i });
+    expect(trigger).toBeDisabled();
+    expect(screen.getByText(/years cannot be removed while vacation plans are fused/i)).toHaveClass(
+      'text-xs',
+      'text-content-muted',
+    );
+    fireEvent.click(trigger);
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  // FE-PAGE-VACAY-025: Outgoing invitation transition is fail-closed in the UI
+  it('disables year removal while an outgoing invitation is pending', async () => {
+    seedStore(useVacayStore, makeVacayState({
+      years: [2024, 2025],
+      selectedYear: 2025,
+      pendingInvites: [{ id: 1, user_id: 2 }],
+    }) as any);
+    render(<VacayPage />);
+
+    const trigger = await screen.findByRole('button', { name: /remove 2025/i });
+    expect(trigger).toBeDisabled();
+    expect(screen.getByText(/a fusion invitation is pending/i)).toBeVisible();
+  });
+
+  // FE-PAGE-VACAY-026: Live fusion invalidates an already-open confirmation
+  it('closes an open removal dialog and announces a live solo-to-fused transition', async () => {
+    seedStore(useVacayStore, makeVacayState({ years: [2024, 2025], selectedYear: 2025 }) as any);
+    render(<VacayPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /remove 2025/i }));
+    await screen.findByRole('alertdialog');
+
+    act(() => {
+      useVacayStore.setState({ isFused: true });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent(/removal dialog closed.*now fused/i);
+    });
+  });
+
+  // FE-PAGE-VACAY-026a: Live outgoing invitation also invalidates confirmation
+  it('closes an open removal dialog and announces a live solo-to-pending transition', async () => {
+    seedStore(useVacayStore, makeVacayState({ years: [2024, 2025], selectedYear: 2025 }) as any);
+    render(<VacayPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /remove 2025/i }));
+    await screen.findByRole('alertdialog');
+
+    act(() => {
+      useVacayStore.setState({ pendingInvites: [{ user_id: 2, username: 'pending-user' }] });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent(/removal dialog closed.*invitation is pending/i);
+    });
+  });
+
+  // FE-PAGE-VACAY-027: Destructive command is single-flight
+  it('prevents double submit and blocks closing while removal is pending', async () => {
+    let resolveRemoval!: () => void;
+    const mockRemoveYear = vi.fn(() => new Promise<void>(resolve => {
+      resolveRemoval = resolve;
+    }));
+    seedStore(useVacayStore, makeVacayState({
+      years: [2024, 2025],
+      selectedYear: 2025,
+      removeYear: mockRemoveYear,
+    }) as any);
+    render(<VacayPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /remove 2025/i }));
+    const dialog = await screen.findByRole('alertdialog');
+    const confirm = within(dialog).getByRole('button', { name: /remove 2025/i });
+    const cancel = within(dialog).getByRole('button', { name: /cancel/i });
+
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+
+    await waitFor(() => {
+      expect(mockRemoveYear).toHaveBeenCalledOnce();
+      expect(confirm).toBeDisabled();
+      expect(confirm).toHaveAttribute('aria-busy', 'true');
+      expect(cancel).toBeDisabled();
+    });
+
+    await act(async () => {
+      resolveRemoval();
+    });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+  });
+
+  // FE-PAGE-VACAY-028: Failed removal remains retryable
+  it('explains an uncertain result and succeeds on an explicit retry', async () => {
+    const mockRemoveYear = vi.fn()
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce(undefined);
+    seedStore(useVacayStore, makeVacayState({
+      years: [2024, 2025],
+      selectedYear: 2025,
+      removeYear: mockRemoveYear,
+    }) as any);
+    render(<VacayPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /remove 2025/i }));
+    const dialog = await screen.findByRole('alertdialog');
+    const confirm = within(dialog).getByRole('button', { name: /remove 2025/i });
+    fireEvent.click(confirm);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/removal result could not be confirmed/i);
+      expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+      expect(confirm).toBeEnabled();
+    });
+
+    fireEvent.click(confirm);
+    await waitFor(() => {
+      expect(mockRemoveYear).toHaveBeenCalledTimes(2);
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
   });
 });

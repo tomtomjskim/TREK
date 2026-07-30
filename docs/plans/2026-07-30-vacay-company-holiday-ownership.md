@@ -222,10 +222,11 @@ Major residual risks: 4
 Decision: 문서 확정 가능, 구현·migration·배포는 후속 승인 전 보류
 ```
 
-1. **fused 연도 삭제 권한:** `deleteYear`는 REST/MCP/UI에서 해당 plan의
-   사용자 entry, user-year와 회사 휴일을 한꺼번에 삭제한다. R0.1의 직접
-   회사 휴일 mutation guard 범위가 아니므로 배포 전에 별도 R0.2에서 fused
-   삭제 권한, 확인 UX와 negative test를 결정한다.
+1. **연도 삭제 후 invite 수락 정책:** 별도
+   [R0.2 year deletion safety](2026-07-30-vacay-year-deletion-safety.md)는
+   fused/pending 상태의 전체 연도 삭제를 실패-폐쇄하고 solo 삭제를 actor-aware
+   transaction으로 고정했다. 다만 삭제 뒤 새 초대를 만들고 수락할 때 invitee의
+   historical row가 target의 누락 연도로 유입되는 정책은 아직 결정하지 않았다.
 2. **현재 fused v1 의미 오염:** R0.1이 새 mutation은 fail-closed하지만 기존
    plan-wide row와 비차감은 모든 구성원에게 계속 적용된다. 소유자를 복원할
    증거가 없으므로 자동 attribution을 금지하고 v2 importer에서 명시적으로

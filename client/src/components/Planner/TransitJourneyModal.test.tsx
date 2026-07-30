@@ -130,6 +130,6 @@ describe('TransitJourneyModal', () => {
     expect(screen.queryByRole('button', { name: /^Delete$/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Change route/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^Save$/ })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /Close/ })).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: /^Close$/ })).toHaveLength(2)
   })
 })

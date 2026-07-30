@@ -1,7 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import * as svc from '../../services/vacayService';
 
-export { VacayFusedCompanyHolidaysReadOnlyError } from '../../services/vacayService';
+export {
+  VacayFusedCompanyHolidaysReadOnlyError,
+  VacayFusedYearDeleteReadOnlyError,
+  VacayInvalidYearError,
+  VacayYearDeleteReviewRequiredError,
+} from '../../services/vacayService';
 
 type UpdatePlanBody = Parameters<typeof svc.updatePlan>[1];
 
@@ -80,8 +85,8 @@ export class VacayService {
     return svc.addYear(planId, year, socketId);
   }
 
-  deleteYear(planId: number, year: number, socketId: string | undefined): number[] {
-    return svc.deleteYear(planId, year, socketId);
+  deleteActiveYear(userId: number, year: number, socketId: string | undefined): number[] {
+    return svc.deleteActiveYear(userId, year, socketId);
   }
 
   getEntries(planId: number, year: string) {

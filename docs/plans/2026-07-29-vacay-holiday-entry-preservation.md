@@ -158,7 +158,8 @@ MCP tool error, plugin `RESOURCE_FORBIDDEN`과 반응형 UI read-only 상태를 
 계약으로 고정했다. 기존 row와 plan-wide 비차감 projection은 보존하고 solo
 동작은 바꾸지 않는다. 따라서 “일반 plan 구성원이 fused 회사 휴일을 계속
 변경한다”는 위험은 신규 write에 대해 완화됐지만, 기존 row의 귀속 불명과 약한
-date validation은 각각 v2 importer와 Task 8A에 남는다. 또한 별도 `deleteYear`
-경로는 fused plan의 해당 연도 사용자 entry와 회사 휴일을 함께 삭제하므로,
-R0.1을 shared-year 삭제 안전성으로 확대 해석하지 않고 배포 전 R0.2 권한
-결정으로 분리한다.
+date validation은 각각 v2 importer와 Task 8A에 남는다. 별도 `deleteYear`
+경로는 [R0.2 year deletion safety](2026-07-30-vacay-year-deletion-safety.md)에서
+fused/pending fail-closed, actor-aware transaction, 연쇄 carry 재계산과 확인 UX를
+로컬 구현했다. 아직 push·merge·배포하지 않았고, 미래 invite 수락 시 누락 연도
+reconciliation은 후속 정책이다.

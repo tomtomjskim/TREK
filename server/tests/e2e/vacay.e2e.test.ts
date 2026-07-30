@@ -29,7 +29,7 @@ const { svc } = vi.hoisted(() => ({
     addHolidayCalendar: vi.fn(), updateHolidayCalendar: vi.fn(), deleteHolidayCalendar: vi.fn(),
     getPlanUsers: vi.fn(), setUserColor: vi.fn(), sendInvite: vi.fn(), acceptInvite: vi.fn(),
     declineInvite: vi.fn(), cancelInvite: vi.fn(), dissolvePlan: vi.fn(), getAvailableUsers: vi.fn(),
-    listYears: vi.fn(), addYear: vi.fn(), deleteYear: vi.fn(), getEntries: vi.fn(),
+    listYears: vi.fn(), addYear: vi.fn(), deleteActiveYear: vi.fn(), getEntries: vi.fn(),
     toggleEntry: vi.fn(), toggleCompanyHoliday: vi.fn(), getStats: vi.fn(), updateStats: vi.fn(),
     getCountries: vi.fn(), getHolidays: vi.fn(),
   },

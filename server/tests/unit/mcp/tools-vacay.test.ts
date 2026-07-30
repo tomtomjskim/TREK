@@ -193,6 +193,7 @@ describe('Tool: set_vacay_color', () => {
       expect(result.isError).toBe(true);
     });
   });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -233,6 +234,7 @@ describe('Tool: add_vacay_year', () => {
       expect(result.isError).toBe(true);
     });
   });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -258,6 +260,98 @@ describe('Tool: delete_vacay_year', () => {
     await withHarness(user.id, async (h) => {
       const result = await h.client.callTool({ name: 'delete_vacay_year', arguments: { year: 2025 } });
       expect(result.isError).toBe(true);
+    });
+  });
+
+  it('returns the stable fused code for owner and member without deleting rows', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const year = 2033;
+    let planId = 0;
+
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+      planId = (testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?')
+        .get(owner.id) as { id: number }).id;
+      await h.client.callTool({ name: 'add_vacay_year', arguments: { year } });
+      testDb.prepare(`
+        INSERT INTO vacay_plan_members (plan_id, user_id, status)
+        VALUES (?, ?, 'accepted')
+      `).run(planId, member.id);
+      testDb.prepare(`
+        INSERT INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over)
+        VALUES (?, ?, ?, 18, 2)
+      `).run(member.id, planId, year);
+      testDb.prepare(`
+        INSERT INTO vacay_entries (plan_id, user_id, date, note)
+        VALUES (?, ?, ?, ?), (?, ?, ?, ?)
+      `).run(
+        planId, owner.id, `${year}-04-01`, 'owner',
+        planId, member.id, `${year}-04-02`, 'member',
+      );
+      testDb.prepare(`
+        INSERT INTO vacay_company_holidays (plan_id, date, note)
+        VALUES (?, ?, ?)
+      `).run(planId, `${year}-05-01`, 'legacy shared holiday');
+    });
+
+    const snapshot = () => ({
+      years: testDb.prepare('SELECT * FROM vacay_years WHERE plan_id = ? AND year = ? ORDER BY id')
+        .all(planId, year),
+      entries: testDb.prepare("SELECT * FROM vacay_entries WHERE plan_id = ? AND date LIKE ? ORDER BY id")
+        .all(planId, `${year}-%`),
+      companyHolidays: testDb.prepare("SELECT * FROM vacay_company_holidays WHERE plan_id = ? AND date LIKE ? ORDER BY id")
+        .all(planId, `${year}-%`),
+      userYears: testDb.prepare('SELECT * FROM vacay_user_years WHERE plan_id = ? AND year = ? ORDER BY id')
+        .all(planId, year),
+    });
+    const before = snapshot();
+
+    for (const actorId of [owner.id, member.id]) {
+      await withHarness(actorId, async (h) => {
+        const result = await h.client.callTool({
+          name: 'delete_vacay_year',
+          arguments: { year },
+        });
+        expect(result.isError).toBe(true);
+        expect(parseToolResult(result)).toMatchObject({
+          code: 'VACAY_FUSED_YEAR_DELETE_READ_ONLY',
+        });
+      });
+      expect(snapshot()).toEqual(before);
+    }
+  });
+
+  it('returns the stable review-required code for a pending fusion without deleting rows', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: invitee } = createUser(testDb);
+    const year = 2034;
+
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+      const planId = (testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?')
+        .get(owner.id) as { id: number }).id;
+      await h.client.callTool({ name: 'add_vacay_year', arguments: { year } });
+      testDb.prepare(`
+        INSERT INTO vacay_plan_members (plan_id, user_id, status)
+        VALUES (?, ?, 'pending')
+      `).run(planId, invitee.id);
+      const before = testDb.prepare(
+        'SELECT * FROM vacay_years WHERE plan_id = ? AND year = ?'
+      ).get(planId, year);
+
+      const result = await h.client.callTool({
+        name: 'delete_vacay_year',
+        arguments: { year },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({
+        code: 'VACAY_YEAR_DELETE_REVIEW_REQUIRED',
+      });
+      expect(testDb.prepare(
+        'SELECT * FROM vacay_years WHERE plan_id = ? AND year = ?'
+      ).get(planId, year)).toEqual(before);
     });
   });
 });

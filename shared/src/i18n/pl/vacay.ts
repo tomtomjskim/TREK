@@ -9,6 +9,12 @@ const vacay: TranslationStrings = {
   'vacay.removeYear': 'Usuń rok',
   'vacay.removeYearConfirm': 'Usunąć {year}?',
   'vacay.removeYearHint': 'Wszystkie wpisy dotyczące urlopów oraz dni wolnych w tym roku zostaną trwale usunięte.',
+  'vacay.yearRemovalFusedReason':
+    'Years cannot be removed while vacation plans are fused. Dissolve the fusion to continue.',
+  'vacay.yearRemovalPendingReason': 'A fusion invitation is pending. Cancel the invitation before removing a year.',
+  'vacay.yearRemovalFusedNotice': 'The removal dialog closed because this vacation plan is now fused.',
+  'vacay.yearRemovalPendingNotice': 'The removal dialog closed because a fusion invitation is pending.',
+  'vacay.yearRemovalError': 'The removal result could not be confirmed. Refresh to verify the year, or try again.',
   'vacay.remove': 'Usuń',
   'vacay.persons': 'Osoby',
   'vacay.noPersons': 'Nie dodano osób',

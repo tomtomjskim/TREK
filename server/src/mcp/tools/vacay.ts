@@ -2,11 +2,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp';
 import { z } from 'zod';
 import { isDemoUser, getCurrentUser } from '../../services/authService';
 import {
-  getOwnPlan, getActivePlan, getActivePlanId, getPlanData,
+  getActivePlanId, getPlanData,
   updatePlan, setUserColor,
   sendInvite as sendVacayInvite, acceptInvite, declineInvite, cancelInvite, dissolvePlan,
   getAvailableUsers,
-  listYears, addYear, deleteYear,
+  listYears, addYear, deleteActiveYear,
+  VacayFusedYearDeleteReadOnlyError, VacayYearDeleteReviewRequiredError,
   getEntries as getVacayEntries, toggleEntry, toggleCompanyHoliday,
   getStats as getVacayStats, updateStats as updateVacayStats,
   addHolidayCalendar, updateHolidayCalendar, deleteHolidayCalendar,
@@ -20,6 +21,22 @@ import {
   demoDenied, ok,
 } from './_shared';
 import { canRead, canWrite } from '../scopes';
+
+function yearDeleteError(error: unknown) {
+  if (
+    error instanceof VacayFusedYearDeleteReadOnlyError
+    || error instanceof VacayYearDeleteReviewRequiredError
+  ) {
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify({ error: error.message, code: error.code }),
+      }],
+      isError: true as const,
+    };
+  }
+  throw error;
+}
 
 export function registerVacayTools(server: McpServer, userId: number, scopes: string[] | null): void {
   const R = canRead(scopes, 'vacay');
@@ -213,15 +230,18 @@ export function registerVacayTools(server: McpServer, userId: number, scopes: st
       {
         description: 'Remove a calendar year from the vacation plan.',
         inputSchema: {
-          year: z.number().int(),
+          year: z.number().int().safe(),
         },
         annotations: TOOL_ANNOTATIONS_DELETE,
       },
       async ({ year }) => {
         if (isDemoUser(userId)) return demoDenied();
-        const planId = getActivePlanId(userId);
-        const years = deleteYear(planId, year, undefined);
-        return ok({ years });
+        try {
+          const years = deleteActiveYear(userId, year, undefined);
+          return ok({ years });
+        } catch (error) {
+          return yearDeleteError(error);
+        }
       }
     );
 

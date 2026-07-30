@@ -6,7 +6,7 @@ import VacayCalendar from '../components/Vacay/VacayCalendar'
 import VacayPersons from '../components/Vacay/VacayPersons'
 import VacayStats from '../components/Vacay/VacayStats'
 import VacaySettings from '../components/Vacay/VacaySettings'
-import { Plus, Minus, ChevronLeft, ChevronRight, Settings, CalendarDays, AlertTriangle, Users, Eye, Pencil, Trash2, Unlink, ShieldCheck, SlidersHorizontal } from 'lucide-react'
+import { Plus, Minus, ChevronLeft, ChevronRight, Settings, CalendarDays, AlertTriangle, Eye, Pencil, Trash2, Unlink, ShieldCheck, SlidersHorizontal, X } from 'lucide-react'
 import Modal from '../components/shared/Modal'
 import { useVacay } from './vacay/useVacay'
 
@@ -14,12 +14,23 @@ export default function VacayPage(): React.ReactElement {
   const { t } = useTranslation()
   // Page = wiring container: vacay store, live sync + UI state live in the hook.
   const {
-    years, selectedYear, setSelectedYear, removeYear, loading,
+    years, selectedYear, setSelectedYear, loading,
     incomingInvites, acceptInvite, declineInvite, plan,
-    showSettings, setShowSettings, deleteYear, setDeleteYear,
-    showMobileSidebar, setShowMobileSidebar,
+    showSettings, setShowSettings,
+    deleteYear, isRemovingYear, deleteYearError,
+    yearRemovalReadOnlyReason, yearRemovalNotice,
+    showMobileSidebar,
+    mobileSidebarButtonRef, mobileDrawerCloseButtonRef,
+    openMobileSidebar, closeMobileSidebar, openYearRemoval,
     handleAddNextYear, handleAddPrevYear,
+    cancelYearRemoval, confirmYearRemoval,
   } = useVacay()
+
+  const yearRemovalReasonText = yearRemovalReadOnlyReason === 'pending'
+    ? t('vacay.yearRemovalPendingReason')
+    : yearRemovalReadOnlyReason === 'fused'
+      ? t('vacay.yearRemovalFusedReason')
+      : null
 
   if (loading) {
     return (
@@ -58,18 +69,40 @@ export default function VacayPage(): React.ReactElement {
         </div>
         <div className="grid grid-cols-4 gap-1">
           {years.map(y => (
-            <div key={y} onClick={() => setSelectedYear(y)}
-              className={`group relative py-1.5 rounded-lg text-xs font-medium transition-[background-color,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] text-center cursor-pointer ${y === selectedYear ? 'bg-content text-surface-card' : 'bg-surface-secondary text-content-muted'}`}>
+            <button
+              key={y}
+              type="button"
+              onClick={() => setSelectedYear(y)}
+              aria-pressed={y === selectedYear}
+              className={`py-1.5 rounded-lg text-xs font-medium transition-[background-color,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] text-center ${y === selectedYear ? 'bg-content text-surface-card' : 'bg-surface-secondary text-content-muted'}`}
+            >
               {y}
-              {years.length > 1 && (
-                <span onClick={e => { e.stopPropagation(); setDeleteYear(y); setShowMobileSidebar(false) }}
-                  className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-red-500 text-white text-[7px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
-                  <Minus size={7} />
-                </span>
-              )}
-            </div>
+            </button>
           ))}
         </div>
+        {years.length > 1 && (
+          <>
+            <button
+              type="button"
+              onClick={openYearRemoval}
+              disabled={yearRemovalReadOnlyReason !== null}
+              aria-label={[
+                t('vacay.removeYearConfirm', { year: selectedYear }),
+                yearRemovalReasonText,
+              ].filter(Boolean).join(' — ')}
+              className="mt-2 min-h-11 w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:border-edge disabled:text-content-faint disabled:hover:bg-transparent"
+            >
+              <Minus size={14} aria-hidden="true" />
+              <span>{t('vacay.removeYear')}</span>
+              <span className="tabular-nums">{selectedYear}</span>
+            </button>
+            {yearRemovalReasonText && (
+              <p className="mt-1.5 text-center text-xs text-content-muted">
+                {yearRemovalReasonText}
+              </p>
+            )}
+          </>
+        )}
       </div>
 
       <VacayPersons />
@@ -108,13 +141,16 @@ export default function VacayPage(): React.ReactElement {
             </div>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => setShowMobileSidebar(true)}
+                ref={mobileSidebarButtonRef}
+                onClick={openMobileSidebar}
+                aria-label={`${t('vacay.year')} ${t('common.open')}`}
                 className="lg:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors bg-surface-secondary text-content-muted"
               >
                 <SlidersHorizontal size={14} />
               </button>
               <button
                 onClick={() => setShowSettings(true)}
+                aria-label={t('vacay.settings')}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors bg-surface-secondary text-content-muted"
               >
                 <Settings size={14} />
@@ -175,9 +211,30 @@ export default function VacayPage(): React.ReactElement {
       {/* Mobile Sidebar Drawer */}
       {showMobileSidebar && ReactDOM.createPortal(
         <div className="fixed inset-0 lg:hidden" style={{ zIndex: 99980 }}>
-          <div className="absolute inset-0 bg-[rgba(0,0,0,0.4)]" onClick={() => setShowMobileSidebar(false)} />
-          <div className="absolute left-0 top-0 bottom-0 w-[280px] overflow-y-auto p-3 flex flex-col gap-3 bg-surface"
-            style={{ boxShadow: '4px 0 24px rgba(0,0,0,0.15)', animation: 'slideInLeft 0.2s ease-out' }}>
+          <div
+            aria-hidden="true"
+            className="absolute inset-0 bg-[rgba(0,0,0,0.4)]"
+            onClick={closeMobileSidebar}
+          />
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`${t('vacay.year')} ${t('vacay.settings')}`}
+            className="absolute left-0 top-0 bottom-0 w-[280px] overflow-y-auto p-3 flex flex-col gap-3 bg-surface"
+            style={{ boxShadow: '4px 0 24px rgba(0,0,0,0.15)', animation: 'slideInLeft 0.2s ease-out' }}
+          >
+            <div className="flex min-h-11 items-center justify-between">
+              <h2 className="text-sm font-semibold text-content">{t('vacay.year')}</h2>
+              <button
+                ref={mobileDrawerCloseButtonRef}
+                type="button"
+                onClick={closeMobileSidebar}
+                aria-label={t('common.close')}
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-content-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
             {sidebarContent}
           </div>
         </div>,
@@ -189,26 +246,60 @@ export default function VacayPage(): React.ReactElement {
         <VacaySettings onClose={() => setShowSettings(false)} />
       </Modal>
 
+      {yearRemovalNotice && (
+        <p role="status" aria-live="polite" className="sr-only">
+          {yearRemovalNotice === 'pending'
+            ? t('vacay.yearRemovalPendingNotice')
+            : t('vacay.yearRemovalFusedNotice')}
+        </p>
+      )}
+
       {/* Delete Year Modal */}
-      <Modal isOpen={deleteYear !== null} onClose={() => setDeleteYear(null)} title={t('vacay.removeYear')} size="sm">
+      <Modal
+        isOpen={deleteYear !== null}
+        onClose={cancelYearRemoval}
+        title={deleteYear === null
+          ? t('vacay.removeYear')
+          : t('vacay.removeYearConfirm', { year: deleteYear })}
+        size="sm"
+        hideCloseButton={isRemovingYear}
+        dialogRole="alertdialog"
+        ariaDescribedBy="vacay-remove-year-description"
+        closeLabel={t('common.close')}
+      >
         <div className="space-y-4">
           <div className="flex gap-3 p-3 rounded-lg bg-[rgba(239,68,68,0.08)] border border-[rgba(239,68,68,0.15)]">
             <AlertTriangle size={18} className="text-red-500 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-medium text-content">
-                {t('vacay.removeYearConfirm', { year: deleteYear })}
-              </p>
-              <p className="text-xs mt-1 text-content-muted">
+              <p id="vacay-remove-year-description" className="text-xs text-content-muted">
                 {t('vacay.removeYearHint')}
               </p>
             </div>
           </div>
+          {deleteYearError && (
+            <p role="alert" className="text-sm text-red-600">
+              {t('vacay.yearRemovalError')}
+            </p>
+          )}
           <div className="flex gap-3 justify-end">
-            <button onClick={() => setDeleteYear(null)} className="px-4 py-2 text-sm rounded-lg transition-colors border text-content-muted border-edge">
+            <button
+              type="button"
+              onClick={cancelYearRemoval}
+              disabled={isRemovingYear}
+              autoFocus
+              className="px-4 py-2 text-sm rounded-lg transition-colors border text-content-muted border-edge disabled:cursor-not-allowed disabled:opacity-50"
+            >
               {t('common.cancel')}
             </button>
-            <button onClick={async () => { await removeYear(deleteYear); setDeleteYear(null) }} className="px-4 py-2 text-sm bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors">
-              {t('vacay.remove')}
+            <button
+              type="button"
+              onClick={confirmYearRemoval}
+              disabled={isRemovingYear}
+              aria-busy={isRemovingYear ? 'true' : undefined}
+              aria-label={t('vacay.removeYearConfirm', { year: deleteYear ?? '' })}
+              className="px-4 py-2 text-sm bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isRemovingYear ? t('common.loading') : t('vacay.remove')}
             </button>
           </div>
         </div>

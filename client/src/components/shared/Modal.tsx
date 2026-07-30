@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useRef } from 'react'
+import React, { useEffect, useCallback, useId, useRef } from 'react'
 import ReactDOM from 'react-dom'
 import { X } from 'lucide-react'
 
@@ -19,6 +19,9 @@ interface ModalProps {
   size?: string
   footer?: React.ReactNode
   hideCloseButton?: boolean
+  dialogRole?: 'dialog' | 'alertdialog'
+  ariaDescribedBy?: string
+  closeLabel?: string
 }
 
 export default function Modal({
@@ -29,7 +32,11 @@ export default function Modal({
   size = 'md',
   footer,
   hideCloseButton = false,
+  dialogRole = 'dialog',
+  ariaDescribedBy,
+  closeLabel = 'Close',
 }: ModalProps) {
+  const titleId = useId()
   const handleEsc = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') onClose()
   }, [onClose])
@@ -60,6 +67,10 @@ export default function Modal({
       }}
     >
       <div
+        role={dialogRole}
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        aria-describedby={ariaDescribedBy}
         className={`
           trek-modal-enter
           rounded-2xl overflow-hidden shadow-2xl w-full ${sizeClasses[size] || sizeClasses.md}
@@ -71,10 +82,11 @@ export default function Modal({
       >
         {/* Header — stays put even while the body scrolls */}
         <div className="flex items-center justify-between p-6 flex-shrink-0 border-b border-edge-secondary">
-          <h2 className="text-lg font-semibold text-content">{title}</h2>
+          <h2 id={title ? titleId : undefined} className="text-lg font-semibold text-content">{title}</h2>
           {!hideCloseButton && (
             <button
               onClick={onClose}
+              aria-label={closeLabel}
               className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
             >
               <X className="w-5 h-5" />

@@ -110,15 +110,37 @@ describe('VacayController (parity with the legacy /api/addons/vacay route)', () 
   });
 
   describe('years', () => {
-    it('400 when year missing on add', () => {
-      return thrown(() => makeController({ ...planBase }).addYear(user, undefined)).then((r) =>
-        expect(r).toEqual({ status: 400, body: { error: 'Year required' } }));
+    it('rejects missing and non-safe-integer years on add with the stable invalid-year code', async () => {
+      const controller = makeController({ ...planBase });
+
+      for (const invalidYear of [undefined, 2026.5, Number.MAX_SAFE_INTEGER + 1]) {
+        const result = await thrown(() => controller.addYear(user, invalidYear));
+        expect(result).toEqual({
+          status: 400,
+          body: {
+            error: 'Year must be a safe integer',
+            code: 'VACAY_INVALID_YEAR',
+          },
+        });
+      }
     });
 
-    it('adds and deletes years', () => {
-      const addYear = vi.fn().mockReturnValue([2026]); const deleteYear = vi.fn().mockReturnValue([]);
+    it('adds years and forwards the actor to the active-year delete command', () => {
+      const addYear = vi.fn().mockReturnValue([2026]); const deleteActiveYear = vi.fn().mockReturnValue([]);
       expect(makeController({ ...planBase, addYear }).addYear(user, 2026, 'sock')).toEqual({ years: [2026] });
-      expect(makeController({ ...planBase, deleteYear }).deleteYear(user, '2026', 'sock')).toEqual({ years: [] });
+      expect(makeController({ ...planBase, deleteActiveYear }).deleteYear(user, '2026', 'sock')).toEqual({ years: [] });
+      expect(deleteActiveYear).toHaveBeenCalledWith(user.id, 2026, 'sock');
+    });
+
+    it('rejects a non-canonical year instead of parseInt-truncating it', () => {
+      return thrown(() => makeController({}).deleteYear(user, '2026junk')).then((r) =>
+        expect(r).toEqual({
+          status: 400,
+          body: {
+            error: 'Year must be a canonical safe integer',
+            code: 'VACAY_INVALID_YEAR',
+          },
+        }));
     });
   });
 

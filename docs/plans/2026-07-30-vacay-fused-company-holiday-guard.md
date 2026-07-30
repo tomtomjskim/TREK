@@ -108,8 +108,12 @@ The adversarial write-path inventory also found a separate destructive action:
 and company-holiday rows together. It is reachable from the REST, MCP, and web
 UI year-removal flows and is not a direct company-holiday toggle or setting
 mutation. R0.1 therefore does not claim shared-year deletion safety. Before
-deployment, a separate R0.2 decision must define who may remove a fused year and
-must verify atomic confirmation, negative permissions, and row preservation.
+deployment, the separate
+[R0.2 year deletion safety](2026-07-30-vacay-year-deletion-safety.md) locally
+implements fused-plan fail-closed deletion, actor-aware atomicity, negative
+permissions, carry-chain repair, and responsive confirmation. It is not yet
+pushed, merged, or deployed, and its invite-accept year reconciliation remains
+a follow-up policy.
 
 Local adversarial closeout for the stated R0.1 contract found no blocker. It
 does not certify employment ownership or general fused-plan deletion safety.

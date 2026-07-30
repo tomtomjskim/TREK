@@ -8,7 +8,14 @@ const vacay: TranslationStrings = {
   'vacay.addPrevYear': '이전 연도 추가',
   'vacay.removeYear': '연도 제거',
   'vacay.removeYearConfirm': '{year}을(를) 제거할까요?',
-  'vacay.removeYearHint': '이 연도의 모든 휴가 항목 및 회사 공휴일이 영구 삭제됩니다.',
+  'vacay.removeYearHint':
+    '이 연도의 모든 휴가 항목, 연차 설정 및 회사 휴일이 영구 삭제되며 다음 연도 이월 값이 다시 계산됩니다.',
+  'vacay.yearRemovalFusedReason':
+    '휴가 계획이 퓨전된 동안에는 연도를 제거할 수 없습니다. 계속하려면 퓨전을 해제하세요.',
+  'vacay.yearRemovalPendingReason': '퓨전 초대가 수락 대기 중입니다. 연도를 제거하려면 먼저 초대를 취소하세요.',
+  'vacay.yearRemovalFusedNotice': '휴가 계획이 퓨전 상태로 변경되어 연도 제거 창을 닫았습니다.',
+  'vacay.yearRemovalPendingNotice': '퓨전 초대가 대기 상태로 변경되어 연도 제거 창을 닫았습니다.',
+  'vacay.yearRemovalError': '연도 제거 결과를 확인하지 못했습니다. 새로고침하여 연도를 확인하거나 다시 시도하세요.',
   'vacay.remove': '제거',
   'vacay.persons': '인원',
   'vacay.noPersons': '추가된 인원이 없습니다',

@@ -168,6 +168,7 @@ v3.4 통합부터 다음 계약을 사용한다.
 | Packing template admin submission/race guard | fork core | 높음 | 공식 release가 create exact-request-count, IME/repeat, Enter+blur rename, 역순 상세 응답, CRUD count와 390px nested editor 회귀를 통과하면 local patch 제거 |
 | Vacay stats read purity·holiday entry 보존·fusion user-year 보존·unlinked trip shift 제거 | upstream contribution 후보 | 높음, correctness/data safety | Discord에서 각 범위를 별도 승인받고 한 수정당 한 PR; 수용 release 통합 뒤 동등성 검증 |
 | Vacay fused company-holiday mutation guard | fork core pilot / upstream contribution 후보 | 높음, legacy ownership safety | 공식 구현이 fused 수동 회사 휴일 write를 모든 surface에서 거부하고 solo 동작·기존 row를 보존하면 local guard 제거; employment v2 활성화 시 guard를 self-owned 권한으로 대체 |
+| Vacay actor-aware whole-year deletion guard | fork core pilot / upstream contribution 후보 | 높음, destructive data safety | 공식 구현이 fused/pending·ambiguous membership을 fail-closed하고 solo 삭제·연쇄 carry를 한 transaction으로 처리하며 REST/MCP/UI negative contract를 통과하면 local guard 제거; invite-accept year union은 별도 추출 |
 | Vacay employment/period/balance v2 | upstream contribution 후보 | 중간, 제품 방향 승인 필요 | [generic design](../plans/2026-07-28-vacay-employment-balance-design.md)과 [correctness proposal](../plans/2026-07-28-vacay-upstream-correctness-proposal.md)을 기준으로 core와 한국 policy provider를 분리 |
 | packing Personal/Shared privacy | upstream contribution 후보 | 높음, security fix | 공식 privacy contract와 negative tests가 수용된 release 후 local patch 제거 |
 | packing template scope R1 | fork core / upstream discussion | 중간 | 개인 템플릿 제품 방향 승인 전 writer는 비활성, migration은 fork namespace 유지 |

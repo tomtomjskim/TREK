@@ -1,6 +1,6 @@
 # TREK Project Source Map
 
-> 마지막 확인: 2026-07-20, v3.4.x 통합 기준 `86d3e9a0`, TREK `3.4.1`
+> 마지막 확인: 2026-07-30, v3.4.1 포크의 Vacay R0.2 로컬 작업 기준
 >
 > 이 문서는 사람이 저장소를 탐색하기 위한 source map이다. Vite/TypeScript가 만드는
 > JavaScript `.map` artifact나 production stack-trace 공개 설정을 의미하지 않는다.
@@ -97,6 +97,7 @@ Host 전용 `docker-compose.override.yml`, credential, signing material과 운�
 | Fold/Tablet map controls     | `client/src/components/Map/AdaptiveMapControls.tsx`, `client/src/utils/mapViewport.ts`                                          | 양쪽 panel corridor, 44px target와 keyboard/focus contract               |
 | Google enrichment/cost guard | `server/src/services/placeEnrichment.ts`, `googleApiUsageService.ts`, maps/admin services, client admin/enrichment UI           | 외부 호출 전 usage reservation, admin-only visibility, instance hard cap |
 | Packing privacy/templates    | `server/src/services/packingService.ts`, Nest packing controller/service, shared packing schema, client packing UI              | Common/Personal/Shared viewer와 writer 권한, instance template scope     |
+| Vacay destructive year flow  | `server/src/services/vacayService.ts`, Nest Vacay controller/service, MCP Vacay tools, `client/src/pages/VacayPage.tsx`와 `pages/vacay/useVacay.ts` | actor의 active plan을 transaction 안에서 재해석하고 fused/pending/ambiguous ownership은 fail-closed; 성공 뒤에만 best-effort 알림 |
 | Migration collision bridge   | `server/src/db/migrationRunner.ts`, `forkMigrations.ts`                                                                         | official numeric migration과 fork string ID 분리                         |
 | Android/package identity     | `android/twa/`, `server/src/nest/platform/android-release.routes.ts`                                                            | signing material은 Git/runtime 밖, 고정 파일만 공개                      |
 
