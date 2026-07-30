@@ -398,6 +398,30 @@ describe('Vacay invite flow', () => {
     expect(res.status).toBe(400);
   });
 
+  it('VACAY-022a — canonicalizes a numeric-string user_id before the self-invite check', async () => {
+    const { user } = createUser(testDb);
+    const planRes = await request(app).get('/api/addons/vacay/plan').set('Cookie', authCookie(user.id));
+    const planId = planRes.body.plan.id as number;
+
+    const res = await request(app)
+      .post('/api/addons/vacay/invite')
+      .set('Cookie', authCookie(user.id))
+      .send({ user_id: String(user.id) });
+
+    expect(res.status).toBe(400);
+    expect(
+      testDb
+        .prepare(
+          `
+      SELECT id
+      FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `,
+        )
+        .get(planId, user.id),
+    ).toBeUndefined();
+  });
+
   it('VACAY-016 — send invite to another user', async () => {
     const { user: owner } = createUser(testDb);
     const { user: invitee } = createUser(testDb);
@@ -583,6 +607,57 @@ describe('Vacay invite full flow', () => {
       FROM vacay_years
       WHERE plan_id = ? AND year = ?
     `).get(ownerPlanId, year)).toBeUndefined();
+  });
+
+  it('VACAY-028b — membership topology review keeps an owner-orphaning invite pending', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: invitee } = createUser(testDb);
+    const { user: pendingMember } = createUser(testDb);
+    const ownerPlanRes = await request(app).get('/api/addons/vacay/plan').set('Cookie', authCookie(owner.id));
+    const inviteePlanRes = await request(app).get('/api/addons/vacay/plan').set('Cookie', authCookie(invitee.id));
+    const ownerPlanId = ownerPlanRes.body.plan.id as number;
+    const inviteePlanId = inviteePlanRes.body.plan.id as number;
+    testDb
+      .prepare(
+        `
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'pending')
+    `,
+      )
+      .run(inviteePlanId, pendingMember.id);
+    testDb
+      .prepare(
+        `
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'pending')
+    `,
+      )
+      .run(ownerPlanId, invitee.id);
+
+    const res = await request(app)
+      .post('/api/addons/vacay/invite/accept')
+      .set('Cookie', authCookie(invitee.id))
+      .send({ plan_id: ownerPlanId });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+    });
+    expect(
+      testDb
+        .prepare(
+          `
+      SELECT plan_id, user_id, status
+      FROM vacay_plan_members
+      WHERE plan_id IN (?, ?)
+      ORDER BY plan_id, user_id
+    `,
+        )
+        .all(ownerPlanId, inviteePlanId),
+    ).toEqual([
+      { plan_id: ownerPlanId, user_id: invitee.id, status: 'pending' },
+      { plan_id: inviteePlanId, user_id: pendingMember.id, status: 'pending' },
+    ]);
   });
 
   it('VACAY-029 — POST /invite/decline removes the pending invite', async () => {

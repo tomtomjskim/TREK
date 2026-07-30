@@ -59,6 +59,40 @@ function parseCanonicalYear(yearParam: string): number {
   return year;
 }
 
+const VACAY_INVALID_ID = 'VACAY_INVALID_ID';
+
+function parseCanonicalPositiveId(value: unknown, field: 'user_id' | 'plan_id'): number {
+  if (value === undefined || value === null || value === '') {
+    throw new HttpException(
+      {
+        error: `${field} required`,
+        code: VACAY_INVALID_ID,
+      },
+      400,
+    );
+  }
+
+  let parsed: number;
+  if (typeof value === 'number') {
+    parsed = value;
+  } else if (typeof value === 'string' && /^[1-9]\d*$/.test(value)) {
+    parsed = Number(value);
+  } else {
+    parsed = Number.NaN;
+  }
+
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new HttpException(
+      {
+        error: `${field} must be a canonical positive safe integer`,
+        code: VACAY_INVALID_ID,
+      },
+      400,
+    );
+  }
+  return parsed;
+}
+
 /**
  * /api/addons/vacay — shared vacation-day planner.
  *
@@ -147,20 +181,29 @@ export class VacayController {
   @Post('invite')
   @HttpCode(200)
   invite(@CurrentUser() user: User, @Body('user_id') userIdInput?: number | string) {
-    if (!userIdInput) {
-      throw new HttpException({ error: 'user_id required' }, 400);
-    }
+    const targetUserId = parseCanonicalPositiveId(userIdInput, 'user_id');
     const plan = this.vacay.getActivePlan(user.id);
-    const result = this.vacay.sendInvite(plan.id, user.id, user.username, user.email, userIdInput as number);
+    const result = this.vacay.sendInvite(plan.id, user.id, user.username, user.email, targetUserId);
     if (result.error) {
-      throw new HttpException({ error: result.error }, result.status!);
+      throw new HttpException(
+        {
+          error: result.error,
+          ...(result.code ? { code: result.code } : {}),
+        },
+        result.status!,
+      );
     }
     return { success: true };
   }
 
   @Post('invite/accept')
   @HttpCode(200)
-  acceptInvite(@CurrentUser() user: User, @Body('plan_id') planId: number, @Headers('x-socket-id') socketId?: string) {
+  acceptInvite(
+    @CurrentUser() user: User,
+    @Body('plan_id') planIdInput?: number | string,
+    @Headers('x-socket-id') socketId?: string,
+  ) {
+    const planId = parseCanonicalPositiveId(planIdInput, 'plan_id');
     const result = this.vacay.acceptInvite(user.id, planId, socketId);
     if (result.error) {
       const body: { error: string; code?: string; missing_years?: number[] } = {
@@ -175,14 +218,20 @@ export class VacayController {
 
   @Post('invite/decline')
   @HttpCode(200)
-  declineInvite(@CurrentUser() user: User, @Body('plan_id') planId: number, @Headers('x-socket-id') socketId?: string) {
+  declineInvite(
+    @CurrentUser() user: User,
+    @Body('plan_id') planIdInput?: number | string,
+    @Headers('x-socket-id') socketId?: string,
+  ) {
+    const planId = parseCanonicalPositiveId(planIdInput, 'plan_id');
     this.vacay.declineInvite(user.id, planId, socketId);
     return { success: true };
   }
 
   @Post('invite/cancel')
   @HttpCode(200)
-  cancelInvite(@CurrentUser() user: User, @Body('user_id') targetUserId: number) {
+  cancelInvite(@CurrentUser() user: User, @Body('user_id') targetUserIdInput?: number | string) {
+    const targetUserId = parseCanonicalPositiveId(targetUserIdInput, 'user_id');
     const plan = this.vacay.getActivePlan(user.id);
     this.vacay.cancelInvite(plan.id, targetUserId);
     return { success: true };

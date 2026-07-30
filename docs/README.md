@@ -70,6 +70,9 @@ truth다.
 - [Vacay invite year reconciliation](plans/2026-07-30-vacay-invite-year-reconciliation.md):
   초대 수락이 대상 plan에 없는 과거 연도를 조용히 이관하지 않도록 원자적으로
   차단하고, owner 보완 뒤 같은 초대를 재시도하는 R0.3 경계
+- [Vacay invite membership integrity](plans/2026-07-30-vacay-invite-membership-integrity.md):
+  초대 전송·수락의 owner/invitee 멤버십 topology를 실패-폐쇄하고 canonical ID와
+  실제 변경 뒤에만 발생하는 실시간 이벤트를 고정한 R0.3a 경계
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

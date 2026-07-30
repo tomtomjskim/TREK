@@ -43,6 +43,7 @@ import {
   updateHolidayCalendar,
   deleteHolidayCalendar,
   setUserColor,
+  sendInvite,
   acceptInvite,
   declineInvite,
   cancelInvite,
@@ -83,7 +84,7 @@ afterAll(() => {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /** Insert a vacay_plan_members row directly (no service factory for it). */
-function insertMember(planId: number, userId: number, status: 'pending' | 'accepted'): void {
+function insertMember(planId: number, userId: number, status: string | null): void {
   testDb.prepare(
     "INSERT INTO vacay_plan_members (plan_id, user_id, status) VALUES (?, ?, ?)"
   ).run(planId, userId, status);
@@ -123,6 +124,18 @@ function snapshotYear(planId: number, year: number) {
       ORDER BY id
     `).all(planId, year),
   };
+}
+
+function snapshotMemberships() {
+  return testDb
+    .prepare(
+      `
+    SELECT plan_id, user_id, status
+    FROM vacay_plan_members
+    ORDER BY plan_id, user_id
+  `,
+    )
+    .all();
 }
 
 // ── getOwnPlan ────────────────────────────────────────────────────────────────
@@ -1294,35 +1307,177 @@ describe('acceptInvite', () => {
     });
     expect(broadcastToUserMock).not.toHaveBeenCalled();
   });
+
+  it('VACAY-SVC-039d: rejects an acceptance that would orphan the invitee-owned plan', () => {
+    const { plan: destinationPlan } = setupUserWithPlan();
+    const { user: invitee, plan: inviteePlan } = setupUserWithPlan();
+    const { user: pendingMember } = createUser(testDb);
+    insertMember(inviteePlan.id, pendingMember.id, 'pending');
+    insertMember(destinationPlan.id, invitee.id, 'pending');
+    const before = snapshotMemberships();
+    broadcastToUserMock.mockClear();
+
+    const result = acceptInvite(invitee.id, destinationPlan.id, undefined);
+
+    expect(result).toMatchObject({
+      status: 409,
+      code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+    });
+    expect(snapshotMemberships()).toEqual(before);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-039e: allows only one of multiple pending invitations to become accepted', () => {
+    const { plan: firstPlan } = setupUserWithPlan();
+    const { plan: secondPlan } = setupUserWithPlan();
+    const { user: invitee } = setupUserWithPlan();
+    insertMember(firstPlan.id, invitee.id, 'pending');
+    insertMember(secondPlan.id, invitee.id, 'pending');
+
+    expect(acceptInvite(invitee.id, firstPlan.id, undefined).error).toBeUndefined();
+    broadcastToUserMock.mockClear();
+    const result = acceptInvite(invitee.id, secondPlan.id, undefined);
+
+    expect(result).toMatchObject({
+      status: 409,
+      code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+    });
+    expect(
+      testDb
+        .prepare(
+          `
+      SELECT plan_id, status
+      FROM vacay_plan_members
+      WHERE user_id = ?
+      ORDER BY plan_id
+    `,
+        )
+        .all(invitee.id),
+    ).toEqual([
+      { plan_id: firstPlan.id, status: 'accepted' },
+      { plan_id: secondPlan.id, status: 'pending' },
+    ]);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['destination owner self-membership', 'owner-self'],
+    ['destination owner accepted elsewhere', 'owner-elsewhere'],
+    ['invitee unknown membership', 'invitee-unknown'],
+    ['destination unknown member status', 'destination-unknown'],
+    ['invitee dangling pending membership', 'invitee-dangling'],
+    ['destination owner dangling pending membership', 'owner-dangling'],
+  ])('VACAY-SVC-039f: rejects %s before mutation', (_label, state) => {
+    const { user: owner, plan: destinationPlan } = setupUserWithPlan();
+    const { user: invitee } = setupUserWithPlan();
+    insertMember(destinationPlan.id, invitee.id, 'pending');
+
+    if (state === 'owner-self') {
+      insertMember(destinationPlan.id, owner.id, 'pending');
+    } else if (state === 'owner-elsewhere') {
+      const { plan: otherPlan } = setupUserWithPlan();
+      insertMember(otherPlan.id, owner.id, 'accepted');
+    } else if (state === 'invitee-unknown') {
+      const { plan: otherPlan } = setupUserWithPlan();
+      insertMember(otherPlan.id, invitee.id, 'mystery');
+    } else if (state === 'invitee-dangling' || state === 'owner-dangling') {
+      testDb.pragma('foreign_keys = OFF');
+      try {
+        insertMember(999999, state === 'invitee-dangling' ? invitee.id : owner.id, 'pending');
+      } finally {
+        testDb.pragma('foreign_keys = ON');
+      }
+    } else {
+      const { user: legacyMember } = createUser(testDb);
+      insertMember(destinationPlan.id, legacyMember.id, null);
+    }
+
+    const before = snapshotMemberships();
+    broadcastToUserMock.mockClear();
+    const result = acceptInvite(invitee.id, destinationPlan.id, undefined);
+
+    expect(result).toMatchObject({
+      status: 409,
+      code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+    });
+    expect(snapshotMemberships()).toEqual(before);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-039g: treats a pending invite to a missing destination as review-required', () => {
+    const { user: invitee } = setupUserWithPlan();
+    testDb.pragma('foreign_keys = OFF');
+    try {
+      insertMember(999999, invitee.id, 'pending');
+    } finally {
+      testDb.pragma('foreign_keys = ON');
+    }
+    const before = snapshotMemberships();
+    broadcastToUserMock.mockClear();
+
+    const result = acceptInvite(invitee.id, 999999, undefined);
+
+    expect(result).toMatchObject({
+      status: 409,
+      code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+    });
+    expect(snapshotMemberships()).toEqual(before);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('declineInvite', () => {
   it('VACAY-SVC-040: removes the pending invite row', () => {
-    const { user: owner, plan: ownerPlan } = setupUserWithPlan();
+    const { plan: ownerPlan } = setupUserWithPlan();
     const { user: invitee } = createUser(testDb);
     insertMember(ownerPlan.id, invitee.id, 'pending');
 
-    declineInvite(invitee.id, ownerPlan.id, undefined);
+    const changed = declineInvite(invitee.id, ownerPlan.id, undefined);
 
     const row = testDb
       .prepare('SELECT * FROM vacay_plan_members WHERE plan_id = ? AND user_id = ?')
       .get(ownerPlan.id, invitee.id);
+    expect(changed).toBe(true);
     expect(row).toBeUndefined();
+    expect(broadcastToUserMock).toHaveBeenCalledWith(invitee.id, { type: 'vacay:declined' }, undefined);
+  });
+
+  it('VACAY-SVC-040a: keeps a no-op decline silent', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: invitee } = createUser(testDb);
+    broadcastToUserMock.mockClear();
+
+    const changed = declineInvite(invitee.id, ownerPlan.id, undefined);
+
+    expect(changed).toBe(false);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
   });
 });
 
 describe('cancelInvite', () => {
   it('VACAY-SVC-041: removes the pending invite when owner cancels it', () => {
-    const { user: owner, plan: ownerPlan } = setupUserWithPlan();
+    const { plan: ownerPlan } = setupUserWithPlan();
     const { user: target } = createUser(testDb);
     insertMember(ownerPlan.id, target.id, 'pending');
 
-    cancelInvite(ownerPlan.id, target.id);
+    const changed = cancelInvite(ownerPlan.id, target.id);
 
     const row = testDb
       .prepare('SELECT * FROM vacay_plan_members WHERE plan_id = ? AND user_id = ?')
       .get(ownerPlan.id, target.id);
+    expect(changed).toBe(true);
     expect(row).toBeUndefined();
+  });
+
+  it('VACAY-SVC-041a: keeps a no-op cancellation silent', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: target } = createUser(testDb);
+    broadcastToUserMock.mockClear();
+
+    const changed = cancelInvite(ownerPlan.id, target.id);
+
+    expect(changed).toBe(false);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1350,6 +1505,57 @@ describe('getAvailableUsers', () => {
     const available = getAvailableUsers(owner.id, plan.id) as { id: number }[];
 
     expect(available.map(u => u.id)).not.toContain(alreadyFused.id);
+  });
+
+  it('VACAY-SVC-043a: excludes an owner whose own plan already has a pending member', () => {
+    const { user: inviter, plan } = setupUserWithPlan();
+    const { user: candidate, plan: candidatePlan } = setupUserWithPlan();
+    const { user: pendingMember } = createUser(testDb);
+    insertMember(candidatePlan.id, pendingMember.id, 'pending');
+
+    const available = getAvailableUsers(inviter.id, plan.id) as { id: number }[];
+    const result = sendInvite(plan.id, inviter.id, inviter.username, inviter.email, candidate.id);
+
+    expect(available.map((user) => user.id)).not.toContain(candidate.id);
+    expect(result).toMatchObject({
+      status: 409,
+      code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+    });
+    expect(
+      testDb
+        .prepare(
+          `
+      SELECT id
+      FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `,
+        )
+        .get(plan.id, candidate.id),
+    ).toBeUndefined();
+  });
+
+  it('VACAY-SVC-043b: prevents a fused member from inviting the destination owner', () => {
+    const { user: owner, plan } = setupUserWithPlan();
+    const { user: member } = createUser(testDb);
+    insertMember(plan.id, member.id, 'accepted');
+
+    const result = sendInvite(plan.id, member.id, member.username, member.email, owner.id);
+
+    expect(result).toMatchObject({
+      status: 409,
+      code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+    });
+    expect(
+      testDb
+        .prepare(
+          `
+      SELECT id
+      FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `,
+        )
+        .get(plan.id, owner.id),
+    ).toBeUndefined();
   });
 });
 

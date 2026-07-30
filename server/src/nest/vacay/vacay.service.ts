@@ -61,12 +61,12 @@ export class VacayService {
     return svc.acceptInvite(userId, planId, socketId);
   }
 
-  declineInvite(userId: number, planId: number, socketId: string | undefined): void {
-    svc.declineInvite(userId, planId, socketId);
+  declineInvite(userId: number, planId: number, socketId: string | undefined): boolean {
+    return svc.declineInvite(userId, planId, socketId);
   }
 
-  cancelInvite(planId: number, targetUserId: number): void {
-    svc.cancelInvite(planId, targetUserId);
+  cancelInvite(planId: number, targetUserId: number): boolean {
+    return svc.cancelInvite(planId, targetUserId);
   }
 
   dissolvePlan(userId: number, socketId: string | undefined): void {

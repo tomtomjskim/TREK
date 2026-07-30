@@ -227,3 +227,17 @@ was required. The bounded adversarial review found zero blockers and zero major
 findings. The actionable server message remains English in this compatibility
 slice, and a malformed legacy entry date fails closed before any mutation;
 neither observation expands R0.3.
+
+## Follow-up scope note
+
+A later review exposed adjacent membership-topology risks that were outside the
+R0.3 year-reconciliation contract: an owner could orphan a plan by accepting
+another invitation, multiple pending invitations could become accepted, legacy
+NULL/unknown/dangling rows were not uniformly rejected, and no-op
+decline/cancel commands could emit false real-time updates.
+
+This does not invalidate the R0.3 closeout evidence or its atomic year-migration
+boundary. The separate
+[R0.3a membership-integrity slice](2026-07-30-vacay-invite-membership-integrity.md)
+adds those fail-closed topology and boundary contracts without changing the R0.3
+schema, UI, or year-reconciliation behavior.

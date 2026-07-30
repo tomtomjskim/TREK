@@ -126,7 +126,18 @@ export function registerVacayTools(server: McpServer, userId: number, scopes: st
         const me = getCurrentUser(userId);
         if (!me) return { content: [{ type: 'text' as const, text: 'User not found.' }], isError: true };
         const result = sendVacayInvite(planId, userId, me.username, me.email, targetUserId);
-        if (result.error) return { content: [{ type: 'text' as const, text: result.error }], isError: true };
+        if (result.error) {
+          const details = result.code ? { error: result.error, code: result.code } : null;
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: details ? JSON.stringify(details) : result.error,
+              },
+            ],
+            isError: true,
+          };
+        }
         return ok({ success: true });
       }
     );

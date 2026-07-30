@@ -255,6 +255,107 @@ describe('Tool: list_vacay_years', () => {
   });
 });
 
+describe('Tool: accept_vacay_invite membership topology', () => {
+  it('returns stable membership review details without orphaning the invitee plan', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: invitee } = createUser(testDb);
+    const { user: pendingMember } = createUser(testDb);
+
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+    });
+    await withHarness(invitee.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+    });
+    const ownerPlan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?').get(owner.id) as { id: number };
+    const inviteePlan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?').get(invitee.id) as {
+      id: number;
+    };
+    testDb
+      .prepare(
+        `
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'pending')
+    `,
+      )
+      .run(inviteePlan.id, pendingMember.id);
+    testDb
+      .prepare(
+        `
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'pending')
+    `,
+      )
+      .run(ownerPlan.id, invitee.id);
+
+    await withHarness(invitee.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'accept_vacay_invite',
+        arguments: { planId: ownerPlan.id },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({
+        code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+      });
+    });
+    expect(
+      testDb
+        .prepare(
+          `
+      SELECT status
+      FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `,
+        )
+        .get(ownerPlan.id, invitee.id),
+    ).toEqual({ status: 'pending' });
+  });
+});
+
+describe('Tool: send_vacay_invite', () => {
+  it('returns a structured membership review error when a member targets the plan owner', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+    });
+    const ownerPlan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?').get(owner.id) as { id: number };
+    testDb
+      .prepare(
+        `
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'accepted')
+    `,
+      )
+      .run(ownerPlan.id, member.id);
+
+    await withHarness(member.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'send_vacay_invite',
+        arguments: { targetUserId: owner.id },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({
+        code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+      });
+    });
+    expect(
+      testDb
+        .prepare(
+          `
+      SELECT id
+      FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `,
+        )
+        .get(ownerPlan.id, owner.id),
+    ).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // add_vacay_year
 // ---------------------------------------------------------------------------

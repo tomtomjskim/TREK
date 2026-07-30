@@ -80,13 +80,29 @@ describe('VacayController (parity with the legacy /api/addons/vacay route)', () 
   describe('invites', () => {
     it('400 when user_id missing', () => {
       return thrown(() => makeController({ ...planBase }).invite(user, undefined)).then((r) =>
-        expect(r).toEqual({ status: 400, body: { error: 'user_id required' } }));
+        expect(r).toEqual({
+          status: 400,
+          body: {
+            error: 'user_id required',
+            code: 'VACAY_INVALID_ID',
+          },
+        }));
     });
 
     it('maps a sendInvite error to its status', () => {
-      const sendInvite = vi.fn().mockReturnValue({ error: 'Already in a plan', status: 409 });
+      const sendInvite = vi.fn().mockReturnValue({
+        error: 'Membership review required',
+        status: 409,
+        code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+      });
       return thrown(() => makeController({ ...planBase, sendInvite }).invite(user, 2)).then((r) =>
-        expect(r).toEqual({ status: 409, body: { error: 'Already in a plan' } }));
+        expect(r).toEqual({
+          status: 409,
+          body: {
+            error: 'Membership review required',
+            code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+          },
+        }));
     });
 
     it('sends an invite', () => {
@@ -94,6 +110,58 @@ describe('VacayController (parity with the legacy /api/addons/vacay route)', () 
       expect(makeController({ ...planBase, sendInvite }).invite(user, 2)).toEqual({ success: true });
       expect(sendInvite).toHaveBeenCalledWith(10, 1, 'u', 'u@example.test', 2);
     });
+
+    it('normalizes canonical numeric-string identifiers for every invite route', () => {
+      const sendInvite = vi.fn().mockReturnValue({});
+      const acceptInvite = vi.fn().mockReturnValue({});
+      const declineInvite = vi.fn();
+      const cancelInvite = vi.fn();
+      const controller = makeController({
+        ...planBase,
+        sendInvite,
+        acceptInvite,
+        declineInvite,
+        cancelInvite,
+      });
+
+      expect(controller.invite(user, '2')).toEqual({ success: true });
+      expect(controller.acceptInvite(user, '5')).toEqual({ success: true });
+      expect(controller.declineInvite(user, '6')).toEqual({ success: true });
+      expect(controller.cancelInvite(user, '7')).toEqual({ success: true });
+      expect(sendInvite).toHaveBeenCalledWith(10, 1, 'u', 'u@example.test', 2);
+      expect(acceptInvite).toHaveBeenCalledWith(1, 5, undefined);
+      expect(declineInvite).toHaveBeenCalledWith(1, 6, undefined);
+      expect(cancelInvite).toHaveBeenCalledWith(10, 7);
+    });
+
+    it.each([['01'], ['1junk'], [0], [-1], [1.5], [Number.MAX_SAFE_INTEGER + 1]])(
+      'rejects a non-canonical invite user_id %j',
+      async (invalidId) => {
+        const result = await thrown(() =>
+          makeController({ ...planBase, sendInvite: vi.fn().mockReturnValue({}) }).invite(user, invalidId),
+        );
+
+        expect(result).toEqual({
+          status: 400,
+          body: {
+            error: 'user_id must be a canonical positive safe integer',
+            code: 'VACAY_INVALID_ID',
+          },
+        });
+      },
+    );
+
+    it.each([[undefined], ['01'], ['5junk'], [0], [-1], [1.5], [Number.MAX_SAFE_INTEGER + 1]])(
+      'rejects an invalid invite plan_id %j before the service call',
+      async (invalidId) => {
+        const acceptInvite = vi.fn().mockReturnValue({});
+        const result = await thrown(() => makeController({ acceptInvite }).acceptInvite(user, invalidId));
+
+        expect(result.status).toBe(400);
+        expect(result.body).toMatchObject({ code: 'VACAY_INVALID_ID' });
+        expect(acceptInvite).not.toHaveBeenCalled();
+      },
+    );
 
     it('maps an acceptInvite error', () => {
       const acceptInvite = vi.fn().mockReturnValue({ error: 'Invite not found', status: 404 });

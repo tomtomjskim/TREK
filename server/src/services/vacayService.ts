@@ -111,6 +111,9 @@ export class VacayYearDeleteReviewRequiredError extends Error {
 export const VACAY_INVITE_YEAR_REVIEW_REQUIRED =
   'VACAY_INVITE_YEAR_REVIEW_REQUIRED';
 
+export const VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED =
+  'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED';
+
 // ---------------------------------------------------------------------------
 // Holiday cache (shared in-process)
 // ---------------------------------------------------------------------------
@@ -410,8 +413,96 @@ export function setUserColor(userId: number, planId: number, color: string | und
 // Invitations
 // ---------------------------------------------------------------------------
 
-export function sendInvite(planId: number, inviterId: number, inviterUsername: string, inviterEmail: string, targetUserId: number): { error?: string; status?: number } {
+type InviteDestinationPlan = Pick<VacayPlan, 'id' | 'owner_id'>;
+
+function getInviteDestinationPlan(planId: number): InviteDestinationPlan | undefined {
+  return db.prepare('SELECT id, owner_id FROM vacay_plans WHERE id = ?').get(planId) as
+    | InviteDestinationPlan
+    | undefined;
+}
+
+function destinationMembershipRequiresReview(plan: InviteDestinationPlan): boolean {
+  const ambiguousMember = db.prepare(`
+    SELECT 1
+    FROM vacay_plan_members
+    WHERE plan_id = ?
+      AND (status IS NULL OR status NOT IN ('pending', 'accepted'))
+    LIMIT 1
+  `).get(plan.id);
+  if (ambiguousMember) return true;
+
+  return !!db.prepare(`
+    SELECT 1
+    FROM vacay_plan_members m
+    LEFT JOIN vacay_plans p ON p.id = m.plan_id
+    WHERE m.user_id = ?
+      AND (
+        p.id IS NULL
+        OR m.status IS NULL
+        OR m.status != 'pending'
+        OR m.plan_id = ?
+      )
+    LIMIT 1
+  `).get(plan.owner_id, plan.id);
+}
+
+function inviteeMembershipRequiresReview(
+  userId: number,
+  destinationPlan: InviteDestinationPlan,
+  currentInviteId?: number,
+): boolean {
+  if (destinationPlan.owner_id === userId) return true;
+
+  const ownPlan = db.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?').get(userId) as { id: number } | undefined;
+  if (ownPlan) {
+    const ownedPlanMember = db.prepare(`
+      SELECT 1
+      FROM vacay_plan_members
+      WHERE plan_id = ?
+      LIMIT 1
+    `).get(ownPlan.id);
+    if (ownedPlanMember) return true;
+  }
+
+  const inviteId = currentInviteId ?? null;
+  return !!db.prepare(`
+    SELECT 1
+    FROM vacay_plan_members m
+    LEFT JOIN vacay_plans p ON p.id = m.plan_id
+    WHERE m.user_id = ?
+      AND (? IS NULL OR m.id != ?)
+      AND (
+        p.id IS NULL
+        OR m.status IS NULL
+        OR m.status != 'pending'
+      )
+    LIMIT 1
+  `).get(userId, inviteId, inviteId);
+}
+
+function inviteMembershipRequiresReview(userId: number, planId: number, currentInviteId?: number): boolean {
+  const destinationPlan = getInviteDestinationPlan(planId);
+  return (
+    !destinationPlan
+    || destinationMembershipRequiresReview(destinationPlan)
+    || inviteeMembershipRequiresReview(userId, destinationPlan, currentInviteId)
+  );
+}
+
+function membershipReviewResult(message: string): VacayInviteActionResult {
+  return {
+    error: message,
+    status: 409,
+    code: VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED,
+  };
+}
+
+export function sendInvite(planId: number, inviterId: number, inviterUsername: string, inviterEmail: string, targetUserId: number): VacayInviteActionResult {
   if (targetUserId === inviterId) return { error: 'Cannot invite yourself', status: 400 };
+
+  if (!getInviteDestinationPlan(planId)) {
+    return { error: 'Vacation plan not found', status: 404 };
+  }
 
   const targetUser = db.prepare('SELECT id, username FROM users WHERE id = ?').get(targetUserId);
   if (!targetUser) return { error: 'User not found', status: 404 };
@@ -423,7 +514,13 @@ export function sendInvite(planId: number, inviterId: number, inviterUsername: s
   }
 
   const targetFusion = db.prepare("SELECT id FROM vacay_plan_members WHERE user_id = ? AND status = 'accepted'").get(targetUserId);
-  if (targetFusion) return { error: 'User is already fused with another plan', status: 400 };
+  if (targetFusion) {
+    return membershipReviewResult('Vacation plan memberships require review before this invitation can be sent');
+  }
+
+  if (inviteMembershipRequiresReview(targetUserId, planId)) {
+    return membershipReviewResult('Vacation plan memberships require review before this invitation can be sent');
+  }
 
   db.prepare('INSERT INTO vacay_plan_members (plan_id, user_id, status) VALUES (?, ?, ?)').run(planId, targetUserId, 'pending');
 
@@ -449,6 +546,15 @@ export function acceptInvite(userId: number, planId: number, socketId: string | 
     const invite = db.prepare("SELECT * FROM vacay_plan_members WHERE plan_id = ? AND user_id = ? AND status = 'pending'").get(planId, userId) as VacayPlanMember | undefined;
     if (!invite) {
       return { accepted: false, result: { error: 'No pending invite', status: 404 } };
+    }
+
+    if (inviteMembershipRequiresReview(userId, planId, invite.id)) {
+      return {
+        accepted: false,
+        result: membershipReviewResult(
+          'Vacation plan memberships require review before this invitation can be accepted',
+        ),
+      };
     }
 
     // Migrate data from user's own plan only when every referenced year already
@@ -534,18 +640,31 @@ export function acceptInvite(userId: number, planId: number, socketId: string | 
   return outcome.result;
 }
 
-export function declineInvite(userId: number, planId: number, socketId: string | undefined): void {
-  db.prepare("DELETE FROM vacay_plan_members WHERE plan_id = ? AND user_id = ? AND status = 'pending'").run(planId, userId);
+export function declineInvite(userId: number, planId: number, socketId: string | undefined): boolean {
+  const result = db.prepare(
+    "DELETE FROM vacay_plan_members WHERE plan_id = ? AND user_id = ? AND status = 'pending'"
+  ).run(planId, userId);
+  if (result.changes !== 1) return false;
+
   notifyPlanUsers(planId, socketId, 'vacay:declined');
+  try {
+    broadcastToUser(userId, { type: 'vacay:declined' }, socketId);
+  } catch {
+    /* websocket not available */
+  }
+  return true;
 }
 
-export function cancelInvite(planId: number, targetUserId: number): void {
-  db.prepare("DELETE FROM vacay_plan_members WHERE plan_id = ? AND user_id = ? AND status = 'pending'").run(planId, targetUserId);
+export function cancelInvite(planId: number, targetUserId: number): boolean {
+  const result = db.prepare(
+    "DELETE FROM vacay_plan_members WHERE plan_id = ? AND user_id = ? AND status = 'pending'"
+  ).run(planId, targetUserId);
+  if (result.changes !== 1) return false;
 
   try {
-    const { broadcastToUser } = require('../websocket');
     broadcastToUser(targetUserId, { type: 'vacay:cancelled' });
   } catch { /* */ }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -589,7 +708,12 @@ export function dissolvePlan(userId: number, socketId: string | undefined): void
 // ---------------------------------------------------------------------------
 
 export function getAvailableUsers(userId: number, planId: number) {
-  return db.prepare(`
+  const destinationPlan = getInviteDestinationPlan(planId);
+  if (!destinationPlan || destinationMembershipRequiresReview(destinationPlan)) {
+    return [];
+  }
+
+  const candidates = db.prepare(`
     SELECT u.id, u.username, u.email FROM users u
     WHERE u.id != ?
     AND u.id NOT IN (SELECT user_id FROM vacay_plan_members WHERE plan_id = ?)
@@ -598,7 +722,9 @@ export function getAvailableUsers(userId: number, planId: number) {
       SELECT plan_id FROM vacay_plan_members WHERE status = 'accepted'
     ))
     ORDER BY u.username
-  `).all(userId, planId);
+  `).all(userId, planId) as VacayUser[];
+
+  return candidates.filter(candidate => !inviteeMembershipRequiresReview(candidate.id, destinationPlan));
 }
 
 // ---------------------------------------------------------------------------
