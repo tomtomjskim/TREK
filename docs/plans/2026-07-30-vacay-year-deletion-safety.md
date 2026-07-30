@@ -165,12 +165,13 @@ The post-implementation review found and closed four material gaps:
 4. `NULL`, unknown, dangling, or multiple accepted membership states fail
    closed as `VACAY_YEAR_DELETE_REVIEW_REQUIRED`.
 
-Two concerns remain intentionally separate:
+One follow-up is now closed and one concern remains intentionally separate:
 
-- `acceptInvite()` can later migrate an invitee's historical user-year or entry
-  into a target plan whose corresponding `vacay_years` row was previously
-  removed. R0.2 blocks deletion while an invite is already pending, but does
-  not define the future `delete → invite → accept` reconciliation policy.
+- R0.3 now rejects `acceptInvite()` without mutation when an invitee's
+  historical user-year or entry references a year missing from the target plan.
+  The owner can add the listed years and the invitee can retry the same pending
+  invite. See
+  [Vacay invite year reconciliation](2026-07-30-vacay-invite-year-reconciliation.md).
 - `getStats()` still has legacy write-through carry behavior for an existing
   source year. R0.2 prevents deleted-source recontamination; the broader
   pure-read/fresh-projection conversion remains its own correctness change.
@@ -182,7 +183,7 @@ Rollback is code-only. Deletion that has already committed is not recoverable by
 reverting code, so production deployment still requires the normal database
 backup/restore readiness check.
 
-R0.2 does not repair dissolve/rejoin rows, reconcile the future invite-accept
-year union, make all stats reads pure, migrate company holidays to employment
-ownership, model fiscal/anniversary leave periods, add HR/admin authority, add a
-delete preview/audit log, or expose year deletion to plugins.
+R0.2 does not repair dissolve/rejoin rows, make all stats reads pure, migrate
+company holidays to employment ownership, model fiscal/anniversary leave
+periods, add HR/admin authority, add a delete preview/audit log, or expose year
+deletion to plugins.

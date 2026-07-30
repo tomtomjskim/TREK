@@ -101,6 +101,24 @@ describe('VacayController (parity with the legacy /api/addons/vacay route)', () 
         expect(r).toEqual({ status: 404, body: { error: 'Invite not found' } }));
     });
 
+    it('maps invite year review details without changing legacy errors', () => {
+      const acceptInvite = vi.fn().mockReturnValue({
+        error: 'Vacation plan years must be reconciled',
+        status: 409,
+        code: 'VACAY_INVITE_YEAR_REVIEW_REQUIRED',
+        missing_years: [2031, 2032],
+      });
+      return thrown(() => makeController({ acceptInvite }).acceptInvite(user, 5)).then((r) =>
+        expect(r).toEqual({
+          status: 409,
+          body: {
+            error: 'Vacation plan years must be reconciled',
+            code: 'VACAY_INVITE_YEAR_REVIEW_REQUIRED',
+            missing_years: [2031, 2032],
+          },
+        }));
+    });
+
     it('decline / cancel / dissolve return success', () => {
       const declineInvite = vi.fn(); const cancelInvite = vi.fn(); const dissolvePlan = vi.fn();
       expect(makeController({ declineInvite }).declineInvite(user, 5)).toEqual({ success: true });

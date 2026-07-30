@@ -15,7 +15,7 @@ export default function VacayPage(): React.ReactElement {
   // Page = wiring container: vacay store, live sync + UI state live in the hook.
   const {
     years, selectedYear, setSelectedYear, loading,
-    incomingInvites, acceptInvite, declineInvite, plan,
+    incomingInvites, acceptInvite, declineInvite, inviteAcceptError, plan,
     showSettings, setShowSettings,
     deleteYear, isRemovingYear, deleteYearError,
     yearRemovalReadOnlyReason, yearRemovalNotice,
@@ -329,6 +329,11 @@ export default function VacayPage(): React.ReactElement {
                 <InfoItem icon={ShieldCheck} text={t('vacay.fuseInfo4')} />
                 <InfoItem icon={Unlink} text={t('vacay.fuseInfo5')} />
               </div>
+              {inviteAcceptError?.planId === inv.plan_id && (
+                <p role="alert" className="mx-6 mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600">
+                  {inviteAcceptError.message}
+                </p>
+              )}
               <div className="px-6 pb-6 flex gap-3">
                 <button onClick={() => declineInvite(inv.plan_id)}
                   className="flex-1 px-4 py-2.5 text-sm font-medium rounded-xl transition-colors border text-content-muted border-edge">

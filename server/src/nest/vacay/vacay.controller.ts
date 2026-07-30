@@ -163,7 +163,12 @@ export class VacayController {
   acceptInvite(@CurrentUser() user: User, @Body('plan_id') planId: number, @Headers('x-socket-id') socketId?: string) {
     const result = this.vacay.acceptInvite(user.id, planId, socketId);
     if (result.error) {
-      throw new HttpException({ error: result.error }, result.status!);
+      const body: { error: string; code?: string; missing_years?: number[] } = {
+        error: result.error,
+      };
+      if (result.code) body.code = result.code;
+      if (result.missing_years) body.missing_years = result.missing_years;
+      throw new HttpException(body, result.status!);
     }
     return { success: true };
   }

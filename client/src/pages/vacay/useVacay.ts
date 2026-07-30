@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import type { MouseEvent } from 'react'
 import { useVacayStore } from '../../store/vacayStore'
 import { addListener, removeListener } from '../../api/websocket'
+import { getApiErrorMessage } from '../../utils/apiError'
 
 /**
  * Vacay page logic — pulls the vacay store, owns the page-local UI state
@@ -14,7 +15,8 @@ export function useVacay() {
   const {
     years, selectedYear, setSelectedYear, addYear, removeYear,
     loadAll, loadPlan, loadEntries, loadStats, loadHolidays,
-    loading, incomingInvites, pendingInvites, acceptInvite, declineInvite,
+    loading, incomingInvites, pendingInvites,
+    acceptInvite: acceptInviteRequest, declineInvite,
     plan, isFused,
   } = useVacayStore()
   const [showSettings, setShowSettings] = useState<boolean>(false)
@@ -22,6 +24,7 @@ export function useVacay() {
   const [isRemovingYear, setIsRemovingYear] = useState<boolean>(false)
   const [deleteYearError, setDeleteYearError] = useState<boolean>(false)
   const [yearRemovalNotice, setYearRemovalNotice] = useState<'fused' | 'pending' | null>(null)
+  const [inviteAcceptError, setInviteAcceptError] = useState<{ planId: number; message: string } | null>(null)
   const [showMobileSidebar, setShowMobileSidebar] = useState<boolean>(false)
   const mobileSidebarButtonRef = useRef<HTMLButtonElement | null>(null)
   const mobileDrawerCloseButtonRef = useRef<HTMLButtonElement | null>(null)
@@ -152,9 +155,21 @@ export function useVacay() {
     }
   }
 
+  const acceptInvite = async (planId: number) => {
+    setInviteAcceptError(null)
+    try {
+      await acceptInviteRequest(planId)
+    } catch (error) {
+      setInviteAcceptError({
+        planId,
+        message: getApiErrorMessage(error, 'Unable to accept invitation'),
+      })
+    }
+  }
+
   return {
     years, selectedYear, setSelectedYear, loading,
-    incomingInvites, acceptInvite, declineInvite, plan,
+    incomingInvites, acceptInvite, declineInvite, inviteAcceptError, plan,
     showSettings, setShowSettings,
     deleteYear, isRemovingYear, deleteYearError,
     yearRemovalReadOnlyReason, yearRemovalNotice,

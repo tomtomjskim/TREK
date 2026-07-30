@@ -532,6 +532,59 @@ describe('Vacay invite full flow', () => {
     expect(res.body.success).toBe(true);
   });
 
+  it('VACAY-028a — invite year reconciliation returns 409 and preserves the pending source data', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: invitee } = createUser(testDb);
+    const year = 2034;
+
+    const ownerPlanRes = await request(app)
+      .get('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(owner.id));
+    const ownerPlanId = ownerPlanRes.body.plan.id as number;
+    const inviteePlanRes = await request(app)
+      .get('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(invitee.id));
+    const inviteePlanId = inviteePlanRes.body.plan.id as number;
+    await request(app)
+      .post('/api/addons/vacay/years')
+      .set('Cookie', authCookie(invitee.id))
+      .send({ year });
+    await request(app)
+      .post('/api/addons/vacay/entries/toggle')
+      .set('Cookie', authCookie(invitee.id))
+      .send({ date: `${year}-05-01` });
+    await request(app)
+      .post('/api/addons/vacay/invite')
+      .set('Cookie', authCookie(owner.id))
+      .send({ user_id: invitee.id });
+
+    const res = await request(app)
+      .post('/api/addons/vacay/invite/accept')
+      .set('Cookie', authCookie(invitee.id))
+      .send({ plan_id: ownerPlanId });
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      code: 'VACAY_INVITE_YEAR_REVIEW_REQUIRED',
+      missing_years: [year],
+    });
+    expect(testDb.prepare(`
+      SELECT status
+      FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlanId, invitee.id)).toEqual({ status: 'pending' });
+    expect(testDb.prepare(`
+      SELECT plan_id
+      FROM vacay_entries
+      WHERE user_id = ? AND date = ?
+    `).get(invitee.id, `${year}-05-01`)).toEqual({ plan_id: inviteePlanId });
+    expect(testDb.prepare(`
+      SELECT id
+      FROM vacay_years
+      WHERE plan_id = ? AND year = ?
+    `).get(ownerPlanId, year)).toBeUndefined();
+  });
+
   it('VACAY-029 — POST /invite/decline removes the pending invite', async () => {
     const { user: owner } = createUser(testDb);
     const { user: invitee } = createUser(testDb);

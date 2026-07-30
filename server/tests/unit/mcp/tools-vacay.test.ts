@@ -197,6 +197,50 @@ describe('Tool: set_vacay_color', () => {
 });
 
 // ---------------------------------------------------------------------------
+// accept_vacay_invite
+// ---------------------------------------------------------------------------
+
+describe('Tool: accept_vacay_invite', () => {
+  it('returns stable invite year review details without accepting the member', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: invitee } = createUser(testDb);
+    const year = 2035;
+
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+    });
+    await withHarness(invitee.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+      await h.client.callTool({ name: 'add_vacay_year', arguments: { year } });
+    });
+    const ownerPlan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?')
+      .get(owner.id) as { id: number };
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'pending')
+    `).run(ownerPlan.id, invitee.id);
+
+    await withHarness(invitee.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'accept_vacay_invite',
+        arguments: { planId: ownerPlan.id },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({
+        code: 'VACAY_INVITE_YEAR_REVIEW_REQUIRED',
+        missing_years: [year],
+      });
+    });
+    expect(testDb.prepare(`
+      SELECT status
+      FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlan.id, invitee.id)).toEqual({ status: 'pending' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // list_vacay_years
 // ---------------------------------------------------------------------------
 

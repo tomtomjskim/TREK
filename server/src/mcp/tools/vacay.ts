@@ -143,7 +143,22 @@ export function registerVacayTools(server: McpServer, userId: number, scopes: st
       async ({ planId }) => {
         if (isDemoUser(userId)) return demoDenied();
         const result = acceptInvite(userId, planId, undefined);
-        if (result.error) return { content: [{ type: 'text' as const, text: result.error }], isError: true };
+        if (result.error) {
+          const details = result.code
+            ? {
+                error: result.error,
+                code: result.code,
+                ...(result.missing_years ? { missing_years: result.missing_years } : {}),
+              }
+            : null;
+          return {
+            content: [{
+              type: 'text' as const,
+              text: details ? JSON.stringify(details) : result.error,
+            }],
+            isError: true,
+          };
+        }
         return ok({ success: true });
       }
     );

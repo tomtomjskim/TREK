@@ -1157,6 +1157,143 @@ describe('acceptInvite', () => {
     const active = getActivePlan(invitee.id);
     expect(active.id).toBe(ownerPlan.id);
   });
+
+  it('VACAY-SVC-039a: invite year reconciliation rejects missing user-year and entry-only years without mutation', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: invitee, plan: inviteePlan } = setupUserWithPlan();
+    const userYear = 2031;
+    const entryOnlyYear = 2032;
+    addYear(inviteePlan.id, userYear, undefined);
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?)
+    `).run(inviteePlan.id, invitee.id, `${entryOnlyYear}-04-01`, 'legacy entry');
+    insertMember(ownerPlan.id, invitee.id, 'pending');
+
+    const snapshot = () => ({
+      membership: testDb.prepare(`
+        SELECT plan_id, user_id, status
+        FROM vacay_plan_members
+        WHERE plan_id = ? AND user_id = ?
+      `).get(ownerPlan.id, invitee.id),
+      sourceEntries: testDb.prepare(`
+        SELECT plan_id, user_id, date, note
+        FROM vacay_entries
+        WHERE plan_id = ? AND user_id = ?
+        ORDER BY date
+      `).all(inviteePlan.id, invitee.id),
+      targetEntries: testDb.prepare(`
+        SELECT plan_id, user_id, date, note
+        FROM vacay_entries
+        WHERE plan_id = ? AND user_id = ?
+        ORDER BY date
+      `).all(ownerPlan.id, invitee.id),
+      sourceUserYears: testDb.prepare(`
+        SELECT user_id, plan_id, year, vacation_days, carried_over
+        FROM vacay_user_years
+        WHERE plan_id = ? AND user_id = ?
+        ORDER BY year
+      `).all(inviteePlan.id, invitee.id),
+      targetUserYears: testDb.prepare(`
+        SELECT user_id, plan_id, year, vacation_days, carried_over
+        FROM vacay_user_years
+        WHERE plan_id = ? AND user_id = ?
+        ORDER BY year
+      `).all(ownerPlan.id, invitee.id),
+    });
+    const before = snapshot();
+    broadcastToUserMock.mockClear();
+
+    const result = acceptInvite(invitee.id, ownerPlan.id, undefined);
+
+    expect(result).toMatchObject({
+      status: 409,
+      code: 'VACAY_INVITE_YEAR_REVIEW_REQUIRED',
+      missing_years: [userYear, entryOnlyYear],
+    });
+    expect(snapshot()).toEqual(before);
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-039b: invite year reconciliation succeeds after the owner adds every missing year', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: invitee, plan: inviteePlan } = setupUserWithPlan();
+    const year = 2033;
+    addYear(inviteePlan.id, year, undefined);
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?)
+    `).run(inviteePlan.id, invitee.id, `${year}-06-01`, 'planned leave');
+    insertMember(ownerPlan.id, invitee.id, 'pending');
+
+    expect(acceptInvite(invitee.id, ownerPlan.id, undefined)).toMatchObject({
+      status: 409,
+      code: 'VACAY_INVITE_YEAR_REVIEW_REQUIRED',
+      missing_years: [year],
+    });
+
+    addYear(ownerPlan.id, year, undefined);
+    broadcastToUserMock.mockClear();
+    const result = acceptInvite(invitee.id, ownerPlan.id, undefined);
+
+    expect(result.error).toBeUndefined();
+    expect(testDb.prepare(`
+      SELECT status
+      FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlan.id, invitee.id)).toEqual({ status: 'accepted' });
+    expect(testDb.prepare(`
+      SELECT plan_id, user_id, date, note
+      FROM vacay_entries
+      WHERE plan_id = ? AND user_id = ? AND date = ?
+    `).get(ownerPlan.id, invitee.id, `${year}-06-01`)).toEqual({
+      plan_id: ownerPlan.id,
+      user_id: invitee.id,
+      date: `${year}-06-01`,
+      note: 'planned leave',
+    });
+    expect(broadcastToUserMock).toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-039c: invite year reconciliation rolls back membership when migration fails', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: invitee, plan: inviteePlan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?)
+    `).run(inviteePlan.id, invitee.id, `${year}-08-01`, 'must remain');
+    insertMember(ownerPlan.id, invitee.id, 'pending');
+    testDb.exec(`
+      CREATE TRIGGER fail_vacay_invite_entry_move
+      BEFORE UPDATE OF plan_id ON vacay_entries
+      WHEN OLD.plan_id = ${inviteePlan.id}
+      BEGIN
+        SELECT RAISE(ABORT, 'forced invite migration failure');
+      END;
+    `);
+    broadcastToUserMock.mockClear();
+
+    expect(() => acceptInvite(invitee.id, ownerPlan.id, undefined))
+      .toThrow('forced invite migration failure');
+
+    expect(testDb.prepare(`
+      SELECT status
+      FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlan.id, invitee.id)).toEqual({ status: 'pending' });
+    expect(testDb.prepare(`
+      SELECT plan_id, user_id, date, note
+      FROM vacay_entries
+      WHERE user_id = ? AND date = ?
+    `).get(invitee.id, `${year}-08-01`)).toEqual({
+      plan_id: inviteePlan.id,
+      user_id: invitee.id,
+      date: `${year}-08-01`,
+      note: 'must remain',
+    });
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('declineInvite', () => {

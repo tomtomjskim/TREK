@@ -67,6 +67,9 @@ truth다.
 - [Vacay year deletion safety](plans/2026-07-30-vacay-year-deletion-safety.md):
   연도 전체 삭제를 actor-aware·원자적 명령으로 바꾸고 fusion·초대·legacy
   멤버십을 실패-폐쇄하며 연쇄 이월과 반응형 확인 UX를 검증한 R0.2 경계
+- [Vacay invite year reconciliation](plans/2026-07-30-vacay-invite-year-reconciliation.md):
+  초대 수락이 대상 plan에 없는 과거 연도를 조용히 이관하지 않도록 원자적으로
+  차단하고, owner 보완 뒤 같은 초대를 재시도하는 R0.3 경계
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

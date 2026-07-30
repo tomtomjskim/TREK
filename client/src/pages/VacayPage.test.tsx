@@ -172,6 +172,29 @@ describe('VacayPage', () => {
     expect(mockAcceptInvite).toHaveBeenCalledWith(99);
   });
 
+  it('shows an invite acceptance error on the matching invite card', async () => {
+    const mockAcceptInvite = vi.fn().mockRejectedValue({
+      response: {
+        data: {
+          error: 'Ask the owner to add vacation year 2035, then try again.',
+          code: 'VACAY_INVITE_YEAR_REVIEW_REQUIRED',
+        },
+      },
+    });
+    seedStore(useVacayStore, makeVacayState({
+      incomingInvites: [{ plan_id: 99, owner_username: 'bob' }],
+      acceptInvite: mockAcceptInvite,
+    }) as any);
+    render(<VacayPage />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /accept/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Ask the owner to add vacation year 2035, then try again.',
+    );
+    expect(screen.getByText('bob')).toBeInTheDocument();
+  });
+
   // FE-PAGE-VACAY-011
   it('calls declineInvite with plan_id on decline button click', async () => {
     const mockDeclineInvite = vi.fn();
