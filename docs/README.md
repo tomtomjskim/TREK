@@ -9,14 +9,15 @@
 | ----------------------- | -------------------------------------------------------------------- |
 | 애플리케이션 버전       | `3.4.1`                                                              |
 | v3.4.x 통합 기준 commit | `86d3e9a01c73f0de1aeaa73031353a2ddb3373cd`                           |
-| 운영 runtime source     | `1747b8a63f3182ff404a82f619e56f06c3de42ae`                           |
-| 운영 image              | `trek:3.4.1-jsnetworkcorp-1747b8a6`                                  |
+| 운영 runtime source     | `37a0784c33f01ab52fd2c84710e3c11f684e0f09`                           |
+| 운영 image              | `trek:3.4.1-jsnetworkcorp-37a0784c`                                  |
 | 공식 release 기준       | exact `v3.4.1` tag target `a0994658890eae96624fb9cbe7f55867f047fea2` |
 
-현재 runtime은 공식 v3.4.1 통합과 custom version SemVer correctness patch 위에
-packing-template 관리자 exact-once/race guard를 적용한 포크 commit `1747b8a6`
-기준이다. 이후의 formatting, CI 설정과 문서 commit은 runtime contract를 바꾸지
-않는다.
+현재 runtime은 공식 v3.4.1 통합과 custom version SemVer correctness,
+packing-template 관리자 exact-once/race guard 위에 Vacay 입력 보존·융합
+실패-폐쇄·초대/연도 무결성 hardening을 적용한 포크 commit `37a0784c` 기준이다.
+이 commit은 로컬 feature branch에서 검증·배포했으며 `main` merge나 원격 push,
+공식 PR은 수행하지 않았다. 이후의 문서 commit은 runtime contract를 바꾸지 않는다.
 현재 운영·롤백 상태는 별도 운영 위키가, 코드와 Git 이력은 이 저장소가 source of
 truth다.
 

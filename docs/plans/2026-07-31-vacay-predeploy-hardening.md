@@ -1,7 +1,7 @@
 # Vacay Pre-deployment Hardening
 
 > 작성일: 2026-07-31
-> 상태: 로컬 전체 게이트 통과, 운영 배포 전 후보 고정 단계
+> 상태: 로컬 전체 게이트 통과 및 운영 배포 완료
 > 기준 branch: `fix/vacay-preserve-holiday-entries`
 > publication: 로컬·개인 저장소만 사용하며 push, merge, 공식 PR은 제외
 
@@ -79,3 +79,25 @@ topology aggregate 중 하나라도 기준을 벗어나면 직전 image tag로 �
 legacy audit와 migration rehearsal 없이 이번 배포에 index를 추가하지 않으며,
 유효하지 않은 topology는 자동 삭제·수선하지 않고 명시적 review-required 응답을
 유지한다.
+
+## 운영 배포 결과
+
+- runtime source: `37a0784c33f01ab52fd2c84710e3c11f684e0f09`
+- image: `trek:3.4.1-jsnetworkcorp-37a0784c`
+- image ID: `sha256:32a94e4eef9b559929a9407ee40143d326d448dd8b27b082882142d946967581`
+- version: `3.4.1+jsnetworkcorp.37a0784c`
+- pre-deploy backup:
+  `/app/data/backups/predeploy-vacay-20260731T021746Z-travel.db`
+- immediate rollback image: `trek:3.4.1-jsnetworkcorp-1747b8a6`
+
+online backup은 mode `0600`, `quick_check=ok`, FK 오류 0으로 확인했다. 배포
+전후 DB는 users 2, plans 2, memberships 0이며 dangling/unknown/multiple accepted,
+owner self-membership, orphan entry/user-year와 duplicate user-year key 집계가
+모두 0으로 유지됐다.
+
+app 컨테이너만 재생성했으며 block-volume data/uploads mount, loopback port와
+`ubuntu_webnet` 고정 IP를 보존했다. 배포 후 local/public health와 공개 homepage
+`200`, HTTP→HTTPS `301`, 비인증 Vacay `401`, 허용 origin CORS `204`, HSTS/CSP,
+정확한 public version을 확인했다. 공개 Chromium smoke는 로그인 form, secure
+context, Service Worker active/controller와 page/console error 0을 확인했다.
+관찰 뒤 컨테이너는 healthy, restart 0이고 fatal/runtime issue log는 0이다.
