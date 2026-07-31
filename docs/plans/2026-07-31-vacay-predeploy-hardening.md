@@ -1,9 +1,9 @@
 # Vacay Pre-deployment Hardening
 
 > 작성일: 2026-07-31
-> 상태: 로컬 전체 게이트 통과 및 운영 배포 완료
-> 기준 branch: `fix/vacay-preserve-holiday-entries`
-> publication: 로컬·개인 저장소만 사용하며 push, merge, 공식 PR은 제외
+> 상태: 로컬 전체 게이트 통과, 운영 배포 및 개인 포크 `main` 통합 완료
+> 기준 branch: `main` (`fix/vacay-preserve-holiday-entries` 이력 보존)
+> publication: `tomtomjskim/TREK`만 사용하며 공식 upstream PR은 제외
 
 ## 목적
 
@@ -101,3 +101,17 @@ app 컨테이너만 재생성했으며 block-volume data/uploads mount, loopback
 정확한 public version을 확인했다. 공개 Chromium smoke는 로그인 form, secure
 context, Service Worker active/controller와 page/console error 0을 확인했다.
 관찰 뒤 컨테이너는 healthy, restart 0이고 fatal/runtime issue log는 0이다.
+
+## 개인 포크 main 통합 결과
+
+TOM의 명시 승인 뒤 개인 포크의 기존 `main` `c5ff1d27`에서 배포 기록
+`44383efa`까지 11개 commit을 `--ff-only`로 통합했다. 통합 직전 기능 worktree에서
+shared 141건, server 5,531건, client 3,506건(38 skipped), 세 workspace typecheck,
+strict i18n parity, page-pattern lint, migration 24건과 production build를 확인했다.
+
+통합된 `main`에서는 Vacay server 229건과 client 88건을 다시 실행해 통과했다.
+처음 client 집중 실행에서 5건이 실패한 원인은 Git tree가 아니라 `main` worktree의
+무시된 `shared/dist`가 병합 전 번역 산출물이었던 것이며, shared package 재빌드 뒤
+같은 88건이 통과했다. 이 통합은 source publication closeout이며 운영 image 교체나
+컨테이너 재시작을 수반하지 않는다. 기능·설계 worktree와 로컬 branch는 후속 비교를
+위해 유지한다.
