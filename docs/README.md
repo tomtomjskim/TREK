@@ -73,6 +73,9 @@ truth다.
 - [Vacay invite membership integrity](plans/2026-07-30-vacay-invite-membership-integrity.md):
   초대 전송·수락의 owner/invitee 멤버십 topology를 실패-폐쇄하고 canonical ID와
   실제 변경 뒤에만 발생하는 실시간 이벤트를 고정한 R0.3a 경계
+- [Vacay pre-deployment hardening](plans/2026-07-31-vacay-predeploy-hardening.md):
+  carry 연속성·달력 검증·초대 이관/취소 권한·transaction 후 알림을 통합 검증하고
+  전체 테스트와 반응형 브라우저 게이트를 고정한 운영 후보 계약
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

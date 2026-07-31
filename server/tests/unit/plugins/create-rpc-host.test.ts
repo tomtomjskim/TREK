@@ -237,26 +237,39 @@ vi.mock('../../../src/services/atlasService', () => ({
   createBucketItem: vi.fn((uid: number, data: { name: string }) => ({ id: 110, user_id: uid, name: data.name })),
   deleteBucketItem: vi.fn((_uid: number, itemId: number) => Number(itemId) !== 404),
 }));
-const { rejectVacayCompanyHoliday } = vi.hoisted(() => ({
+const { rejectVacayCompanyHoliday, rejectVacayInvalidDate } = vi.hoisted(() => ({
   rejectVacayCompanyHoliday: vi.fn(() => false),
+  rejectVacayInvalidDate: vi.fn(() => false),
 }));
 vi.mock('../../../src/services/vacayService', () => {
   class VacayFusedCompanyHolidaysReadOnlyError extends Error {
     readonly code = 'VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY';
   }
+  class VacayInvalidDateError extends Error {
+    readonly code = 'VACAY_INVALID_DATE';
+  }
   return {
     getPlanData: vi.fn((uid: number) => ({ plan: { id: 1, owner: uid } })),
     getActivePlanId: vi.fn(() => 77),
-    toggleEntry: vi.fn((uid: number, planId: number) => ({ action: 'added', uid, planId })),
+    toggleEntry: vi.fn((uid: number, planId: number) => {
+      if (rejectVacayInvalidDate()) {
+        throw new VacayInvalidDateError('Date must be a valid YYYY-MM-DD calendar date');
+      }
+      return { action: 'added', uid, planId };
+    }),
     toggleCompanyHoliday: vi.fn((planId: number) => {
       if (rejectVacayCompanyHoliday()) {
         throw new VacayFusedCompanyHolidaysReadOnlyError(
           'Company holidays are read-only while Vacay plans are fused',
         );
       }
+      if (rejectVacayInvalidDate()) {
+        throw new VacayInvalidDateError('Date must be a valid YYYY-MM-DD calendar date');
+      }
       return { action: 'added', planId };
     }),
     VacayFusedCompanyHolidaysReadOnlyError,
+    VacayInvalidDateError,
   };
 });
 vi.mock('../../../src/services/collectionsService', () => {
@@ -713,6 +726,8 @@ describe('create-rpc-host — Wave 2 wiring (atlas/vacay/journal/collections wri
     isAddonEnabled.mockReturnValue(true);
     rejectVacayCompanyHoliday.mockReset();
     rejectVacayCompanyHoliday.mockReturnValue(false);
+    rejectVacayInvalidDate.mockReset();
+    rejectVacayInvalidDate.mockReturnValue(false);
   })
   afterAll(() => closePluginDataDb('w2'))
 
@@ -738,6 +753,13 @@ describe('create-rpc-host — Wave 2 wiring (atlas/vacay/journal/collections wri
     rejectVacayCompanyHoliday.mockReturnValue(true)
     expect(((await call(h, 'vacay.toggleCompanyHoliday', { date: '2026-12-25' })) as { error: { code: string } }).error.code)
       .toBe('RESOURCE_FORBIDDEN')
+
+    rejectVacayCompanyHoliday.mockReturnValue(false)
+    rejectVacayInvalidDate.mockReturnValue(true)
+    expect(((await call(h, 'vacay.toggleEntry', { date: '2026-02-30' })) as { error: { code: string } }).error.code)
+      .toBe('BAD_PARAMS')
+    expect(((await call(h, 'vacay.toggleCompanyHoliday', { date: '2026-02-30' })) as { error: { code: string } }).error.code)
+      .toBe('BAD_PARAMS')
   })
 
   it('journal writes map an uneditable journey/entry to RESOURCE_FORBIDDEN', async () => {

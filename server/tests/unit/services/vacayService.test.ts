@@ -47,6 +47,7 @@ import {
   acceptInvite,
   declineInvite,
   cancelInvite,
+  dissolvePlan,
   getAvailableUsers,
   listYears,
   addYear,
@@ -430,6 +431,71 @@ describe('updatePlan', () => {
       WHERE user_id = ? AND plan_id = ? AND year = ?
     `).get(owner.id, plan.id, year)).toEqual({ carried_over: 7 });
     expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-018c: a company-holiday-only setting change refreshes carry before any stats read', async () => {
+    const { user, plan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+    const nextYear = year + 1;
+    const date = `${year}-05-01`;
+
+    testDb.prepare('UPDATE vacay_plans SET company_holidays_enabled = 0 WHERE id = ?').run(plan.id);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 10
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, year);
+    addYear(plan.id, nextYear, undefined);
+    toggleEntry(user.id, plan.id, date, undefined);
+    testDb.prepare(`
+      INSERT INTO vacay_company_holidays (plan_id, date, note)
+      VALUES (?, ?, ?)
+    `).run(plan.id, date, 'Labour Day');
+
+    getStats(plan.id, year);
+    expect(testDb.prepare(`
+      SELECT carried_over FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(user.id, plan.id, nextYear)).toEqual({ carried_over: 9 });
+
+    await updatePlan(plan.id, { company_holidays_enabled: true }, undefined);
+
+    expect(testDb.prepare(`
+      SELECT carried_over FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(user.id, plan.id, nextYear)).toEqual({ carried_over: 10 });
+  });
+
+  it('VACAY-SVC-018d: a settings refresh does not bridge a gap between tracked years', async () => {
+    const { user, plan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+    const gapYear = year + 2;
+    const date = `${year}-05-01`;
+
+    testDb.prepare('UPDATE vacay_plans SET company_holidays_enabled = 0 WHERE id = ?').run(plan.id);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 10
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, year);
+    addYear(plan.id, gapYear, undefined);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET carried_over = 7
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, gapYear);
+    toggleEntry(user.id, plan.id, date, undefined);
+    testDb.prepare(`
+      INSERT INTO vacay_company_holidays (plan_id, date, note)
+      VALUES (?, ?, ?)
+    `).run(plan.id, date, 'Labour Day');
+
+    await updatePlan(plan.id, { company_holidays_enabled: true }, undefined);
+
+    expect(testDb.prepare(`
+      SELECT carried_over FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(user.id, plan.id, gapYear)).toEqual({ carried_over: 7 });
   });
 });
 
@@ -988,6 +1054,23 @@ describe('toggleEntry', () => {
       .get(user.id, plan.id, '2025-08-02');
     expect(row).toBeUndefined();
   });
+
+  it.each(['2025-02-29', '2026-04-31', '2026-13-01', 'not-a-date'])(
+    'VACAY-SVC-033a: rejects invalid calendar entry date %s before mutation',
+    (date) => {
+      const { user, plan } = setupUserWithPlan();
+      broadcastToUserMock.mockClear();
+
+      expect(() => toggleEntry(user.id, plan.id, date, undefined)).toThrowError(
+        expect.objectContaining({ code: 'VACAY_INVALID_DATE' }),
+      );
+      expect(testDb.prepare(`
+        SELECT id FROM vacay_entries
+        WHERE user_id = ? AND plan_id = ?
+      `).all(user.id, plan.id)).toEqual([]);
+      expect(broadcastToUserMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ── toggleCompanyHoliday ──────────────────────────────────────────────────────
@@ -1130,6 +1213,125 @@ describe('toggleCompanyHoliday', () => {
       WHERE user_id = ? AND plan_id = ? AND year = ?
     `).get(user.id, plan.id, nextYear) as { carried_over: number }).carried_over).toBe(9);
   });
+
+  it('VACAY-SVC-036d: a holiday toggle refreshes the full carry chain before any stats read', () => {
+    const { user, plan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+    const nextYear = year + 1;
+    const finalYear = year + 2;
+    const date = `${year}-05-01`;
+
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 10
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, year);
+    addYear(plan.id, nextYear, undefined);
+    addYear(plan.id, finalYear, undefined);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 10
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, nextYear);
+    toggleEntry(user.id, plan.id, date, undefined);
+    getStats(plan.id, year);
+    getStats(plan.id, nextYear);
+
+    toggleCompanyHoliday(plan.id, date, 'Labour Day', undefined);
+
+    expect(testDb.prepare(`
+      SELECT year, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year IN (?, ?)
+      ORDER BY year
+    `).all(user.id, plan.id, nextYear, finalYear)).toEqual([
+      { year: nextYear, carried_over: 10 },
+      { year: finalYear, carried_over: 20 },
+    ]);
+  });
+
+  it('VACAY-SVC-036e: a holiday toggle stops carry propagation at the first year gap', () => {
+    const { user, plan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+    const nextYear = year + 1;
+    const gapYear = year + 3;
+    const gapSuccessor = year + 4;
+    const date = `${year}-05-01`;
+
+    addYear(plan.id, nextYear, undefined);
+    addYear(plan.id, gapYear, undefined);
+    addYear(plan.id, gapSuccessor, undefined);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 10
+      WHERE user_id = ? AND plan_id = ? AND year IN (?, ?)
+    `).run(user.id, plan.id, year, nextYear);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 5, carried_over = 4
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, gapYear);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET carried_over = 11
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, gapSuccessor);
+    toggleEntry(user.id, plan.id, date, undefined);
+
+    toggleCompanyHoliday(plan.id, date, 'Labour Day', undefined);
+
+    expect(testDb.prepare(`
+      SELECT year, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year IN (?, ?, ?)
+      ORDER BY year
+    `).all(user.id, plan.id, nextYear, gapYear, gapSuccessor)).toEqual([
+      { year: nextYear, carried_over: 10 },
+      { year: gapYear, carried_over: 4 },
+      { year: gapSuccessor, carried_over: 11 },
+    ]);
+  });
+
+  it('VACAY-SVC-036f: a missing source user-year uses the established 30-day default', () => {
+    const { user, plan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+    const nextYear = year + 1;
+
+    addYear(plan.id, nextYear, undefined);
+    testDb.prepare(`
+      DELETE FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, year);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET carried_over = 7
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(user.id, plan.id, nextYear);
+
+    toggleCompanyHoliday(plan.id, `${year}-05-01`, 'Labour Day', undefined);
+
+    expect(testDb.prepare(`
+      SELECT carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(user.id, plan.id, nextYear)).toEqual({ carried_over: 30 });
+  });
+
+  it.each(['2025-02-29', '2026-04-31', '2026-13-01', 'not-a-date'])(
+    'VACAY-SVC-036g: rejects invalid company holiday date %s before mutation',
+    (date) => {
+      const { plan } = setupUserWithPlan();
+      broadcastToUserMock.mockClear();
+
+      expect(() => toggleCompanyHoliday(plan.id, date, undefined, undefined)).toThrowError(
+        expect.objectContaining({ code: 'VACAY_INVALID_DATE' }),
+      );
+      expect(testDb.prepare(`
+        SELECT id FROM vacay_company_holidays WHERE plan_id = ?
+      `).all(plan.id)).toEqual([]);
+      expect(broadcastToUserMock).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ── acceptInvite / declineInvite / cancelInvite ───────────────────────────────
@@ -1308,6 +1510,181 @@ describe('acceptInvite', () => {
     expect(broadcastToUserMock).not.toHaveBeenCalled();
   });
 
+  it.each(['2025-02-29', '2026-04-31', '2026-13-40'])(
+    'VACAY-SVC-039h: rejects non-calendar legacy entry date %s before accepting or moving data',
+    (invalidDate) => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: invitee, plan: inviteePlan } = setupUserWithPlan();
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?)
+    `).run(inviteePlan.id, invitee.id, invalidDate, 'legacy invalid date');
+    insertMember(ownerPlan.id, invitee.id, 'pending');
+    broadcastToUserMock.mockClear();
+
+    const result = acceptInvite(invitee.id, ownerPlan.id, undefined);
+
+    expect(result).toMatchObject({
+      status: 409,
+      code: 'VACAY_INVITE_YEAR_REVIEW_REQUIRED',
+    });
+    expect(testDb.prepare(`
+      SELECT status FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlan.id, invitee.id)).toEqual({ status: 'pending' });
+    expect(testDb.prepare(`
+      SELECT plan_id, date FROM vacay_entries
+      WHERE user_id = ? AND date = ?
+    `).get(invitee.id, invalidDate)).toEqual({
+      plan_id: inviteePlan.id,
+      date: invalidDate,
+    });
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('VACAY-SVC-039ha: accepts a valid Gregorian leap-day entry', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: invitee, plan: inviteePlan } = setupUserWithPlan();
+    const leapYear = 2024;
+    const date = `${leapYear}-02-29`;
+    addYear(ownerPlan.id, leapYear, undefined);
+    addYear(inviteePlan.id, leapYear, undefined);
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?)
+    `).run(inviteePlan.id, invitee.id, date, 'valid leap day');
+    insertMember(ownerPlan.id, invitee.id, 'pending');
+
+    expect(acceptInvite(invitee.id, ownerPlan.id, undefined).error).toBeUndefined();
+    expect(testDb.prepare(`
+      SELECT plan_id, date
+      FROM vacay_entries
+      WHERE user_id = ? AND date = ?
+    `).get(invitee.id, date)).toEqual({
+      plan_id: ownerPlan.id,
+      date,
+    });
+  });
+
+  it('VACAY-SVC-039i: rejoining applies the current solo user-year over a stale shared row', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: invitee, plan: inviteePlan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 20, carried_over = 1
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(invitee.id, inviteePlan.id, year);
+    insertMember(ownerPlan.id, invitee.id, 'pending');
+    expect(acceptInvite(invitee.id, ownerPlan.id, undefined).error).toBeUndefined();
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 25, carried_over = 2
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(invitee.id, ownerPlan.id, year);
+
+    dissolvePlan(invitee.id, undefined);
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 15, carried_over = 3
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(invitee.id, inviteePlan.id, year);
+    insertMember(ownerPlan.id, invitee.id, 'pending');
+
+    expect(acceptInvite(invitee.id, ownerPlan.id, undefined).error).toBeUndefined();
+    expect(testDb.prepare(`
+      SELECT vacation_days, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(invitee.id, ownerPlan.id, year)).toEqual({
+      vacation_days: 15,
+      carried_over: 3,
+    });
+  });
+
+  it('VACAY-SVC-039j: rejoining resets stale shared values for destination-only years', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: invitee } = setupUserWithPlan();
+    const destinationOnlyYear = new Date().getFullYear() + 1;
+    addYear(ownerPlan.id, destinationOnlyYear, undefined);
+    insertMember(ownerPlan.id, invitee.id, 'pending');
+    expect(acceptInvite(invitee.id, ownerPlan.id, undefined).error).toBeUndefined();
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 25, carried_over = 2
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(invitee.id, ownerPlan.id, destinationOnlyYear);
+
+    dissolvePlan(invitee.id, undefined);
+    insertMember(ownerPlan.id, invitee.id, 'pending');
+
+    expect(acceptInvite(invitee.id, ownerPlan.id, undefined).error).toBeUndefined();
+    expect(testDb.prepare(`
+      SELECT vacation_days, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(invitee.id, ownerPlan.id, destinationOnlyYear)).toEqual({
+      vacation_days: 30,
+      carried_over: 0,
+    });
+  });
+
+  it('VACAY-SVC-039k: a user-year reconciliation failure rolls back the entire acceptance', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: invitee, plan: inviteePlan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+    const date = `${year}-08-01`;
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 15, carried_over = 3
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(invitee.id, inviteePlan.id, year);
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?)
+    `).run(inviteePlan.id, invitee.id, date, 'must roll back');
+    insertMember(ownerPlan.id, invitee.id, 'pending');
+    const beforeUserYears = testDb.prepare(`
+      SELECT user_id, plan_id, year, vacation_days, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ?
+      ORDER BY plan_id, year
+    `).all(invitee.id);
+    testDb.exec(`
+      CREATE TRIGGER fail_vacay_invite_user_year_update
+      BEFORE INSERT ON vacay_user_years
+      WHEN NEW.user_id = ${invitee.id} AND NEW.plan_id = ${ownerPlan.id}
+      BEGIN
+        SELECT RAISE(ABORT, 'forced invite user-year failure');
+      END;
+    `);
+    broadcastToUserMock.mockClear();
+
+    try {
+      expect(() => acceptInvite(invitee.id, ownerPlan.id, undefined))
+        .toThrow('forced invite user-year failure');
+      expect(testDb.prepare(`
+        SELECT status FROM vacay_plan_members
+        WHERE plan_id = ? AND user_id = ?
+      `).get(ownerPlan.id, invitee.id)).toEqual({ status: 'pending' });
+      expect(testDb.prepare(`
+        SELECT plan_id, date FROM vacay_entries
+        WHERE user_id = ? AND date = ?
+      `).get(invitee.id, date)).toEqual({ plan_id: inviteePlan.id, date });
+      expect(testDb.prepare(`
+        SELECT user_id, plan_id, year, vacation_days, carried_over
+        FROM vacay_user_years
+        WHERE user_id = ?
+        ORDER BY plan_id, year
+      `).all(invitee.id)).toEqual(beforeUserYears);
+      expect(broadcastToUserMock).not.toHaveBeenCalled();
+    } finally {
+      testDb.exec('DROP TRIGGER IF EXISTS fail_vacay_invite_user_year_update');
+    }
+  });
+
   it('VACAY-SVC-039d: rejects an acceptance that would orphan the invitee-owned plan', () => {
     const { plan: destinationPlan } = setupUserWithPlan();
     const { user: invitee, plan: inviteePlan } = setupUserWithPlan();
@@ -1456,27 +1833,70 @@ describe('declineInvite', () => {
 
 describe('cancelInvite', () => {
   it('VACAY-SVC-041: removes the pending invite when owner cancels it', () => {
-    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: owner, plan: ownerPlan } = setupUserWithPlan();
     const { user: target } = createUser(testDb);
     insertMember(ownerPlan.id, target.id, 'pending');
 
-    const changed = cancelInvite(ownerPlan.id, target.id);
+    const result = cancelInvite(owner.id, target.id);
 
     const row = testDb
       .prepare('SELECT * FROM vacay_plan_members WHERE plan_id = ? AND user_id = ?')
       .get(ownerPlan.id, target.id);
-    expect(changed).toBe(true);
+    expect(result.error).toBeUndefined();
     expect(row).toBeUndefined();
   });
 
   it('VACAY-SVC-041a: keeps a no-op cancellation silent', () => {
-    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: owner } = setupUserWithPlan();
     const { user: target } = createUser(testDb);
     broadcastToUserMock.mockClear();
 
-    const changed = cancelInvite(ownerPlan.id, target.id);
+    const result = cancelInvite(owner.id, target.id);
 
-    expect(changed).toBe(false);
+    expect(result.error).toBeUndefined();
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-041b: rejects an accepted member cancelling the owner pending invite', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: member } = createUser(testDb);
+    const { user: target } = createUser(testDb);
+    insertMember(ownerPlan.id, member.id, 'accepted');
+    insertMember(ownerPlan.id, target.id, 'pending');
+    broadcastToUserMock.mockClear();
+
+    const result = cancelInvite(member.id, target.id);
+
+    expect(result).toMatchObject({
+      status: 403,
+      code: 'VACAY_INVITE_OWNER_REQUIRED',
+    });
+    expect(testDb.prepare(`
+      SELECT status FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlan.id, target.id)).toEqual({ status: 'pending' });
+    expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-SVC-041c: returns stable review-required for a dangling accepted membership', () => {
+    const { user: owner, plan: ownerPlan } = setupUserWithPlan();
+    const { user: target } = createUser(testDb);
+    insertMember(ownerPlan.id, target.id, 'pending');
+    testDb.pragma('foreign_keys = OFF');
+    insertMember(999999, owner.id, 'accepted');
+    testDb.pragma('foreign_keys = ON');
+    broadcastToUserMock.mockClear();
+
+    const result = cancelInvite(owner.id, target.id);
+
+    expect(result).toMatchObject({
+      status: 409,
+      code: 'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED',
+    });
+    expect(testDb.prepare(`
+      SELECT status FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlan.id, target.id)).toEqual({ status: 'pending' });
     expect(broadcastToUserMock).not.toHaveBeenCalled();
   });
 });

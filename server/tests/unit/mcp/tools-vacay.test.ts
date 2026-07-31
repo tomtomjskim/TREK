@@ -356,6 +356,40 @@ describe('Tool: send_vacay_invite', () => {
   });
 });
 
+describe('Tool: cancel_vacay_invite', () => {
+  it('rejects an accepted member cancelling the owner pending invite', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const { user: target } = createUser(testDb);
+
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+    });
+    const ownerPlan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?')
+      .get(owner.id) as { id: number };
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'accepted'), (?, ?, 'pending')
+    `).run(ownerPlan.id, member.id, ownerPlan.id, target.id);
+
+    await withHarness(member.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'cancel_vacay_invite',
+        arguments: { targetUserId: target.id },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({
+        code: 'VACAY_INVITE_OWNER_REQUIRED',
+      });
+    });
+    expect(testDb.prepare(`
+      SELECT status FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlan.id, target.id)).toEqual({ status: 'pending' });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // add_vacay_year
 // ---------------------------------------------------------------------------
@@ -539,6 +573,21 @@ describe('Tool: toggle_vacay_entry', () => {
       expect(result.isError).toBe(true);
     });
   });
+
+  it('returns a stable tool error for an invalid calendar date', async () => {
+    const { user } = createUser(testDb);
+    await withHarness(user.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'toggle_vacay_entry',
+        arguments: { date: '2026-02-30' },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({
+        code: 'VACAY_INVALID_DATE',
+      });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -564,6 +613,21 @@ describe('Tool: toggle_company_holiday', () => {
     await withHarness(user.id, async (h) => {
       const result = await h.client.callTool({ name: 'toggle_company_holiday', arguments: { date: '2025-12-25' } });
       expect(result.isError).toBe(true);
+    });
+  });
+
+  it('returns a stable tool error for an invalid calendar date', async () => {
+    const { user } = createUser(testDb);
+    await withHarness(user.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'toggle_company_holiday',
+        arguments: { date: '2026-02-30' },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({
+        code: 'VACAY_INVALID_DATE',
+      });
     });
   });
 

@@ -84,6 +84,17 @@ export class VacayInvalidYearError extends Error {
   }
 }
 
+export const VACAY_INVALID_DATE = 'VACAY_INVALID_DATE';
+
+export class VacayInvalidDateError extends Error {
+  readonly code = VACAY_INVALID_DATE;
+
+  constructor() {
+    super('Date must be a valid YYYY-MM-DD calendar date');
+    this.name = 'VacayInvalidDateError';
+  }
+}
+
 export const VACAY_FUSED_YEAR_DELETE_READ_ONLY =
   'VACAY_FUSED_YEAR_DELETE_READ_ONLY';
 
@@ -113,6 +124,9 @@ export const VACAY_INVITE_YEAR_REVIEW_REQUIRED =
 
 export const VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED =
   'VACAY_INVITE_MEMBERSHIP_REVIEW_REQUIRED';
+
+export const VACAY_INVITE_OWNER_REQUIRED =
+  'VACAY_INVITE_OWNER_REQUIRED';
 
 // ---------------------------------------------------------------------------
 // Holiday cache (shared in-process)
@@ -273,6 +287,87 @@ function countDeductingEntries(userId: number, planId: number, year: number): nu
   `).get(userId, planId, `${year}-%`) as { count: number }).count;
 }
 
+function recomputeCarryForward(planId: number, sourceYear?: number): void {
+  const plan = db.prepare(
+    'SELECT carry_over_enabled FROM vacay_plans WHERE id = ?'
+  ).get(planId) as { carry_over_enabled: number } | undefined;
+  if (!plan?.carry_over_enabled) return;
+
+  const years = db.prepare(
+    'SELECT year FROM vacay_years WHERE plan_id = ? ORDER BY year'
+  ).all(planId) as { year: number }[];
+  const sourceIndex = sourceYear === undefined
+    ? 0
+    : years.findIndex(row => row.year === sourceYear);
+  if (sourceIndex < 0) return;
+
+  const users = getPlanUsers(planId);
+  for (let i = sourceIndex; i < years.length - 1; i++) {
+    const year = years[i].year;
+    const nextYear = years[i + 1].year;
+    if (nextYear !== year + 1) {
+      if (sourceYear !== undefined) break;
+      continue;
+    }
+    for (const user of users) {
+      const config = db.prepare(`
+        SELECT *
+        FROM vacay_user_years
+        WHERE user_id = ? AND plan_id = ? AND year = ?
+      `).get(user.id, planId, year) as VacayUserYear | undefined;
+      const carry = Math.max(
+        0,
+        (config?.vacation_days ?? 30)
+          + (config?.carried_over ?? 0)
+          - countDeductingEntries(user.id, planId, year),
+      );
+      db.prepare(`
+        INSERT INTO vacay_user_years
+          (user_id, plan_id, year, vacation_days, carried_over)
+        VALUES (?, ?, ?, 30, ?)
+        ON CONFLICT(user_id, plan_id, year)
+        DO UPDATE SET carried_over = excluded.carried_over
+      `).run(user.id, planId, nextYear, carry);
+    }
+  }
+}
+
+function parseCalendarEntryYear(date: unknown): number | null {
+  if (typeof date !== 'string') return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isSafeInteger(year) || month < 1 || month > 12 || day < 1) {
+    return null;
+  }
+
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [
+    31,
+    leapYear ? 29 : 28,
+    31,
+    30,
+    31,
+    30,
+    31,
+    31,
+    30,
+    31,
+    30,
+    31,
+  ];
+  return day <= daysInMonth[month - 1] ? year : null;
+}
+
+function assertCalendarDate(date: unknown): asserts date is string {
+  if (parseCalendarEntryYear(date) === null) {
+    throw new VacayInvalidDateError();
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Plan settings
 // ---------------------------------------------------------------------------
@@ -304,37 +399,30 @@ export async function updatePlan(planId: number, body: UpdatePlanBody, socketId:
   if (weekend_days !== undefined) { updates.push('weekend_days = ?'); params.push(String(weekend_days)); }
   if (week_start !== undefined) { updates.push('week_start = ?'); params.push(week_start === 0 ? 0 : 1); }
 
-  if (updates.length > 0) {
-    params.push(planId);
-    db.prepare(`UPDATE vacay_plans SET ${updates.join(', ')} WHERE id = ?`).run(...params);
-  }
+  const updatedPlan = db.transaction(() => {
+    if (updates.length > 0) {
+      params.push(planId);
+      db.prepare(`UPDATE vacay_plans SET ${updates.join(', ')} WHERE id = ?`).run(...params);
+    }
 
-  const updatedPlan = db.prepare('SELECT * FROM vacay_plans WHERE id = ?').get(planId) as VacayPlan;
+    const current = db.prepare(
+      'SELECT * FROM vacay_plans WHERE id = ?'
+    ).get(planId) as VacayPlan;
+    if (carry_over_enabled === false) {
+      db.prepare(
+        'UPDATE vacay_user_years SET carried_over = 0 WHERE plan_id = ?'
+      ).run(planId);
+    } else if (
+      current.carry_over_enabled
+      && (carry_over_enabled === true || company_holidays_enabled !== undefined)
+    ) {
+      recomputeCarryForward(planId);
+    }
+    return current;
+  }).immediate();
+
   await migrateHolidayCalendars(planId, updatedPlan);
   await applyHolidayCalendars(planId);
-
-  if (carry_over_enabled === false) {
-    db.prepare('UPDATE vacay_user_years SET carried_over = 0 WHERE plan_id = ?').run(planId);
-  }
-
-  if (carry_over_enabled === true) {
-    const years = db.prepare('SELECT year FROM vacay_years WHERE plan_id = ? ORDER BY year').all(planId) as { year: number }[];
-    const users = getPlanUsers(planId);
-    for (let i = 0; i < years.length - 1; i++) {
-      const yr = years[i].year;
-      const nextYr = years[i + 1].year;
-      for (const u of users) {
-        const used = countDeductingEntries(u.id, planId, yr);
-        const config = db.prepare('SELECT * FROM vacay_user_years WHERE user_id = ? AND plan_id = ? AND year = ?').get(u.id, planId, yr) as VacayUserYear | undefined;
-        const total = (config ? config.vacation_days : 30) + (config ? config.carried_over : 0);
-        const carry = Math.max(0, total - used);
-        db.prepare(`
-          INSERT INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over) VALUES (?, ?, ?, 30, ?)
-          ON CONFLICT(user_id, plan_id, year) DO UPDATE SET carried_over = ?
-        `).run(u.id, planId, nextYr, carry, carry);
-      }
-    }
-  }
 
   notifyPlanUsers(planId, socketId, 'vacay:settings');
 
@@ -569,10 +657,16 @@ export function acceptInvite(userId: number, planId: number, socketId: string | 
         'SELECT date FROM vacay_entries WHERE plan_id = ? AND user_id = ?',
       ).all(ownPlan.id, userId) as { date: string }[];
       for (const entry of ownEntryDates) {
-        const match = /^(-?\d+)-\d{2}-\d{2}$/.exec(entry.date);
-        const entryYear = match ? Number(match[1]) : Number.NaN;
-        if (!Number.isSafeInteger(entryYear)) {
-          throw new Error('Cannot reconcile a vacation entry with an invalid date');
+        const entryYear = parseCalendarEntryYear(entry.date);
+        if (entryYear === null) {
+          return {
+            accepted: false,
+            result: {
+              error: 'Vacation entry dates require review before this invitation can be accepted',
+              status: 409,
+              code: VACAY_INVITE_YEAR_REVIEW_REQUIRED,
+            },
+          };
         }
         requiredYears.add(entryYear);
       }
@@ -603,7 +697,15 @@ export function acceptInvite(userId: number, planId: number, socketId: string | 
     if (ownPlan && ownPlan.id !== planId) {
       db.prepare('UPDATE vacay_entries SET plan_id = ? WHERE plan_id = ? AND user_id = ?').run(planId, ownPlan.id, userId);
       for (const y of ownYears) {
-        db.prepare('INSERT OR IGNORE INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over) VALUES (?, ?, ?, ?, ?)').run(userId, planId, y.year, y.vacation_days, y.carried_over);
+        db.prepare(`
+          INSERT INTO vacay_user_years
+            (user_id, plan_id, year, vacation_days, carried_over)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(user_id, plan_id, year)
+          DO UPDATE SET
+            vacation_days = excluded.vacation_days,
+            carried_over = excluded.carried_over
+        `).run(userId, planId, y.year, y.vacation_days, y.carried_over);
       }
       const colorRow = db.prepare('SELECT color FROM vacay_user_colors WHERE user_id = ? AND plan_id = ?').get(userId, ownPlan.id) as { color: string } | undefined;
       if (colorRow) {
@@ -627,8 +729,25 @@ export function acceptInvite(userId: number, planId: number, socketId: string | 
 
     // Ensure user has rows for all plan years
     const targetYears = db.prepare('SELECT year FROM vacay_years WHERE plan_id = ?').all(planId) as { year: number }[];
+    const sourceYearSet = new Set(ownYears.map(year => year.year));
     for (const y of targetYears) {
-      db.prepare('INSERT OR IGNORE INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over) VALUES (?, ?, ?, 30, 0)').run(userId, planId, y.year);
+      if (ownPlan && ownPlan.id !== planId && !sourceYearSet.has(y.year)) {
+        db.prepare(`
+          INSERT INTO vacay_user_years
+            (user_id, plan_id, year, vacation_days, carried_over)
+          VALUES (?, ?, ?, 30, 0)
+          ON CONFLICT(user_id, plan_id, year)
+          DO UPDATE SET
+            vacation_days = excluded.vacation_days,
+            carried_over = excluded.carried_over
+        `).run(userId, planId, y.year);
+      } else {
+        db.prepare(`
+          INSERT OR IGNORE INTO vacay_user_years
+            (user_id, plan_id, year, vacation_days, carried_over)
+          VALUES (?, ?, ?, 30, 0)
+        `).run(userId, planId, y.year);
+      }
     }
 
     return { accepted: true, result: {} };
@@ -655,16 +774,63 @@ export function declineInvite(userId: number, planId: number, socketId: string |
   return true;
 }
 
-export function cancelInvite(planId: number, targetUserId: number): boolean {
-  const result = db.prepare(
-    "DELETE FROM vacay_plan_members WHERE plan_id = ? AND user_id = ? AND status = 'pending'"
-  ).run(planId, targetUserId);
-  if (result.changes !== 1) return false;
+export function cancelInvite(actorUserId: number, targetUserId: number): VacayInviteActionResult {
+  const outcome = db.transaction((): {
+    changed: boolean;
+    result: VacayInviteActionResult;
+  } => {
+    const acceptedMemberships = db.prepare(`
+      SELECT m.plan_id, p.id AS existing_plan_id, p.owner_id
+      FROM vacay_plan_members m
+      LEFT JOIN vacay_plans p ON p.id = m.plan_id
+      WHERE m.user_id = ? AND m.status = 'accepted'
+      ORDER BY m.id
+    `).all(actorUserId) as {
+      plan_id: number;
+      existing_plan_id: number | null;
+      owner_id: number | null;
+    }[];
+    if (
+      acceptedMemberships.length > 1
+      || acceptedMemberships.some(membership =>
+        membership.existing_plan_id === null
+        || membership.owner_id === actorUserId
+      )
+    ) {
+      return {
+        changed: false,
+        result: membershipReviewResult(
+          'Vacation plan memberships require review before invitations can be cancelled',
+        ),
+      };
+    }
+    if (acceptedMemberships.length === 1) {
+      return {
+        changed: false,
+        result: {
+          error: 'Only the vacation plan owner can cancel invitations',
+          status: 403,
+          code: VACAY_INVITE_OWNER_REQUIRED,
+        },
+      };
+    }
 
-  try {
-    broadcastToUser(targetUserId, { type: 'vacay:cancelled' });
-  } catch { /* */ }
-  return true;
+    const plan = getOwnPlan(actorUserId);
+    const result = db.prepare(
+      "DELETE FROM vacay_plan_members WHERE plan_id = ? AND user_id = ? AND status = 'pending'"
+    ).run(plan.id, targetUserId);
+    return {
+      changed: result.changes === 1,
+      result: {},
+    };
+  }).immediate();
+
+  if (outcome.changed) {
+    try {
+      broadcastToUser(targetUserId, { type: 'vacay:cancelled' });
+    } catch { /* */ }
+  }
+  return outcome.result;
 }
 
 // ---------------------------------------------------------------------------
@@ -944,6 +1110,8 @@ export function getEntries(planId: number, year: string) {
 }
 
 export function toggleEntry(userId: number, planId: number, date: string, socketId: string | undefined): { action: string } {
+  assertCalendarDate(date);
+
   const existing = db.prepare('SELECT id FROM vacay_entries WHERE user_id = ? AND date = ? AND plan_id = ?').get(userId, date, planId) as { id: number } | undefined;
   if (existing) {
     db.prepare('DELETE FROM vacay_entries WHERE id = ?').run(existing.id);
@@ -957,18 +1125,28 @@ export function toggleEntry(userId: number, planId: number, date: string, socket
 }
 
 export function toggleCompanyHoliday(planId: number, date: string, note: string | undefined, socketId: string | undefined): { action: string } {
-  assertCompanyHolidayMutationAllowed(planId);
+  const result = db.transaction((): { action: string } => {
+    assertCompanyHolidayMutationAllowed(planId);
+    assertCalendarDate(date);
 
-  const existing = db.prepare('SELECT id FROM vacay_company_holidays WHERE plan_id = ? AND date = ?').get(planId, date) as { id: number } | undefined;
-  if (existing) {
-    db.prepare('DELETE FROM vacay_company_holidays WHERE id = ?').run(existing.id);
-    notifyPlanUsers(planId, socketId);
-    return { action: 'removed' };
-  } else {
-    db.prepare('INSERT INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)').run(planId, date, note || '');
-    notifyPlanUsers(planId, socketId);
-    return { action: 'added' };
-  }
+    const existing = db.prepare(
+      'SELECT id FROM vacay_company_holidays WHERE plan_id = ? AND date = ?'
+    ).get(planId, date) as { id: number } | undefined;
+    const action = existing ? 'removed' : 'added';
+    if (existing) {
+      db.prepare('DELETE FROM vacay_company_holidays WHERE id = ?').run(existing.id);
+    } else {
+      db.prepare(
+        'INSERT INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)'
+      ).run(planId, date, note || '');
+    }
+
+    recomputeCarryForward(planId, parseCalendarEntryYear(date)!);
+    return { action };
+  }).immediate();
+
+  notifyPlanUsers(planId, socketId);
+  return result;
 }
 
 // ---------------------------------------------------------------------------

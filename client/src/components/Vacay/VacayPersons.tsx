@@ -19,7 +19,7 @@ const PRESET_COLORS = [
 export default function VacayPersons() {
   const { t } = useTranslation()
   const toast = useToast()
-  const { users, pendingInvites, invite, cancelInvite, updateColor, selectedUserId, setSelectedUserId, isFused } = useVacayStore()
+  const { users, pendingInvites, invite, cancelInvite, updateColor, selectedUserId, setSelectedUserId, isFused, isOwner } = useVacayStore()
   const { user: currentUser } = useAuthStore()
 
   // Default selectedUserId to current user
@@ -108,10 +108,12 @@ export default function VacayPersons() {
             <span className="text-xs flex-1 truncate text-content-muted">
               {inv.username} <span className="text-[10px]">({t('vacay.pending')})</span>
             </span>
-            <button onClick={() => cancelInvite(inv.user_id)}
-              className="opacity-0 group-hover:opacity-100 text-[10px] px-1.5 py-0.5 rounded transition-all text-content-faint">
-              {t('common.cancel')}
-            </button>
+            {isOwner && (
+              <button onClick={() => cancelInvite(inv.user_id)}
+                className="opacity-0 group-hover:opacity-100 text-[10px] px-1.5 py-0.5 rounded transition-all text-content-faint">
+                {t('common.cancel')}
+              </button>
+            )}
           </div>
         ))}
       </div>

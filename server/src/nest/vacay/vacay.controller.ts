@@ -15,6 +15,7 @@ import type { User } from '../../types';
 import {
   VacayFusedCompanyHolidaysReadOnlyError,
   VacayFusedYearDeleteReadOnlyError,
+  VacayInvalidDateError,
   VacayInvalidYearError,
   VacayService,
   VacayYearDeleteReviewRequiredError,
@@ -23,7 +24,10 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 
 function rethrowVacayConflict(error: unknown): never {
-  if (error instanceof VacayInvalidYearError) {
+  if (
+    error instanceof VacayInvalidDateError
+    || error instanceof VacayInvalidYearError
+  ) {
     throw new HttpException({
       error: error.message,
       code: error.code,
@@ -232,8 +236,16 @@ export class VacayController {
   @HttpCode(200)
   cancelInvite(@CurrentUser() user: User, @Body('user_id') targetUserIdInput?: number | string) {
     const targetUserId = parseCanonicalPositiveId(targetUserIdInput, 'user_id');
-    const plan = this.vacay.getActivePlan(user.id);
-    this.vacay.cancelInvite(plan.id, targetUserId);
+    const result = this.vacay.cancelInvite(user.id, targetUserId);
+    if (result.error) {
+      throw new HttpException(
+        {
+          error: result.error,
+          ...(result.code ? { code: result.code } : {}),
+        },
+        result.status!,
+      );
+    }
     return { success: true };
   }
 
@@ -308,7 +320,11 @@ export class VacayController {
       }
       userId = tid;
     }
-    return this.vacay.toggleEntry(userId, planId, body.date, socketId);
+    try {
+      return this.vacay.toggleEntry(userId, planId, body.date, socketId);
+    } catch (error) {
+      rethrowVacayConflict(error);
+    }
   }
 
   @Post('entries/company-holiday')

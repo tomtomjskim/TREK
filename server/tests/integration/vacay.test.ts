@@ -698,6 +698,32 @@ describe('Vacay invite full flow', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
   });
+
+  it('VACAY-030a — accepted members cannot cancel the owner pending invite', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const { user: target } = createUser(testDb);
+    const planRes = await request(app)
+      .get('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(owner.id));
+    const planId = planRes.body.plan.id as number;
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'accepted'), (?, ?, 'pending')
+    `).run(planId, member.id, planId, target.id);
+
+    const res = await request(app)
+      .post('/api/addons/vacay/invite/cancel')
+      .set('Cookie', authCookie(member.id))
+      .send({ user_id: target.id });
+
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'VACAY_INVITE_OWNER_REQUIRED' });
+    expect(testDb.prepare(`
+      SELECT status FROM vacay_plan_members
+      WHERE plan_id = ? AND user_id = ?
+    `).get(planId, target.id)).toEqual({ status: 'pending' });
+  });
 });
 
 describe('Vacay company holidays', () => {
@@ -711,6 +737,38 @@ describe('Vacay company holidays', () => {
       .set('Cookie', authCookie(user.id))
       .send({ date: '2025-12-25', note: 'Christmas' });
     expect(res.status).toBe(200);
+  });
+
+  it.each([
+    ['/api/addons/vacay/entries/toggle'],
+    ['/api/addons/vacay/entries/company-holiday'],
+  ])('VACAY-032b — POST %s rejects invalid calendar dates before mutation', async (path) => {
+    const { user } = createUser(testDb);
+    const planRes = await request(app)
+      .get('/api/addons/vacay/plan')
+      .set('Cookie', authCookie(user.id));
+    const planId = planRes.body.plan.id as number;
+
+    const res = await request(app)
+      .post(path)
+      .set('Cookie', authCookie(user.id))
+      .send({ date: '2026-02-30' });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({
+      error: 'Date must be a valid YYYY-MM-DD calendar date',
+      code: 'VACAY_INVALID_DATE',
+    });
+    expect(testDb.prepare(`
+      SELECT COUNT(*) AS count
+      FROM vacay_entries
+      WHERE plan_id = ?
+    `).get(planId)).toEqual({ count: 0 });
+    expect(testDb.prepare(`
+      SELECT COUNT(*) AS count
+      FROM vacay_company_holidays
+      WHERE plan_id = ?
+    `).get(planId)).toEqual({ count: 0 });
   });
 
   it('VACAY-032a — company holiday overlay preserves the entry and only changes its balance effect', async () => {

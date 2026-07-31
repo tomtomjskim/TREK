@@ -4,6 +4,7 @@ import * as svc from '../../services/vacayService';
 export {
   VacayFusedCompanyHolidaysReadOnlyError,
   VacayFusedYearDeleteReadOnlyError,
+  VacayInvalidDateError,
   VacayInvalidYearError,
   VacayYearDeleteReviewRequiredError,
 } from '../../services/vacayService';
@@ -65,8 +66,8 @@ export class VacayService {
     return svc.declineInvite(userId, planId, socketId);
   }
 
-  cancelInvite(planId: number, targetUserId: number): boolean {
-    return svc.cancelInvite(planId, targetUserId);
+  cancelInvite(actorUserId: number, targetUserId: number) {
+    return svc.cancelInvite(actorUserId, targetUserId);
   }
 
   dissolvePlan(userId: number, socketId: string | undefined): void {

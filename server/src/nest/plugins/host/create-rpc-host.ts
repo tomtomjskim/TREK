@@ -35,6 +35,7 @@ import {
   toggleEntry as vacayToggleEntrySvc,
   toggleCompanyHoliday as vacayToggleCompanyHolidaySvc,
   VacayFusedCompanyHolidaysReadOnlyError,
+  VacayInvalidDateError,
 } from '../../../services/vacayService';
 import { listNotes, createNote, getNote, updateNote, deleteNote, dayExists as dayNoteDayExists } from '../../../services/dayNoteService';
 import { listCollections, getCollection, createCollection, updateCollection, savePlace as saveCollectionPlaceSvc, copyToTrip as copyCollectionToTripSvc, deletePlace as deleteCollectionPlaceSvc } from '../../../services/collectionsService';
@@ -695,12 +696,25 @@ export function createRealRpcHost(id: string, granted: ReadonlySet<string>, rout
     },
     // --- Vacay write: the plan is the ACTING USER's active plan (resolved host-side);
     // the service broadcasts to plan users itself. ---
-    vacayToggleEntry: (userId, date) => { requireAddon(ADDON_IDS.VACAY, 'vacay'); return vacayToggleEntrySvc(userId, getActivePlanId(userId), date, undefined); },
+    vacayToggleEntry: (userId, date) => {
+      requireAddon(ADDON_IDS.VACAY, 'vacay');
+      try {
+        return vacayToggleEntrySvc(userId, getActivePlanId(userId), date, undefined);
+      } catch (error) {
+        if (error instanceof VacayInvalidDateError) {
+          throw new BadParams(error.message);
+        }
+        throw error;
+      }
+    },
     vacayToggleCompanyHoliday: (userId, date, note) => {
       requireAddon(ADDON_IDS.VACAY, 'vacay');
       try {
         return vacayToggleCompanyHolidaySvc(getActivePlanId(userId), date, note, undefined);
       } catch (error) {
+        if (error instanceof VacayInvalidDateError) {
+          throw new BadParams(error.message);
+        }
         if (error instanceof VacayFusedCompanyHolidaysReadOnlyError) {
           throw new ForbiddenResource(error.message);
         }

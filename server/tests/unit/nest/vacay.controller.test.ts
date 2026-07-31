@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { HttpException } from '@nestjs/common';
 import { VacayController } from '../../../src/nest/vacay/vacay.controller';
+import { VacayInvalidDateError } from '../../../src/services/vacayService';
 import type { VacayService } from '../../../src/nest/vacay/vacay.service';
 import type { User } from '../../../src/types';
 
@@ -115,7 +116,7 @@ describe('VacayController (parity with the legacy /api/addons/vacay route)', () 
       const sendInvite = vi.fn().mockReturnValue({});
       const acceptInvite = vi.fn().mockReturnValue({});
       const declineInvite = vi.fn();
-      const cancelInvite = vi.fn();
+      const cancelInvite = vi.fn().mockReturnValue({});
       const controller = makeController({
         ...planBase,
         sendInvite,
@@ -131,7 +132,7 @@ describe('VacayController (parity with the legacy /api/addons/vacay route)', () 
       expect(sendInvite).toHaveBeenCalledWith(10, 1, 'u', 'u@example.test', 2);
       expect(acceptInvite).toHaveBeenCalledWith(1, 5, undefined);
       expect(declineInvite).toHaveBeenCalledWith(1, 6, undefined);
-      expect(cancelInvite).toHaveBeenCalledWith(10, 7);
+      expect(cancelInvite).toHaveBeenCalledWith(1, 7);
     });
 
     it.each([['01'], ['1junk'], [0], [-1], [1.5], [Number.MAX_SAFE_INTEGER + 1]])(
@@ -188,10 +189,27 @@ describe('VacayController (parity with the legacy /api/addons/vacay route)', () 
     });
 
     it('decline / cancel / dissolve return success', () => {
-      const declineInvite = vi.fn(); const cancelInvite = vi.fn(); const dissolvePlan = vi.fn();
+      const declineInvite = vi.fn(); const cancelInvite = vi.fn().mockReturnValue({}); const dissolvePlan = vi.fn();
       expect(makeController({ declineInvite }).declineInvite(user, 5)).toEqual({ success: true });
       expect(makeController({ ...planBase, cancelInvite }).cancelInvite(user, 2)).toEqual({ success: true });
       expect(makeController({ dissolvePlan }).dissolve(user)).toEqual({ success: true });
+    });
+
+    it('maps a non-owner invite cancellation to a stable 403', () => {
+      const cancelInvite = vi.fn().mockReturnValue({
+        error: 'Only the vacation plan owner can cancel invitations',
+        status: 403,
+        code: 'VACAY_INVITE_OWNER_REQUIRED',
+      });
+
+      return thrown(() => makeController({ cancelInvite }).cancelInvite(user, 2)).then((r) =>
+        expect(r).toEqual({
+          status: 403,
+          body: {
+            error: 'Only the vacation plan owner can cancel invitations',
+            code: 'VACAY_INVITE_OWNER_REQUIRED',
+          },
+        }));
     });
   });
 
@@ -247,6 +265,31 @@ describe('VacayController (parity with the legacy /api/addons/vacay route)', () 
       expect(makeController({ ...planBase, toggleEntry }).toggleEntry(user, { date: '2026-07-01' }, 'sock')).toEqual({ action: 'added' });
       expect(toggleEntry).toHaveBeenCalledWith(1, 10, '2026-07-01', 'sock');
     });
+
+    it.each(['toggleEntry', 'companyHoliday'] as const)(
+      'maps an invalid date from %s to a stable 400',
+      async (method) => {
+        const serviceMethod = vi.fn(() => {
+          throw new VacayInvalidDateError();
+        });
+        const controller = makeController({
+          ...planBase,
+          [method === 'toggleEntry' ? 'toggleEntry' : 'toggleCompanyHoliday']: serviceMethod,
+        });
+
+        const result = await thrown(() => method === 'toggleEntry'
+          ? controller.toggleEntry(user, { date: '2026-02-30' })
+          : controller.companyHoliday(user, { date: '2026-02-30' }));
+
+        expect(result).toEqual({
+          status: 400,
+          body: {
+            error: 'Date must be a valid YYYY-MM-DD calendar date',
+            code: 'VACAY_INVALID_DATE',
+          },
+        });
+      },
+    );
   });
 
   describe('stats', () => {

@@ -135,8 +135,11 @@ test('fused company holidays and whole-year deletion are read-only across REST a
   await expect(mobileDrawerCloseButton).toBeFocused()
   const mobileDrawerCloseBox = await mobileDrawerCloseButton.boundingBox()
   expect(mobileDrawerCloseBox).not.toBeNull()
-  expect(mobileDrawerCloseBox!.width).toBeGreaterThanOrEqual(44)
-  expect(mobileDrawerCloseBox!.height).toBeGreaterThanOrEqual(44)
+  // Chromium can report a 44 CSS-pixel target as 43.99998 while its transformed
+  // drawer is composited. Keep a sub-pixel tolerance without accepting a
+  // materially undersized touch target.
+  expect(mobileDrawerCloseBox!.width).toBeGreaterThanOrEqual(43.99)
+  expect(mobileDrawerCloseBox!.height).toBeGreaterThanOrEqual(43.99)
   expect(await mobileDrawer.evaluate(element => element.scrollWidth <= element.clientWidth)).toBeTruthy()
 
   await page.keyboard.press('Escape')

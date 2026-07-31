@@ -7,7 +7,7 @@ import {
   sendInvite as sendVacayInvite, acceptInvite, declineInvite, cancelInvite, dissolvePlan,
   getAvailableUsers,
   listYears, addYear, deleteActiveYear,
-  VacayFusedYearDeleteReadOnlyError, VacayYearDeleteReviewRequiredError,
+  VacayFusedYearDeleteReadOnlyError, VacayInvalidDateError, VacayYearDeleteReviewRequiredError,
   getEntries as getVacayEntries, toggleEntry, toggleCompanyHoliday,
   getStats as getVacayStats, updateStats as updateVacayStats,
   addHolidayCalendar, updateHolidayCalendar, deleteHolidayCalendar,
@@ -27,6 +27,19 @@ function yearDeleteError(error: unknown) {
     error instanceof VacayFusedYearDeleteReadOnlyError
     || error instanceof VacayYearDeleteReviewRequiredError
   ) {
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify({ error: error.message, code: error.code }),
+      }],
+      isError: true as const,
+    };
+  }
+  throw error;
+}
+
+function dateError(error: unknown) {
+  if (error instanceof VacayInvalidDateError) {
     return {
       content: [{
         type: 'text' as const,
@@ -200,8 +213,19 @@ export function registerVacayTools(server: McpServer, userId: number, scopes: st
       },
       async ({ targetUserId }) => {
         if (isDemoUser(userId)) return demoDenied();
-        const planId = getActivePlanId(userId);
-        cancelInvite(planId, targetUserId);
+        const result = cancelInvite(userId, targetUserId);
+        if (result.error) {
+          return {
+            content: [{
+              type: 'text' as const,
+              text: JSON.stringify({
+                error: result.error,
+                ...(result.code ? { code: result.code } : {}),
+              }),
+            }],
+            isError: true,
+          };
+        }
         return ok({ success: true });
       }
     );
@@ -299,8 +323,12 @@ export function registerVacayTools(server: McpServer, userId: number, scopes: st
       async ({ date }) => {
         if (isDemoUser(userId)) return demoDenied();
         const planId = getActivePlanId(userId);
-        const result = toggleEntry(userId, planId, date, undefined);
-        return ok(result);
+        try {
+          const result = toggleEntry(userId, planId, date, undefined);
+          return ok(result);
+        } catch (error) {
+          return dateError(error);
+        }
       }
     );
 
@@ -317,8 +345,12 @@ export function registerVacayTools(server: McpServer, userId: number, scopes: st
       async ({ date, note }) => {
         if (isDemoUser(userId)) return demoDenied();
         const planId = getActivePlanId(userId);
-        const result = toggleCompanyHoliday(planId, date, note, undefined);
-        return ok(result);
+        try {
+          const result = toggleCompanyHoliday(planId, date, note, undefined);
+          return ok(result);
+        } catch (error) {
+          return dateError(error);
+        }
       }
     );
 

@@ -34,6 +34,7 @@ function seedVacay(overrides: Record<string, unknown> = {}) {
     users: [],
     pendingInvites: [],
     selectedUserId: 1,
+    isOwner: true,
     isFused: false,
     ...overrides,
   })
@@ -264,5 +265,34 @@ describe('VacayPersons', () => {
     await user.click(screen.getByText('Bob'))
 
     expect(setSelectedUserIdMock).not.toHaveBeenCalled()
+  })
+
+  it('FE-COMP-VACAYPERSONS-012: owner can cancel a pending invitation', async () => {
+    const cancelInvite = vi.fn().mockResolvedValue(undefined)
+    const user = userEvent.setup()
+    seedVacay({
+      isOwner: true,
+      pendingInvites: [{ id: 10, user_id: 2, username: 'Bob' }],
+      cancelInvite,
+    })
+    seedCurrentUser(1)
+
+    render(<VacayPersons />)
+    await user.click(screen.getByRole('button', { name: /^cancel$/i }))
+
+    expect(cancelInvite).toHaveBeenCalledWith(2)
+  })
+
+  it('FE-COMP-VACAYPERSONS-013: non-owner cannot see the pending invitation cancel control', () => {
+    seedVacay({
+      isOwner: false,
+      pendingInvites: [{ id: 10, user_id: 2, username: 'Bob' }],
+    })
+    seedCurrentUser(1)
+
+    render(<VacayPersons />)
+
+    expect(document.body).toHaveTextContent('Bob')
+    expect(screen.queryByRole('button', { name: /^cancel$/i })).not.toBeInTheDocument()
   })
 })
