@@ -669,6 +669,44 @@ describe('resyncAccommodationDays (#1288)', () => {
     expect(acc.start_day_id).toBe(origDayId);
   });
 
+  it("TRIP-SVC-039: date_shift_mode 'shift_all' preserves unrelated vacay entries", () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id, { start_date: '2025-06-01', end_date: '2025-06-05' });
+    const origDayId = dayFor(trip.id, '2025-06-02');
+    const resId = Number(testDb.prepare(
+      "INSERT INTO reservations (trip_id, day_id, title, reservation_time, type, status) VALUES (?, ?, 'Dinner', '2025-06-02T19:00:00', 'restaurant', 'pending')",
+    ).run(trip.id, origDayId).lastInsertRowid);
+
+    const planId = Number(testDb.prepare('INSERT INTO vacay_plans (owner_id) VALUES (?)').run(user.id).lastInsertRowid);
+    testDb.prepare('INSERT INTO vacay_years (plan_id, year) VALUES (?, ?)').run(planId, 2025);
+    testDb.prepare(
+      'INSERT INTO vacay_user_years (user_id, plan_id, year, vacation_days, carried_over) VALUES (?, ?, ?, 30, 0)',
+    ).run(user.id, planId, 2025);
+    for (const [date, note] of [
+      ['2025-06-02', 'approved annual leave'],
+      ['2025-06-10', 'unrelated leave'],
+    ]) {
+      testDb.prepare('INSERT INTO vacay_entries (plan_id, user_id, date, note) VALUES (?, ?, ?, ?)').run(planId, user.id, date, note);
+    }
+    const vacayEntriesBefore = testDb.prepare(
+      'SELECT * FROM vacay_entries WHERE plan_id = ? AND user_id = ? ORDER BY id',
+    ).all(planId, user.id);
+
+    updateTrip(trip.id, user.id, { start_date: '2025-06-03', end_date: '2025-06-07', date_shift_mode: 'shift_all' }, 'user');
+
+    // Trip-linked booking behavior remains intact.
+    const reservation = testDb.prepare('SELECT day_id, reservation_time FROM reservations WHERE id = ?').get(resId) as
+      { day_id: number; reservation_time: string };
+    expect(reservation.day_id).toBe(origDayId);
+    expect(reservation.reservation_time).toBe('2025-06-04T19:00:00');
+
+    // Vacay entries carry no source_trip_id and must not follow the trip window.
+    const vacayEntriesAfter = testDb.prepare(
+      'SELECT * FROM vacay_entries WHERE plan_id = ? AND user_id = ? ORDER BY id',
+    ).all(planId, user.id);
+    expect(vacayEntriesAfter).toEqual(vacayEntriesBefore);
+  });
+
   it('TRIP-SVC-037: a dated hotel reservation without a linked accommodation is re-anchored like other bookings', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { start_date: '2025-06-01', end_date: '2025-06-05' });

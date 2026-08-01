@@ -11,7 +11,6 @@ import { listBudgetItems, removeUserFromBudgetItems } from './budgetService';
 import { listItems as listPackingItems } from './packingService';
 import { listReservations, loadEndpointsByTrip, resyncReservationDays } from './reservationService';
 import { listNotes as listCollabNotes } from './collabService';
-import { shiftOwnerEntriesForTripWindow } from './vacayService';
 import { resolveTimeZone } from './timezoneService';
 
 export const MS_PER_DAY = 86400000;
@@ -257,9 +256,6 @@ export function updateTrip(tripId: string | number, userId: number, data: Update
       currency=?, is_archived=?, cover_image=?, reminder_days=?, updated_at=CURRENT_TIMESTAMP
     WHERE id=?
   `).run(newTitle, newDesc, newStart || null, newEnd || null, newCurrency, newArchived, newCover, newReminder, tripId);
-
-  if (trip.start_date && trip.end_date && newStart && newStart !== trip.start_date)
-    shiftOwnerEntriesForTripWindow(trip.user_id, trip.start_date, trip.end_date, newStart);
 
   const dayCount = data.day_count ? Math.min(Math.max(Number(data.day_count) || 7, 1), MAX_TRIP_DAYS) : undefined;
   if (newStart !== trip.start_date || newEnd !== trip.end_date || dayCount) {
