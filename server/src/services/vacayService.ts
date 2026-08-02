@@ -814,34 +814,92 @@ export function cancelInvite(actorUserId: number, targetUserId: number): VacayIn
 // Plan dissolution
 // ---------------------------------------------------------------------------
 
-export function dissolvePlan(userId: number, socketId: string | undefined): void {
-  const plan = getActivePlan(userId);
-  const isOwnerFlag = plan.owner_id === userId;
+function returnUserDataToOwnPlan(
+  userId: number,
+  sharedPlanId: number,
+  companyHolidays: { date: string; note: string }[],
+): void {
+  const ownPlan = getOwnPlan(userId);
+  if (ownPlan.id === sharedPlanId) return;
 
-  const allUserIds = getPlanUsers(plan.id).map(u => u.id);
-  const companyHolidays = db.prepare('SELECT date, note FROM vacay_company_holidays WHERE plan_id = ?').all(plan.id) as { date: string; note: string }[];
-
-  if (isOwnerFlag) {
-    const members = db.prepare("SELECT user_id FROM vacay_plan_members WHERE plan_id = ? AND status = 'accepted'").all(plan.id) as { user_id: number }[];
-    for (const m of members) {
-      const memberPlan = getOwnPlan(m.user_id);
-      db.prepare('UPDATE vacay_entries SET plan_id = ? WHERE plan_id = ? AND user_id = ?').run(memberPlan.id, plan.id, m.user_id);
-      for (const ch of companyHolidays) {
-        db.prepare('INSERT OR IGNORE INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)').run(memberPlan.id, ch.date, ch.note);
-      }
-    }
-    db.prepare('DELETE FROM vacay_plan_members WHERE plan_id = ?').run(plan.id);
-  } else {
-    const ownPlan = getOwnPlan(userId);
-    db.prepare('UPDATE vacay_entries SET plan_id = ? WHERE plan_id = ? AND user_id = ?').run(ownPlan.id, plan.id, userId);
-    for (const ch of companyHolidays) {
-      db.prepare('INSERT OR IGNORE INTO vacay_company_holidays (plan_id, date, note) VALUES (?, ?, ?)').run(ownPlan.id, ch.date, ch.note);
-    }
-    db.prepare("DELETE FROM vacay_plan_members WHERE plan_id = ? AND user_id = ?").run(plan.id, userId);
+  db.prepare(
+    'UPDATE vacay_entries SET plan_id = ? WHERE plan_id = ? AND user_id = ?',
+  ).run(ownPlan.id, sharedPlanId, userId);
+  for (const holiday of companyHolidays) {
+    db.prepare(`
+      INSERT OR IGNORE INTO vacay_company_holidays (plan_id, date, note)
+      VALUES (?, ?, ?)
+    `).run(ownPlan.id, holiday.date, holiday.note);
   }
 
+  const userYears = db.prepare(`
+    SELECT year, vacation_days, carried_over
+    FROM vacay_user_years
+    WHERE user_id = ? AND plan_id = ?
+  `).all(userId, sharedPlanId) as Pick<
+    VacayUserYear,
+    'year' | 'vacation_days' | 'carried_over'
+  >[];
+  for (const userYear of userYears) {
+    db.prepare(`
+      INSERT OR IGNORE INTO vacay_years (plan_id, year)
+      VALUES (?, ?)
+    `).run(ownPlan.id, userYear.year);
+    db.prepare(`
+      INSERT INTO vacay_user_years
+        (user_id, plan_id, year, vacation_days, carried_over)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, plan_id, year)
+      DO UPDATE SET
+        vacation_days = excluded.vacation_days,
+        carried_over = excluded.carried_over
+    `).run(
+      userId,
+      ownPlan.id,
+      userYear.year,
+      userYear.vacation_days,
+      userYear.carried_over,
+    );
+  }
+  db.prepare(`
+    DELETE FROM vacay_user_years
+    WHERE user_id = ? AND plan_id = ?
+  `).run(userId, sharedPlanId);
+}
+
+export function dissolvePlan(userId: number, socketId: string | undefined): void {
+  const allUserIds = db.transaction(() => {
+    const plan = getActivePlan(userId);
+    const isOwnerFlag = plan.owner_id === userId;
+    const planUserIds = getPlanUsers(plan.id).map(user => user.id);
+    const companyHolidays = db.prepare(`
+      SELECT date, note
+      FROM vacay_company_holidays
+      WHERE plan_id = ?
+    `).all(plan.id) as { date: string; note: string }[];
+
+    if (isOwnerFlag) {
+      const members = db.prepare(`
+        SELECT user_id
+        FROM vacay_plan_members
+        WHERE plan_id = ? AND status = 'accepted'
+      `).all(plan.id) as { user_id: number }[];
+      for (const member of members) {
+        returnUserDataToOwnPlan(member.user_id, plan.id, companyHolidays);
+      }
+      db.prepare('DELETE FROM vacay_plan_members WHERE plan_id = ?').run(plan.id);
+    } else {
+      returnUserDataToOwnPlan(userId, plan.id, companyHolidays);
+      db.prepare(`
+        DELETE FROM vacay_plan_members
+        WHERE plan_id = ? AND user_id = ?
+      `).run(plan.id, userId);
+    }
+
+    return planUserIds;
+  }).immediate();
+
   try {
-    const { broadcastToUser } = require('../websocket');
     allUserIds.filter(id => id !== userId).forEach(id => broadcastToUser(id, { type: 'vacay:dissolved' }));
   } catch { /* */ }
 }

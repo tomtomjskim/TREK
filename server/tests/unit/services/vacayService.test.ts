@@ -1604,9 +1604,9 @@ describe('acceptInvite', () => {
     });
   });
 
-  it('VACAY-SVC-039j: rejoining resets stale shared values for destination-only years', () => {
+  it('VACAY-SVC-039j: dissolution preserves fused values for destination-only years before rejoining', () => {
     const { plan: ownerPlan } = setupUserWithPlan();
-    const { user: invitee } = setupUserWithPlan();
+    const { user: invitee, plan: inviteePlan } = setupUserWithPlan();
     const destinationOnlyYear = new Date().getFullYear() + 1;
     addYear(ownerPlan.id, destinationOnlyYear, undefined);
     insertMember(ownerPlan.id, invitee.id, 'pending');
@@ -1618,6 +1618,21 @@ describe('acceptInvite', () => {
     `).run(invitee.id, ownerPlan.id, destinationOnlyYear);
 
     dissolvePlan(invitee.id, undefined);
+    expect(listYears(inviteePlan.id)).toContain(destinationOnlyYear);
+    expect(testDb.prepare(`
+      SELECT vacation_days, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(invitee.id, inviteePlan.id, destinationOnlyYear)).toEqual({
+      vacation_days: 25,
+      carried_over: 2,
+    });
+    expect(testDb.prepare(`
+      SELECT id
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(invitee.id, ownerPlan.id, destinationOnlyYear)).toBeUndefined();
+
     insertMember(ownerPlan.id, invitee.id, 'pending');
 
     expect(acceptInvite(invitee.id, ownerPlan.id, undefined).error).toBeUndefined();
@@ -1626,8 +1641,8 @@ describe('acceptInvite', () => {
       FROM vacay_user_years
       WHERE user_id = ? AND plan_id = ? AND year = ?
     `).get(invitee.id, ownerPlan.id, destinationOnlyYear)).toEqual({
-      vacation_days: 30,
-      carried_over: 0,
+      vacation_days: 25,
+      carried_over: 2,
     });
   });
 
@@ -1898,6 +1913,143 @@ describe('cancelInvite', () => {
       WHERE plan_id = ? AND user_id = ?
     `).get(ownerPlan.id, target.id)).toEqual({ status: 'pending' });
     expect(broadcastToUserMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('dissolvePlan', () => {
+  it('VACAY-SVC-041d: owner dissolution returns each member data without cross-user leakage', () => {
+    const { user: owner, plan: ownerPlan } = setupUserWithPlan();
+    const { user: firstMember, plan: firstPlan } = setupUserWithPlan();
+    const { user: secondMember, plan: secondPlan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+
+    insertMember(ownerPlan.id, firstMember.id, 'accepted');
+    insertMember(ownerPlan.id, secondMember.id, 'accepted');
+    testDb.prepare(`
+      UPDATE vacay_user_years
+      SET vacation_days = 31, carried_over = 5
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).run(owner.id, ownerPlan.id, year);
+    testDb.prepare(`
+      INSERT INTO vacay_user_years
+        (user_id, plan_id, year, vacation_days, carried_over)
+      VALUES (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)
+    `).run(
+      firstMember.id, ownerPlan.id, year, 21, 3,
+      secondMember.id, ownerPlan.id, year, 17, 4,
+    );
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, ?), (?, ?, ?, ?)
+    `).run(
+      ownerPlan.id, firstMember.id, `${year}-06-02`, 'first member',
+      ownerPlan.id, secondMember.id, `${year}-06-03`, 'second member',
+    );
+    broadcastToUserMock.mockClear();
+
+    dissolvePlan(owner.id, undefined);
+
+    expect(testDb.prepare(`
+      SELECT vacation_days, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(firstMember.id, firstPlan.id, year)).toEqual({
+      vacation_days: 21,
+      carried_over: 3,
+    });
+    expect(testDb.prepare(`
+      SELECT vacation_days, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(secondMember.id, secondPlan.id, year)).toEqual({
+      vacation_days: 17,
+      carried_over: 4,
+    });
+    expect(testDb.prepare(`
+      SELECT vacation_days, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(owner.id, ownerPlan.id, year)).toEqual({
+      vacation_days: 31,
+      carried_over: 5,
+    });
+    expect(testDb.prepare(`
+      SELECT user_id
+      FROM vacay_user_years
+      WHERE plan_id = ? AND user_id IN (?, ?)
+      ORDER BY user_id
+    `).all(ownerPlan.id, firstMember.id, secondMember.id)).toEqual([]);
+    expect(testDb.prepare(`
+      SELECT user_id, plan_id, note
+      FROM vacay_entries
+      WHERE user_id IN (?, ?)
+      ORDER BY user_id
+    `).all(firstMember.id, secondMember.id)).toEqual([
+      { user_id: firstMember.id, plan_id: firstPlan.id, note: 'first member' },
+      { user_id: secondMember.id, plan_id: secondPlan.id, note: 'second member' },
+    ]);
+    expect(testDb.prepare(`
+      SELECT user_id FROM vacay_plan_members WHERE plan_id = ?
+    `).all(ownerPlan.id)).toEqual([]);
+    expect(broadcastToUserMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('VACAY-SVC-041e: a user-year migration failure rolls the entire dissolution back', () => {
+    const { plan: ownerPlan } = setupUserWithPlan();
+    const { user: member, plan: memberPlan } = setupUserWithPlan();
+    const year = new Date().getFullYear();
+    const date = `${year}-08-04`;
+
+    insertMember(ownerPlan.id, member.id, 'accepted');
+    testDb.prepare(`
+      INSERT INTO vacay_user_years
+        (user_id, plan_id, year, vacation_days, carried_over)
+      VALUES (?, ?, ?, 24, 2)
+    `).run(member.id, ownerPlan.id, year);
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, 'must roll back')
+    `).run(ownerPlan.id, member.id, date);
+    const snapshot = () => ({
+      memberships: snapshotMemberships(),
+      entries: testDb.prepare(`
+        SELECT plan_id, user_id, date, note
+        FROM vacay_entries
+        WHERE user_id = ?
+        ORDER BY plan_id, date
+      `).all(member.id),
+      years: testDb.prepare(`
+        SELECT plan_id, year
+        FROM vacay_years
+        WHERE plan_id IN (?, ?)
+        ORDER BY plan_id, year
+      `).all(ownerPlan.id, memberPlan.id),
+      userYears: testDb.prepare(`
+        SELECT user_id, plan_id, year, vacation_days, carried_over
+        FROM vacay_user_years
+        WHERE user_id = ?
+        ORDER BY plan_id, year
+      `).all(member.id),
+    });
+    const before = snapshot();
+    testDb.exec(`
+      CREATE TRIGGER fail_vacay_dissolve_user_year_update
+      BEFORE UPDATE OF vacation_days, carried_over ON vacay_user_years
+      WHEN NEW.user_id = ${member.id} AND NEW.plan_id = ${memberPlan.id}
+      BEGIN
+        SELECT RAISE(ABORT, 'forced dissolve user-year failure');
+      END;
+    `);
+    broadcastToUserMock.mockClear();
+
+    try {
+      expect(() => dissolvePlan(member.id, undefined))
+        .toThrow('forced dissolve user-year failure');
+      expect(snapshot()).toEqual(before);
+      expect(broadcastToUserMock).not.toHaveBeenCalled();
+    } finally {
+      testDb.exec('DROP TRIGGER IF EXISTS fail_vacay_dissolve_user_year_update');
+    }
   });
 });
 

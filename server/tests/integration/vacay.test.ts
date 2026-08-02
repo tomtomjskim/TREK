@@ -471,14 +471,63 @@ describe('Vacay holidays', () => {
 });
 
 describe('Vacay dissolve plan', () => {
-  it('VACAY-020 — POST /api/addons/vacay/dissolve removes user from plan', async () => {
-    const { user } = createUser(testDb);
-    await request(app).get('/api/addons/vacay/plan').set('Cookie', authCookie(user.id));
+  it('VACAY-020 — POST /api/addons/vacay/dissolve restores the member latest fused balance', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const year = new Date().getFullYear() + 1;
+    const date = `${year}-04-03`;
+    await request(app).get('/api/addons/vacay/plan').set('Cookie', authCookie(owner.id));
+    await request(app).get('/api/addons/vacay/plan').set('Cookie', authCookie(member.id));
+    const ownerPlan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?')
+      .get(owner.id) as { id: number };
+    const memberPlan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?')
+      .get(member.id) as { id: number };
+    testDb.prepare('INSERT INTO vacay_years (plan_id, year) VALUES (?, ?)')
+      .run(ownerPlan.id, year);
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'accepted')
+    `).run(ownerPlan.id, member.id);
+    testDb.prepare(`
+      INSERT INTO vacay_user_years
+        (user_id, plan_id, year, vacation_days, carried_over)
+      VALUES (?, ?, ?, 23, 2)
+    `).run(member.id, ownerPlan.id, year);
+    testDb.prepare(`
+      INSERT INTO vacay_entries (plan_id, user_id, date, note)
+      VALUES (?, ?, ?, 'integration preservation')
+    `).run(ownerPlan.id, member.id, date);
 
     const res = await request(app)
       .post('/api/addons/vacay/dissolve')
-      .set('Cookie', authCookie(user.id));
+      .set('Cookie', authCookie(member.id));
+
     expect(res.status).toBe(200);
+    expect(res.body).toEqual({ success: true });
+    expect(testDb.prepare(`
+      SELECT vacation_days, carried_over
+      FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(member.id, memberPlan.id, year)).toEqual({
+      vacation_days: 23,
+      carried_over: 2,
+    });
+    expect(testDb.prepare(`
+      SELECT id FROM vacay_years WHERE plan_id = ? AND year = ?
+    `).get(memberPlan.id, year)).toBeDefined();
+    expect(testDb.prepare(`
+      SELECT id FROM vacay_user_years
+      WHERE user_id = ? AND plan_id = ? AND year = ?
+    `).get(member.id, ownerPlan.id, year)).toBeUndefined();
+    expect(testDb.prepare(`
+      SELECT plan_id, note FROM vacay_entries WHERE user_id = ? AND date = ?
+    `).get(member.id, date)).toEqual({
+      plan_id: memberPlan.id,
+      note: 'integration preservation',
+    });
+    expect(testDb.prepare(`
+      SELECT id FROM vacay_plan_members WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlan.id, member.id)).toBeUndefined();
   });
 });
 
