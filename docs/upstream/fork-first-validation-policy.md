@@ -2,7 +2,7 @@
 
 > 시행일: 2026-07-28
 > 현재 상태: 로컬·개인 포크 검증 활성, 공식 upstream 기여 보류
-> 확인 기준: fork `main` `c5ff1d27`, upstream `dev` `292f1b18`
+> 확인 기준: fork `main` `68e6b7df`, upstream `dev` `c42aea41`
 
 ## 결정
 
@@ -81,7 +81,7 @@ URL 확인은 역할 검증일 뿐 push 승인이 아니다.
 
 ## 코드 컨벤션의 source of truth
 
-2026-07-28 최신 `upstream/dev`를 다시 확인한 결과 공식 기여 규칙은 유지되고
+2026-08-03 최신 `upstream/dev`를 다시 확인한 결과 공식 기여 규칙은 유지되고
 있지만, 공식 Wiki의 일부 기술 스택·스크립트 설명은 현재 코드보다 오래됐다.
 기여·게시 규칙은 최신 공식 `CONTRIBUTING.md`, PR template와 target-branch
 workflow를 우선한다. 기술 스택·명령·style은 현재 대상 branch의 source,
@@ -144,10 +144,11 @@ git diff --check origin/main...HEAD
 기록한다.
 
 현재 포크 `main`의 root workspace에는 `nest-mcp`가 없지만 최신
-`upstream/dev`에는 포함되어 있다. 따라서 향후 공식 기여 후보를 추출할 때는
-최신 branch의 root scripts와 CI를 다시 읽고 `nest-mcp` build, typecheck, lint,
-test와 production require smoke까지 추가한다. 포크 gate 통과를 최신 upstream
-gate 통과로 표현하지 않는다.
+`upstream/dev`에는 포함되어 있고 Trips/Vacay owning service도 Nest DI 경로로
+이동했다. 따라서 향후 공식 기여 후보를 추출할 때는 포크의 legacy service patch를
+cherry-pick하지 않는다. 최신 branch의 owning source, root scripts와 CI를 다시 읽고
+`nest-mcp` build, typecheck, lint, test와 production require smoke까지 추가한다.
+포크 gate 통과를 최신 upstream gate 통과로 표현하지 않는다.
 
 ### 3. Evidence record
 
@@ -192,8 +193,13 @@ Vacay employment/period/balance 설계는 현재 포크 우선 검증 대상으�
 generic core는 장기적으로 `upstream-contrib` 후보라는 분류를 유지하되,
 Discord·공식 PR 없이 로컬·개인 포크에서 작은 slice로 구현·검증할 수 있다.
 
-- correctness 네 항목은 향후 분리 기여가 가능하도록 각각 독립 test·commit으로
-  유지한다.
+- stats read purity, holiday entry 보존과 fusion 해산 user-year 보존은 향후 분리
+  기여가 가능하도록 각각 독립 test·commit으로 유지한다.
+- 출처 없는 trip/Vacay 자동 이동 중단은 공식 issue #983의 의도된 동작과 충돌하므로
+  correctness PR로 분류하지 않는다. `fork-core` 정책 차이로 유지하고 provenance 또는
+  사용자 확인 contract를 maintainer와 합의한 뒤에만 별도 제안한다.
+- 제출별 증거와 최신 upstream 추출 위치는
+  [`vacay-correctness-extraction.md`](vacay-correctness-extraction.md)에 유지한다.
 - employment/period/journal schema pilot은 포크 migration namespace를 사용한다.
 - self-only 권한, opening cutoff, revision/idempotency, legacy activation과
   rollback의 `full_gate_required` 수준은 낮추지 않는다.

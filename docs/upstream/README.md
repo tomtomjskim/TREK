@@ -39,8 +39,8 @@ rebase하지 않는다.
 
 ## Official contribution gate
 
-공식 `CONTRIBUTING.md`, PR template, target-branch workflow를 2026-07-28
-`upstream/dev` `292f1b18`에서 다시 확인했다. 현재 계약은 다음과 같다.
+공식 `CONTRIBUTING.md`, PR template, target-branch workflow를 2026-08-03
+`upstream/dev` `c42aea41`에서 다시 확인했다. 현재 계약은 다음과 같다.
 
 1. 구현 전에 Discord `#github-pr`에서 아이디어와 범위를 승인받는다.
 2. PR 하나에는 관련된 변경 한 가지만 포함한다.
@@ -159,6 +159,7 @@ v3.4 통합부터 다음 계약을 사용한다.
 | --- | --- | --- | --- |
 | 지도 label locale 선택 | upstream contribution 후보 | 높음 | 기본값·fallback을 일반화하고 `upstream/dev` 승인 후 단독 PR |
 | Fold/태블릿 adaptive map controls | upstream contribution 후보 | 높음 | JSNetworkCorp 표현 없이 responsive regression만 단독 PR |
+| 전역 calendar week-start 선택 | upstream contribution 후보 | 중간, 제품 방향 승인 필요 | [scope diagnostic](../plans/2026-08-03-calendar-week-start-scope-diagnostic.md)의 사용자 설정·공용 picker·Journey·Vacay fallback만 단독 PR; 공식 #1078의 Monday-first 결정과 구분 |
 | PlaceInspector nullable selection Hook 순서 | fork core | 높음 | 공식 release가 같은 mount의 null↔place 회귀를 통과하고 Hook 규칙 위반을 제거하면 구현 방식과 무관하게 local patch 제거 |
 | Bulk place delete nullable assignment guard | fork core | 높음 | 공식 release가 선택된 assignment만 제거하고 unrelated/orphan assignment를 보존하며 unsafe optional-chain lint 위반을 없애면 local patch 제거 |
 | Client zero-debt correctness lint guardrails | fork core maintenance | 높음 | 공식 release가 Admin scope·day expansion·mobile route-distance 왕복 동작을 보존하고 `no-unused-expressions` 위반을 없애면 local syntax patch 제거 |
@@ -166,7 +167,10 @@ v3.4 통합부터 다음 계약을 사용한다.
 | Client observer test-mock alias lint guardrail | fork core maintenance | 높음 | 공식 release가 PlaceAvatar intersection callback의 photo fetch·disconnect 계약을 보존하고 `no-this-alias` 위반을 없애면 local test patch 제거 |
 | Custom `APP_VERSION` SemVer comparison | fork core | 높음 | 공식 release가 build metadata를 update precedence에서 제외하고 same-release API·notification 회귀를 통과하면 local patch 제거 |
 | Packing template admin submission/race guard | fork core | 높음 | 공식 release가 create exact-request-count, IME/repeat, Enter+blur rename, 역순 상세 응답, CRUD count와 390px nested editor 회귀를 통과하면 local patch 제거 |
-| Vacay stats read purity·holiday entry 보존·fusion user-year 보존·unlinked trip shift 제거 | upstream contribution 후보 | 높음, correctness/data safety | Discord에서 각 범위를 별도 승인받고 한 수정당 한 PR; 수용 release 통합 뒤 동등성 검증 |
+| Vacay stats read purity | upstream contribution 후보 | 높음, read correctness | fresh carry projection의 무상태 read contract만 최신 Nest 경로에 단독 추출 |
+| Vacay holiday entry 보존 | upstream contribution 후보 | 높음, data safety | 회사/public holiday overlay와 개인 entry 보존만 단독 추출 |
+| Vacay fusion 해산 user-year 보존 | upstream contribution 후보 | 높음, data safety | [extraction dossier](vacay-correctness-extraction.md)의 dissolution 항목만 최신 Nest 경로에 재구성하고 수용 release의 동등성 회귀 뒤 제거 |
+| 출처 없는 trip/Vacay 자동 이동 중단 | fork core / upstream product discussion | 낮음, 공식 contract 충돌 | 공식 #983이 반대 동작을 의도적으로 도입했으므로 직접 PR 금지; provenance 또는 확인 UX에 maintainer 합의 후 별도 설계 |
 | Vacay fused company-holiday mutation guard | fork core pilot / upstream contribution 후보 | 높음, legacy ownership safety | 공식 구현이 fused 수동 회사 휴일 write를 모든 surface에서 거부하고 solo 동작·기존 row를 보존하면 local guard 제거; employment v2 활성화 시 guard를 self-owned 권한으로 대체 |
 | Vacay actor-aware whole-year deletion guard | fork core pilot / upstream contribution 후보 | 높음, destructive data safety | 공식 구현이 fused/pending·ambiguous membership을 fail-closed하고 solo 삭제·연쇄 carry를 한 transaction으로 처리하며 REST/MCP/UI negative contract를 통과하면 local guard 제거; invite-accept year union은 별도 추출 |
 | Vacay invite migration year reconciliation | fork core pilot / upstream contribution 후보 | 높음, historical data safety | 공식 구현이 entry·user-year의 연도 합집합을 대상 plan과 원자적으로 대조하고 누락 시 pending/data를 보존하며 owner 보완 후 재시도를 허용하면 local guard 제거 |

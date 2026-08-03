@@ -5,21 +5,21 @@
 
 ## Current baseline
 
-| 기준                    | 현재 값                                                              |
-| ----------------------- | -------------------------------------------------------------------- |
-| 애플리케이션 버전       | `3.4.1`                                                              |
-| v3.4.x 통합 기준 commit | `86d3e9a01c73f0de1aeaa73031353a2ddb3373cd`                           |
-| Vacay main 통합점       | `44383efae4711902359fa0e389079027f4afc989`                           |
-| 운영 runtime source     | `37a0784c33f01ab52fd2c84710e3c11f684e0f09`                           |
-| 운영 image              | `trek:3.4.1-jsnetworkcorp-37a0784c`                                  |
-| 공식 release 기준       | exact `v3.4.1` tag target `a0994658890eae96624fb9cbe7f55867f047fea2` |
+| 기준                     | 현재 값                                                              |
+| ------------------------ | -------------------------------------------------------------------- |
+| 애플리케이션 버전        | `3.4.1`                                                              |
+| v3.4.x 통합 기준 commit  | `86d3e9a01c73f0de1aeaa73031353a2ddb3373cd`                           |
+| Vacay hardening 기준     | `37a0784c33f01ab52fd2c84710e3c11f684e0f09`                           |
+| 포크 main/runtime source | `68e6b7df255751ed75020c825c2f034345209ce4`                           |
+| 운영 image               | `trek:3.4.1-jsnetworkcorp-68e6b7df`                                  |
+| 공식 release 기준        | exact `v3.4.1` tag target `a0994658890eae96624fb9cbe7f55867f047fea2` |
 
 현재 runtime은 공식 v3.4.1 통합과 custom version SemVer correctness,
 packing-template 관리자 exact-once/race guard 위에 Vacay 입력 보존·융합
-실패-폐쇄·초대/연도 무결성 hardening을 적용한 포크 commit `37a0784c` 기준이다.
-이 runtime source와 배포 기록 commit `44383efa`는 TOM 승인 뒤 개인 포크 `main`에
-fast-forward 통합했다. 공식 upstream PR은 수행하지 않았으며 이후의 문서 commit은
-runtime contract를 바꾸지 않는다.
+실패-폐쇄·초대/연도 무결성 hardening, 출처 없는 trip/Vacay 자동 이동 중단과 fusion
+해산 balance 보존을 적용한 포크 commit `68e6b7df` 기준이다. 같은 commit이 개인 포크
+`main`과 운영 image에 사용된다. 공식 upstream PR은 수행하지 않았으며 이후의 문서
+commit은 runtime contract를 바꾸지 않는다.
 현재 운영·롤백 상태는 별도 운영 위키가, 코드와 Git 이력은 이 저장소가 source of
 truth다.
 
@@ -31,6 +31,9 @@ truth다.
   migration namespace와 release 통합 절차
 - [Fork-first validation policy](upstream/fork-first-validation-policy.md):
   로컬·개인 포크 검증 범위, 원격 작업 경계, 코드 컨벤션과 향후 공식 기여 재개 조건
+- [Vacay correctness extraction dossiers](upstream/vacay-correctness-extraction.md):
+  최신 공식 Nest 경로에 다시 구현할 데이터 보존 후보와 공식 contract와 충돌하는
+  포크 정책 변경을 제출 단위별로 분리한 자료
 - [v3.4.x integration evidence](plans/2026-07-19-upstream-v3.4-integration-evidence.md):
   통합·테스트·이미지·배포·PR closeout 증거
 - [Client test warning cleanup](plans/2026-07-20-client-test-warning-cleanup.md):
@@ -79,6 +82,9 @@ truth다.
 - [Vacay pre-deployment hardening](plans/2026-07-31-vacay-predeploy-hardening.md):
   carry 연속성·달력 검증·초대 이관/취소 권한·transaction 후 알림을 통합 검증하고
   전체 테스트와 반응형 브라우저 게이트를 고정한 운영 후보 계약
+- [Calendar week-start scope diagnostic](plans/2026-08-03-calendar-week-start-scope-diagnostic.md):
+  Vacay plan 전용 주 시작과 공용·Journey picker의 월요일 고정을 추적하고 전역
+  사용자 설정으로 확장할 최소 contract와 공식 기여 조건을 정리한 진단
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계
