@@ -498,4 +498,19 @@ describe('VacaySettings', () => {
     await user.click(carryOverToggle)
     expect(updatePlan).toHaveBeenCalledWith({ carry_over_enabled: true })
   })
+
+  it('FE-COMP-VACAYSETTINGS-022: week start is managed in personal display settings instead of the plan', () => {
+    const updatePlan = vi.fn().mockResolvedValue(undefined)
+    seedStore(useVacayStore, {
+      plan: { ...basePlan, week_start: 0 },
+      isFused: false,
+      users: [],
+      updatePlan,
+    })
+
+    render(<VacaySettings onClose={vi.fn()} />)
+
+    expect(screen.queryByText('Week starts on')).not.toBeInTheDocument()
+    expect(updatePlan).not.toHaveBeenCalledWith(expect.objectContaining({ week_start: expect.anything() }))
+  })
 })

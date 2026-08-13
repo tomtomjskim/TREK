@@ -4,11 +4,12 @@ import userEvent from '@testing-library/user-event'
 import { render } from '../../../tests/helpers/render'
 import { resetAllStores, seedStore } from '../../../tests/helpers/store'
 import { useVacayStore } from '../../store/vacayStore'
+import { useSettingsStore } from '../../store/settingsStore'
 import VacayCalendar from './VacayCalendar'
 
 vi.mock('./VacayMonthCard', () => ({
-  default: ({ month, onCellClick }: any) => (
-    <div data-testid={`month-card-${month}`}>
+  default: ({ month, onCellClick, weekStart }: any) => (
+    <div data-testid={`month-card-${month}`} data-week-start={weekStart}>
       <button onClick={() => onCellClick(`2025-01-${String(month + 1).padStart(2, '0')}`)}>
         click-{month}
       </button>
@@ -330,5 +331,62 @@ describe('VacayCalendar', () => {
       .filter(button => !button.textContent?.startsWith('click-'))[1]).toBeDisabled()
     expect(toggleCompanyHoliday).not.toHaveBeenCalled()
     expect(toggleEntry).toHaveBeenCalledWith('2025-01-01', undefined)
+  })
+
+  it('FE-COMP-VACAYCALENDAR-013: a personal Sunday-first preference overrides the legacy plan value', () => {
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, calendar_week_start: 0 },
+    })
+    seedStore(useVacayStore, {
+      selectedYear: 2025,
+      entries: [],
+      companyHolidays: [],
+      holidays: {},
+      plan: { ...basePlan, week_start: 1 },
+      users: [],
+      selectedUserId: null,
+    })
+
+    render(<VacayCalendar />)
+
+    expect(screen.getByTestId('month-card-0')).toHaveAttribute('data-week-start', '0')
+  })
+
+  it('FE-COMP-VACAYCALENDAR-014: a personal Monday-first preference overrides the legacy plan value', () => {
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, calendar_week_start: 1 },
+    })
+    seedStore(useVacayStore, {
+      selectedYear: 2025,
+      entries: [],
+      companyHolidays: [],
+      holidays: {},
+      plan: { ...basePlan, week_start: 0 },
+      users: [],
+      selectedUserId: null,
+    })
+
+    render(<VacayCalendar />)
+
+    expect(screen.getByTestId('month-card-0')).toHaveAttribute('data-week-start', '1')
+  })
+
+  it('FE-COMP-VACAYCALENDAR-015: an unset personal preference preserves the legacy plan value', () => {
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, calendar_week_start: undefined },
+    })
+    seedStore(useVacayStore, {
+      selectedYear: 2025,
+      entries: [],
+      companyHolidays: [],
+      holidays: {},
+      plan: { ...basePlan, week_start: 0 },
+      users: [],
+      selectedUserId: null,
+    })
+
+    render(<VacayCalendar />)
+
+    expect(screen.getByTestId('month-card-0')).toHaveAttribute('data-week-start', '0')
   })
 })

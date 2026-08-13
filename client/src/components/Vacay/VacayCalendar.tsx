@@ -1,6 +1,8 @@
 import { useMemo, useState, useCallback, useEffect } from 'react'
 import { useVacayStore } from '../../store/vacayStore'
+import { useSettingsStore } from '../../store/settingsStore'
 import { useTranslation } from '../../i18n'
+import { normalizeCalendarWeekStart } from '../../utils/calendarWeek'
 import { isWeekend } from './holidays'
 import { tripsApi } from '../../api/client'
 import VacayMonthCard from './VacayMonthCard'
@@ -9,6 +11,7 @@ import { Building2, MousePointer2 } from 'lucide-react'
 export default function VacayCalendar() {
   const { t } = useTranslation()
   const { selectedYear, selectedUserId, entries, companyHolidays, toggleEntry, toggleCompanyHoliday, plan, users, holidays, isFused } = useVacayStore()
+  const personalWeekStart = useSettingsStore(state => state.settings.calendar_week_start)
   const [companyMode, setCompanyMode] = useState(false)
   const [tripDates, setTripDates] = useState<Set<string>>(new Set())
 
@@ -57,6 +60,7 @@ export default function VacayCalendar() {
   const blockWeekends = plan?.block_weekends !== false
   const weekendDays: number[] = plan?.weekend_days ? String(plan.weekend_days).split(',').map(Number) : [0, 6]
   const companyHolidaysEnabled = plan?.company_holidays_enabled !== false
+  const calendarWeekStart = normalizeCalendarWeekStart(personalWeekStart ?? plan?.week_start)
 
   const handleCellClick = useCallback(async (dateStr) => {
     if (companyMode) {
@@ -88,7 +92,7 @@ export default function VacayCalendar() {
             blockWeekends={blockWeekends}
             weekendDays={weekendDays}
             tripDates={tripDates}
-            weekStart={plan?.week_start ?? 1}
+            weekStart={calendarWeekStart}
           />
         ))}
       </div>
