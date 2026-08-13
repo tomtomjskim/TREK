@@ -85,6 +85,10 @@ truth다.
 - [Calendar week-start scope diagnostic](plans/2026-08-03-calendar-week-start-scope-diagnostic.md):
   Vacay plan 전용 주 시작과 공용·Journey picker의 월요일 고정을 추적하고 전역
   사용자 설정으로 확장할 최소 contract와 공식 기여 조건을 정리한 진단
+- [Calendar week-start implementation](plans/2026-08-13-calendar-week-start-implementation.md) ·
+  [evidence](plans/2026-08-13-calendar-week-start-evidence.md): 사용자별 일요일/월요일
+  설정을 공용·Journey·Vacay 달력에 연결하고 legacy Vacay fallback과 fork-first
+  검증 경계를 고정한 로컬 구현
 - [NestJS module guide](../server/src/nest/README.md): unified Nest 서버 조립,
   domain module 패턴과 테스트 기준
 - [Client page pattern](../client/src/pages/PATTERN.md): page container와 data hook 경계

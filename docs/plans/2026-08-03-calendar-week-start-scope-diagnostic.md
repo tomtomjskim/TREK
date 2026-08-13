@@ -19,6 +19,18 @@ Vacay 설정에서 주 시작을 일요일로 바꿔도 여행 생성·수정과
 읽는 contract가 처음부터 없다. UI에서 설정의 적용 범위가 충분히 드러나지 않아
 전역 캘린더 설정처럼 보이는 scope/expectation mismatch다.
 
+## 구현 상태 (2026-08-13)
+
+진단에서 권고한 최소 contract를 로컬 `feat/calendar-week-start` 브랜치에 구현했다.
+사용자 설정 `calendar_week_start: 0 | 1`이 공용 picker, Journey와 Vacay를 구동하며,
+사용자가 아직 값을 저장하지 않은 경우에만 Vacay의 기존 `vacay_plans.week_start`를
+읽기 fallback으로 사용한다. Vacay의 중복 편집 control은 제거했지만 DB field와 API는
+호환성을 위해 유지했다.
+
+세부 변경·검증·롤백 경계는
+[`2026-08-13-calendar-week-start-evidence.md`](2026-08-13-calendar-week-start-evidence.md)에
+기록한다. 이 상태는 아직 `main`, 개인 원격, 운영 또는 공식 upstream에 반영되지 않았다.
+
 ## 확인된 데이터 흐름
 
 ```text

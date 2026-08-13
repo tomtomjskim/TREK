@@ -8,6 +8,8 @@
 
 **Tech Stack:** React 19, Zustand, TypeScript, Vitest/Testing Library, existing TREK i18n and settings API.
 
+**Status (2026-08-13):** Implemented and verified on local branch `feat/calendar-week-start` only. See [verification evidence](2026-08-13-calendar-week-start-evidence.md). It has not been merged, pushed, deployed, or submitted upstream.
+
 ---
 
 ## Readiness and scope
@@ -52,7 +54,7 @@ Expected: FAIL because the helper and setting type do not exist.
 
 - Export `CalendarWeekStart = 0 | 1` from `client/src/types.ts`.
 - Add optional `calendar_week_start?: CalendarWeekStart` to `Settings`.
-- Add Monday (`1`) to `DEFAULT_SETTINGS` and `buildSettings`.
+- Keep the runtime store value unset until the user chooses, so Vacay can distinguish a legacy plan fallback; test factories use Monday (`1`) and the pure helper normalizes unset/invalid values to Monday.
 - Implement pure helpers for normalizing the setting, ordering JS weekday indices, and computing a month-start offset.
 
 **Step 4: Verify GREEN**
@@ -79,9 +81,8 @@ Run only `DisplaySettingsTab.test.tsx`; expect missing control assertions to fai
 **Step 3: Implement minimally**
 
 Add the existing two-button option pattern after Time Format. Add parity-safe setting keys
-for label, hint, Monday and Sunday in all locale settings modules; English fallback text is
-acceptable for locales without a reviewed translation, while Korean and English receive
-native copy.
+for label and hint in all locale settings modules, reusing the already-reviewed Vacay copy.
+Render Monday and Sunday names through `Intl` for the active application locale.
 
 **Step 4: Verify GREEN**
 

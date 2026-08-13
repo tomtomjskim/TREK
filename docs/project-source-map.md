@@ -97,6 +97,7 @@ Host 전용 `docker-compose.override.yml`, credential, signing material과 운�
 | Fold/Tablet map controls     | `client/src/components/Map/AdaptiveMapControls.tsx`, `client/src/utils/mapViewport.ts`                                          | 양쪽 panel corridor, 44px target와 keyboard/focus contract               |
 | Google enrichment/cost guard | `server/src/services/placeEnrichment.ts`, `googleApiUsageService.ts`, maps/admin services, client admin/enrichment UI           | 외부 호출 전 usage reservation, admin-only visibility, instance hard cap |
 | Packing privacy/templates    | `server/src/services/packingService.ts`, Nest packing controller/service, shared packing schema, client packing UI              | Common/Personal/Shared viewer와 writer 권한, instance template scope     |
+| Calendar week start          | `client/src/utils/calendarWeek.ts`, `Settings/DisplaySettingsTab.tsx`, shared/Journey date pickers, `Vacay/VacayCalendar.tsx`    | 개인 setting 우선, legacy Vacay plan 읽기 fallback, 기본 Monday          |
 | Vacay destructive year/invite flow | `server/src/services/vacayService.ts`, Nest Vacay controller/service, MCP Vacay tools, `client/src/pages/VacayPage.tsx`와 `pages/vacay/useVacay.ts` | 연도 삭제·초대 수락·fusion 해산을 immediate transaction으로 처리; 누락된 이관 연도·user-year balance·다중 accepted·owner orphan·fused/pending/ambiguous ownership은 보존 또는 fail-closed하고 실제 상태 변경 뒤에만 best-effort 알림 |
 | Trip/Vacay shift boundary | `server/src/services/tripService.ts`, `server/src/services/vacayService.ts`, trip unit/MCP tests | provenance가 없는 Vacay entry를 날짜 겹침만으로 이동하지 않는 포크 정책; 공식 #983의 반대 contract와 분리 |
 | Migration collision bridge   | `server/src/db/migrationRunner.ts`, `forkMigrations.ts`                                                                         | official numeric migration과 fork string ID 분리                         |
@@ -105,14 +106,15 @@ Host 전용 `docker-compose.override.yml`, credential, signing material과 운�
 세부 lane, retirement 조건과 다음 upstream release 절차는
 [`docs/upstream/README.md`](upstream/README.md)를 따른다.
 
-## Known configuration boundary
+## Calendar week-start boundary
 
-Vacay의 `vacay_plans.week_start`는 `VacaySettings` → `VacayCalendar` →
-`VacayMonthCard`에만 적용되는 plan 값이다. 여행·일반 예약·Todo·Budget의 공용
-`CustomDatePicker`와 Journey 전용 picker는 현재 월요일 시작을 각각 고정하며 사용자
-`Settings`에 전역 week-start key가 없다. 이 범위를 바꾸기 전에는
-[`calendar week-start scope diagnostic`](plans/2026-08-03-calendar-week-start-scope-diagnostic.md)의
-ownership, compatibility fallback과 RED contract를 먼저 적용한다.
+사용자 `Settings.calendar_week_start` (`0` Sunday, `1` Monday)가 공용
+`CustomDatePicker`, Journey 전용 picker와 Vacay 달력의 단일 writable preference다.
+값이 없거나 잘못된 공용 picker는 Monday를 기본으로 사용한다. Vacay만 기존 사용자
+호환을 위해 전역 값이 없을 때 `vacay_plans.week_start`를 읽기 fallback으로 사용하며,
+plan 설정 화면에서는 더 이상 이 값을 편집하지 않는다. DB field를 삭제하거나 개인
+설정으로 자동 backfill하지 않는다. 구현과 검증 경계는
+[`calendar week-start evidence`](plans/2026-08-13-calendar-week-start-evidence.md)를 따른다.
 
 ## Verification map
 
