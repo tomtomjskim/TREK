@@ -265,6 +265,7 @@ export function buildSettings(overrides: Partial<Settings> = {}): Settings {
     language: 'en',
     temperature_unit: 'fahrenheit',
     time_format: '12h',
+    calendar_week_start: 1,
     show_place_description: false,
     blur_booking_codes: false,
     ...overrides,

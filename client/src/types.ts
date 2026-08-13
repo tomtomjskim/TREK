@@ -104,6 +104,7 @@ export interface TripFile {
 
 export type DistanceUnit = 'metric' | 'imperial'
 export type MapLabelLanguage = 'auto' | 'local' | 'ko' | 'en'
+export type CalendarWeekStart = 0 | 1
 
 export interface Settings {
   map_tile_url: string
@@ -114,6 +115,7 @@ export interface Settings {
   temperature_unit: string
   distance_unit?: DistanceUnit
   time_format: string
+  calendar_week_start?: CalendarWeekStart
   show_place_description: boolean
   blur_booking_codes?: boolean
   map_booking_labels?: boolean
