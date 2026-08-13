@@ -10,6 +10,9 @@ describe('CustomDatePicker', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, calendar_week_start: undefined },
+    });
   });
 
   it('FE-COMP-DATEPICKER-001: renders without crashing', () => {
@@ -326,5 +329,28 @@ describe('CustomDateTimePicker', () => {
 
     const yr2026 = screen.getByRole('button', { name: '2026' });
     expect(yr2026.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('FE-COMP-DATEPICKER-027: defaults to a Monday-first calendar when no preference is stored', async () => {
+    const user = userEvent.setup();
+    render(<CustomDatePicker value="2026-03-01" onChange={onChange} />);
+
+    await user.click(screen.getAllByRole('button')[0]);
+
+    expect(screen.getByTestId('custom-date-picker-weekdays').textContent).toBe('MTWTFSS');
+    expect(screen.getByTestId('custom-date-picker-days').children[6]?.textContent).toBe('1');
+  });
+
+  it('FE-COMP-DATEPICKER-028: applies a stored Sunday-first calendar preference', async () => {
+    const user = userEvent.setup();
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, calendar_week_start: 0 },
+    });
+    render(<CustomDatePicker value="2026-03-01" onChange={onChange} />);
+
+    await user.click(screen.getAllByRole('button')[0]);
+
+    expect(screen.getByTestId('custom-date-picker-weekdays').textContent).toBe('SMTWTFS');
+    expect(screen.getByTestId('custom-date-picker-days').firstElementChild?.textContent).toBe('1');
   });
 });

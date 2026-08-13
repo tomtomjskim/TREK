@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { ArrowLeft, ChevronRight, Calendar } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { useSettingsStore } from '../../store/settingsStore'
+import { getCalendarMonthStartOffset, getCalendarWeekdayIndices } from '../../utils/calendarWeek'
 
 export function DatePicker({ value, onChange, tripDates }: {
   value: string
@@ -8,6 +10,7 @@ export function DatePicker({ value, onChange, tripDates }: {
   tripDates?: Set<string>
 }) {
   const { t } = useTranslation()
+  const calendarWeekStart = useSettingsStore(state => state.settings.calendar_week_start)
   const [open, setOpen] = useState(false)
   const [viewMonth, setViewMonth] = useState(() => {
     const d = value ? new Date(value + 'T00:00:00') : new Date()
@@ -15,8 +18,8 @@ export function DatePicker({ value, onChange, tripDates }: {
   })
 
   const daysInMonth = new Date(viewMonth.year, viewMonth.month + 1, 0).getDate()
-  // Monday-first, matching CustomDateTimePicker / VacayCalendar (getDay() is Sunday=0).
-  const firstDow = (new Date(viewMonth.year, viewMonth.month, 1).getDay() + 6) % 7
+  const firstDow = getCalendarMonthStartOffset(viewMonth.year, viewMonth.month, calendarWeekStart)
+  const weekdayLabels = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']
   const monthName = new Date(viewMonth.year, viewMonth.month).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
 
   const prevMonth = () => {
@@ -68,14 +71,14 @@ export function DatePicker({ value, onChange, tripDates }: {
             </div>
 
             {/* Weekday headers */}
-            <div className="grid grid-cols-7 mb-1">
-              {['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'].map((d, i) => (
-                <div key={i} className="text-center text-[10px] font-medium text-zinc-400 py-1">{d}</div>
+            <div data-testid="journey-date-picker-weekdays" className="grid grid-cols-7 mb-1">
+              {getCalendarWeekdayIndices(calendarWeekStart).map((weekdayIndex, i) => (
+                <div key={i} className="text-center text-[10px] font-medium text-zinc-400 py-1">{weekdayLabels[weekdayIndex]}</div>
               ))}
             </div>
 
             {/* Day grid */}
-            <div className="grid grid-cols-7">
+            <div data-testid="journey-date-picker-days" className="grid grid-cols-7">
               {cells.map((day, i) => {
                 if (day === null) return <div key={`e${i}`} />
                 const dateStr = `${viewMonth.year}-${pad(viewMonth.month + 1)}-${pad(day)}`
