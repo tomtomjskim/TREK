@@ -68,6 +68,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Unidade de temperatura',
   'settings.distance': 'Unidade de distância',
   'settings.timeFormat': 'Formato de hora',
+  'settings.calendarWeekStart': 'Semana começa em',
+  'settings.calendarWeekStartHint': 'Escolha se a semana começa na segunda-feira ou no domingo',
   'settings.blurBookingCodes': 'Ocultar códigos de reserva',
   'settings.aiAlwaysRetry': 'Always retry booking imports with AI',
   'settings.aiAlwaysRetryHint': 'When a file cannot be read by the standard parser, automatically retry it with AI.',

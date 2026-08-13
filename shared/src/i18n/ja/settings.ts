@@ -65,6 +65,8 @@ const settings: TranslationStrings = {
   'settings.temperature': '温度単位',
   'settings.distance': '距離単位',
   'settings.timeFormat': '時刻形式',
+  'settings.calendarWeekStart': '週の開始',
+  'settings.calendarWeekStartHint': 'カレンダーの週を月曜始まりにするか日曜始まりにするかを選択します',
   'settings.bookingLabels': '予約ルートのラベル',
   'settings.bookingLabelsHint': '地図に駅・空港名を表示。オフ時はアイコンのみ。',
   'settings.blurBookingCodes': '予約コードをぼかす',

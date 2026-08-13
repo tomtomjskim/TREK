@@ -64,6 +64,8 @@ const settings: TranslationStrings = {
   'settings.temperature': '温度单位',
   'settings.distance': '距离单位',
   'settings.timeFormat': '时间格式',
+  'settings.calendarWeekStart': '每周开始于',
+  'settings.calendarWeekStartHint': '选择日历周从周一还是周日开始',
   'settings.blurBookingCodes': '隐藏预订编号',
   'settings.aiAlwaysRetry': '始终用 AI 重试预订导入',
   'settings.aiAlwaysRetryHint': '当标准解析器无法读取文件时，自动改用 AI 重试。',

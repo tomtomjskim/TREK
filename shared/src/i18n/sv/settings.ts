@@ -67,6 +67,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Temperaturenhet',
   'settings.distance': 'Avståndsenhet',
   'settings.timeFormat': 'Tidsformat',
+  'settings.calendarWeekStart': 'Vecka börjar på',
+  'settings.calendarWeekStartHint': 'Välj om kalenderveckan ska börja på måndag eller söndag',
   'settings.bookingLabels': 'Etiketter för bokningsrutter',
   'settings.bookingLabelsHint':
     'Visa stations- och flygplatsnamn på kartan. När funktionen är avstängd visas endast ikonen.',

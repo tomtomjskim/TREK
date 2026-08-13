@@ -67,6 +67,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Temperatuureenheid',
   'settings.distance': 'Afstandseenheid',
   'settings.timeFormat': 'Tijdnotatie',
+  'settings.calendarWeekStart': 'Week begint op',
+  'settings.calendarWeekStartHint': 'Kies of de kalenderweek op maandag of zondag begint',
   'settings.blurBookingCodes': 'Boekingscodes vervagen',
   'settings.aiAlwaysRetry': 'Always retry booking imports with AI',
   'settings.aiAlwaysRetryHint': 'When a file cannot be read by the standard parser, automatically retry it with AI.',

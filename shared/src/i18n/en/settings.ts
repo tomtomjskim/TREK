@@ -83,6 +83,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Temperature Unit',
   'settings.distance': 'Distance Unit',
   'settings.timeFormat': 'Time Format',
+  'settings.calendarWeekStart': 'Week starts on',
+  'settings.calendarWeekStartHint': 'Applies to date pickers and vacation calendars.',
   'settings.bookingLabels': 'Booking route labels',
   'settings.bookingLabelsHint': 'Show station / airport names on the map. When off, only the icon is shown.',
   'settings.mapPoiPill': 'Explore places on the map',

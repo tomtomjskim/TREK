@@ -67,6 +67,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Одиниця температури',
   'settings.distance': 'Одиниця відстані',
   'settings.timeFormat': 'Формат часу',
+  'settings.calendarWeekStart': 'Тиждень починається з',
+  'settings.calendarWeekStartHint': 'Виберіть, чи тиждень починається з понеділка чи неділі',
   'settings.blurBookingCodes': 'Приховати коди бронювання',
   'settings.aiAlwaysRetry': 'Always retry booking imports with AI',
   'settings.aiAlwaysRetryHint': 'When a file cannot be read by the standard parser, automatically retry it with AI.',

@@ -63,6 +63,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'وحدة الحرارة',
   'settings.distance': 'وحدة المسافة',
   'settings.timeFormat': 'تنسيق الوقت',
+  'settings.calendarWeekStart': 'يبدأ الأسبوع في',
+  'settings.calendarWeekStartHint': 'اختر ما إذا كان الأسبوع يبدأ يوم الاثنين أو الأحد',
   'settings.bookingLabels': 'تسميات مسارات الحجوزات',
   'settings.bookingLabelsHint': 'عرض أسماء المحطات/المطارات على الخريطة. عند الإيقاف، يتم عرض الرمز فقط.',
   'settings.blurBookingCodes': 'إخفاء رموز الحجز',

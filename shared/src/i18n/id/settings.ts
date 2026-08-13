@@ -66,6 +66,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Satuan Suhu',
   'settings.distance': 'Satuan Jarak',
   'settings.timeFormat': 'Format Waktu',
+  'settings.calendarWeekStart': 'Awal minggu',
+  'settings.calendarWeekStartHint': 'Pilih apakah minggu kalender dimulai pada hari Senin atau Minggu',
   'settings.blurBookingCodes': 'Sembunyikan Kode Pemesanan',
   'settings.aiAlwaysRetry': 'Always retry booking imports with AI',
   'settings.aiAlwaysRetryHint': 'When a file cannot be read by the standard parser, automatically retry it with AI.',

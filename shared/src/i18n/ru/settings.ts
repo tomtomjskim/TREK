@@ -65,6 +65,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Единица температуры',
   'settings.distance': 'Единица расстояния',
   'settings.timeFormat': 'Формат времени',
+  'settings.calendarWeekStart': 'Неделя начинается с',
+  'settings.calendarWeekStartHint': 'Выберите, начинается ли неделя с понедельника или воскресенья',
   'settings.blurBookingCodes': 'Скрыть коды бронирования',
   'settings.aiAlwaysRetry': 'Always retry booking imports with AI',
   'settings.aiAlwaysRetryHint': 'When a file cannot be read by the standard parser, automatically retry it with AI.',

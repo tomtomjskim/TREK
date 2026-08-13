@@ -119,6 +119,48 @@ describe('DisplaySettingsTab', () => {
     expect(updateSetting).toHaveBeenCalledWith('time_format', '24h');
   });
 
+  it('FE-COMP-DISPLAY-033: shows Monday as the default calendar week start', () => {
+    seedStore(useSettingsStore, { settings: buildSettings({ calendar_week_start: undefined }) });
+    render(<DisplaySettingsTab />);
+
+    expect(screen.getByText('Week starts on')).toBeInTheDocument();
+    const mondayButton = screen.getByRole('button', { name: 'Monday' });
+    expect(mondayButton.style.border).toContain('var(--text-primary)');
+  });
+
+  it('FE-COMP-DISPLAY-034: clicking Sunday persists the per-user calendar preference', async () => {
+    const user = userEvent.setup();
+    const updateSetting = vi.fn().mockResolvedValue(undefined);
+    seedStore(useSettingsStore, { settings: buildSettings({ calendar_week_start: 1 }), updateSetting });
+    render(<DisplaySettingsTab />);
+
+    await user.click(screen.getByRole('button', { name: 'Sunday' }));
+
+    expect(updateSetting).toHaveBeenCalledWith('calendar_week_start', 0);
+  });
+
+  it('FE-COMP-DISPLAY-035: the real settings action highlights Sunday immediately', async () => {
+    const user = userEvent.setup();
+    seedStore(useSettingsStore, { settings: buildSettings({ calendar_week_start: 1 }) });
+    render(<DisplaySettingsTab />);
+
+    await user.click(screen.getByRole('button', { name: 'Sunday' }));
+
+    expect(useSettingsStore.getState().settings.calendar_week_start).toBe(0);
+    expect(screen.getByRole('button', { name: 'Sunday' }).style.border).toContain('var(--text-primary)');
+  });
+
+  it('FE-COMP-DISPLAY-036: calendar preference save failure shows a toast error', async () => {
+    const user = userEvent.setup();
+    const updateSetting = vi.fn().mockRejectedValue(new Error('Calendar save failed'));
+    seedStore(useSettingsStore, { settings: buildSettings({ calendar_week_start: 1 }), updateSetting });
+    render(<><ToastContainer /><DisplaySettingsTab /></>);
+
+    await user.click(screen.getByRole('button', { name: 'Sunday' }));
+
+    expect(await screen.findByText('Calendar save failed')).toBeInTheDocument();
+  });
+
   it('FE-COMP-DISPLAY-024: shows Blur Booking Codes section', () => {
     render(<DisplaySettingsTab />);
     expect(screen.getByText(/blur booking codes/i)).toBeInTheDocument();

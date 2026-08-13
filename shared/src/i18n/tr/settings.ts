@@ -66,6 +66,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Sıcaklık Birimi',
   'settings.distance': 'Mesafe Birimi',
   'settings.timeFormat': 'Saat Biçimi',
+  'settings.calendarWeekStart': 'Hafta başlıyor',
+  'settings.calendarWeekStartHint': 'Takvim haftasının Pazartesi mi yoksa Pazar günü mü başlayacağını seçin',
   'settings.bookingLabels': 'Rezervasyon rota etiketleri',
   'settings.bookingLabelsHint': 'Haritada istasyon / havalimanı adlarını göster. Kapalıyken yalnızca simge görünür.',
   'settings.blurBookingCodes': 'Rezervasyon Kodlarını Bulanıklaştır',

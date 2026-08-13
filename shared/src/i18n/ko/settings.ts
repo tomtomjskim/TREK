@@ -74,6 +74,8 @@ const settings: TranslationStrings = {
   'settings.temperature': '온도 단위',
   'settings.distance': '거리 단위',
   'settings.timeFormat': '시간 형식',
+  'settings.calendarWeekStart': '주 시작 요일',
+  'settings.calendarWeekStartHint': '날짜 선택기와 휴가 캘린더에 적용됩니다.',
   'settings.bookingLabels': '예약 경로 레이블',
   'settings.bookingLabelsHint': '지도에 역 / 공항 이름을 표시합니다. 끄면 아이콘만 표시됩니다.',
   'settings.blurBookingCodes': '예약 코드 흐리게',

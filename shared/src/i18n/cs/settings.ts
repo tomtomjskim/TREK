@@ -65,6 +65,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Jednotky teploty',
   'settings.distance': 'Jednotky vzdálenosti',
   'settings.timeFormat': 'Formát času',
+  'settings.calendarWeekStart': 'Týden začíná',
+  'settings.calendarWeekStartHint': 'Zvolte, zda týden začíná v pondělí nebo v neděli',
   'settings.blurBookingCodes': 'Skrýt rezervační kódy',
   'settings.aiAlwaysRetry': 'Always retry booking imports with AI',
   'settings.aiAlwaysRetryHint': 'When a file cannot be read by the standard parser, automatically retry it with AI.',

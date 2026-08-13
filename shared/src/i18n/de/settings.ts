@@ -67,6 +67,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Temperatureinheit',
   'settings.distance': 'Entfernungseinheit',
   'settings.timeFormat': 'Zeitformat',
+  'settings.calendarWeekStart': 'Woche beginnt am',
+  'settings.calendarWeekStartHint': 'Wähle ob die Kalenderwoche am Montag oder Sonntag beginnt',
   'settings.bookingLabels': 'Orts-Labels auf Buchungsrouten',
   'settings.bookingLabelsHint': 'Zeigt Bahnhofs-/Flughafennamen auf der Karte. Wenn aus, wird nur das Icon angezeigt.',
   'settings.blurBookingCodes': 'Buchungscodes verbergen',

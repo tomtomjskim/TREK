@@ -67,6 +67,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Hőmérséklet egység',
   'settings.distance': 'Távolság egység',
   'settings.timeFormat': 'Időformátum',
+  'settings.calendarWeekStart': 'A hét kezdőnapja',
+  'settings.calendarWeekStartHint': 'Válaszd ki, hogy a hét hétfőn vagy vasárnap kezdődjön',
   'settings.blurBookingCodes': 'Foglalási kódok elrejtése',
   'settings.aiAlwaysRetry': 'Always retry booking imports with AI',
   'settings.aiAlwaysRetryHint': 'When a file cannot be read by the standard parser, automatically retry it with AI.',

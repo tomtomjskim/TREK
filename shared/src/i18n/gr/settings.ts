@@ -71,6 +71,8 @@ const settings: TranslationStrings = {
   'settings.temperature': 'Μονάδα Θερμοκρασίας',
   'settings.distance': 'Μονάδα Απόστασης',
   'settings.timeFormat': 'Μορφή Ώρας',
+  'settings.calendarWeekStart': 'Η εβδομάδα ξεκινά την',
+  'settings.calendarWeekStartHint': 'Επιλέξτε αν η εβδομάδα του ημερολογίου ξεκινά Δευτέρα ή Κυριακή',
   'settings.bookingLabels': 'Ετικέτες διαδρομής κρατήσεων',
   'settings.bookingLabelsHint':
     'Εμφάνιση ονομάτων σταθμών / αεροδρομίων στον χάρτη. Όταν είναι απενεργοποιημένο, εμφανίζεται μόνο το εικονίδιο.',

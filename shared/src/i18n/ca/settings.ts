@@ -53,6 +53,8 @@ const settings: TranslationStrings = {
   'settings.language': 'Idioma',
   'settings.temperature': 'Unitat de temperatura',
   'settings.timeFormat': "Format d'hora",
+  'settings.calendarWeekStart': 'La setmana comença el',
+  'settings.calendarWeekStartHint': 'Tria si la setmana comença el dilluns o el diumenge',
   'settings.blurBookingCodes': 'Difumina els codis de reserva',
   'settings.optimizeFromAccommodation': "Optimitza la ruta des de l'allotjament",
   'settings.optimizeFromAccommodationHint':
