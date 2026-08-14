@@ -78,6 +78,10 @@ the application starts, and both browser scenarios have no page or console error
 - 공개 Chromium smoke는 로그인 화면, secure context, manifest `200`, active 및
   controlling Service Worker, 정확한 app version, 비예상 console/page/network
   오류 0을 확인했다. 실제 사용자 계정으로 로그인하거나 운영 데이터를 열지 않았다.
+- 2026-08-14 TOM의 운영 인수에서 비용 추가 화면의 날짜 picker가 저장된 주 시작
+  설정을 정상 반영하는 것을 확인했다. 이는 운영 계정에서 확인한 shared picker
+  consumer 수용 증거이며, 자동화가 사용자 계정으로 로그인하거나 데이터를 변경한
+  결과가 아니다.
 - 즉시 rollback image는 `trek:3.4.1-jsnetworkcorp-68e6b7df`다. schema migration과
   backfill이 없으므로 문제 발생 시 image reference만 되돌린다.
 
