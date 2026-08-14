@@ -7,8 +7,9 @@
 Vacay 월 달력이 같은 값을 사용한다. 값이 없는 기존 사용자에게는 공용 picker가
 Monday를 사용하고, Vacay만 기존 plan 값을 compatibility fallback으로 보존한다.
 
-이 문서는 로컬 포크 검증 기록이다. `main` 병합, 원격 push, 운영 배포, production
-데이터 변경, 공식 issue/PR 제출은 수행하지 않았다.
+TOM의 승인 뒤 검증된 tree를 개인 포크 `main`에 fast-forward하고 개인 `origin`에
+push한 다음, 같은 source를 ARM64 불변 image로 빌드해 운영 배포했다. 공식
+`liketrek/TREK` issue/PR/branch에는 변경을 제출하지 않았다.
 
 ## Contract and ownership
 
@@ -23,7 +24,8 @@ Monday를 사용하고, Vacay만 기존 plan 값을 compatibility fallback으로
 | 호환        | legacy column/API 유지, Vacay plan 편집 control만 제거, 자동 backfill 없음 |
 
 핵심 구현 commit은 `848924f9`, `914fd57e`, `80c2fb44`, `80db4d32`다. 최종 문서와
-E2E commit은 이 문서가 포함된 branch HEAD에서 확인한다.
+E2E commit을 포함한 runtime source는
+`7a50356e4cc469ea8cab902739642cf62e8ef24c`다.
 
 ## Verification
 
@@ -52,6 +54,32 @@ adds no formatting regression, but it does not claim to repair the repository ba
 E2E uses isolated backend port `3301`, not the operational `3001`. Its disposable database
 setup emits pre-existing non-fatal duplicate-column migration warnings; all migrations finish,
 the application starts, and both browser scenarios have no page or console errors.
+
+## Main integration and production deployment
+
+- 개인 포크 `main`을 `68e6b7df`에서 runtime source `7a50356e`로 `--ff-only`
+  통합하고 개인 `origin/main`에 push했다. 공식 upstream에는 push하거나 PR을 열지
+  않았다.
+- 통합 전 root `npm test`가 exit 0이었고, 통합 후 shared/server/client typecheck,
+  strict i18n parity, focused calendar 6 files/95 tests와 root production build가
+  통과했다. build에는 기존 large-chunk/ineffective dynamic import 경고만 남았다.
+- native `linux/arm64` image `trek:3.4.1-jsnetworkcorp-7a50356e`를 배포했다. image
+  ID는 `sha256:97a4312f262b53c36bc3364ba62ae84282782003db7b68b59ebc60f37c02bd07`,
+  public version은 `3.4.1+jsnetworkcorp.7a50356e`다.
+- 운영 교체 전 online backup은
+  `/app/data/backups/predeploy-calendar-week-start-20260814T004949Z-travel.db`이며,
+  mode `0600`, 크기 2,592,768 bytes, SHA-256
+  `4060209729727d210f6cebd28bb1ac8949d10de71cfc9ab34013c87cae5985cd`다.
+  live/backup 모두 `quick_check=ok`, FK violation 0이었다.
+- app container만 재생성해 block-volume data/uploads mount와 loopback port를
+  보존했다. 배포 후 container는 healthy/restart 0이고 시작 오류 신호는 0이다.
+  local/public health와 HTTPS homepage `200`, HTTP→HTTPS `301`, 비인증 settings
+  `401`, nginx config를 확인했다.
+- 공개 Chromium smoke는 로그인 화면, secure context, manifest `200`, active 및
+  controlling Service Worker, 정확한 app version, 비예상 console/page/network
+  오류 0을 확인했다. 실제 사용자 계정으로 로그인하거나 운영 데이터를 열지 않았다.
+- 즉시 rollback image는 `trek:3.4.1-jsnetworkcorp-68e6b7df`다. schema migration과
+  backfill이 없으므로 문제 발생 시 image reference만 되돌린다.
 
 ## Review and residual risk
 

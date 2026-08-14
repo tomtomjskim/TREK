@@ -1,6 +1,6 @@
 # TREK Project Source Map
 
-> 마지막 확인: 2026-08-03, v3.4.1 포크 `68e6b7df` 기준
+> 마지막 확인: 2026-08-14, v3.4.1 포크 runtime source `7a50356e` 기준
 >
 > 이 문서는 사람이 저장소를 탐색하기 위한 source map이다. Vite/TypeScript가 만드는
 > JavaScript `.map` artifact나 production stack-trace 공개 설정을 의미하지 않는다.
@@ -91,17 +91,17 @@ Host 전용 `docker-compose.override.yml`, credential, signing material과 운�
 
 ## Fork-maintained hotspots
 
-| Surface                      | Primary source                                                                                                                  | Boundary                                                                 |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| Map label locale             | `client/src/components/Map/glProviders.ts`, `MapViewGL.tsx`, `Settings/MapSettingsTab.tsx`, `client/src/store/settingsStore.ts` | provider expression을 보존하고 locale name만 fallback                    |
-| Fold/Tablet map controls     | `client/src/components/Map/AdaptiveMapControls.tsx`, `client/src/utils/mapViewport.ts`                                          | 양쪽 panel corridor, 44px target와 keyboard/focus contract               |
-| Google enrichment/cost guard | `server/src/services/placeEnrichment.ts`, `googleApiUsageService.ts`, maps/admin services, client admin/enrichment UI           | 외부 호출 전 usage reservation, admin-only visibility, instance hard cap |
-| Packing privacy/templates    | `server/src/services/packingService.ts`, Nest packing controller/service, shared packing schema, client packing UI              | Common/Personal/Shared viewer와 writer 권한, instance template scope     |
-| Calendar week start          | `client/src/utils/calendarWeek.ts`, `Settings/DisplaySettingsTab.tsx`, shared/Journey date pickers, `Vacay/VacayCalendar.tsx`    | 개인 setting 우선, legacy Vacay plan 읽기 fallback, 기본 Monday          |
+| Surface                            | Primary source                                                                                                                                      | Boundary                                                                                                                                                                                                                             |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Map label locale                   | `client/src/components/Map/glProviders.ts`, `MapViewGL.tsx`, `Settings/MapSettingsTab.tsx`, `client/src/store/settingsStore.ts`                     | provider expression을 보존하고 locale name만 fallback                                                                                                                                                                                |
+| Fold/Tablet map controls           | `client/src/components/Map/AdaptiveMapControls.tsx`, `client/src/utils/mapViewport.ts`                                                              | 양쪽 panel corridor, 44px target와 keyboard/focus contract                                                                                                                                                                           |
+| Google enrichment/cost guard       | `server/src/services/placeEnrichment.ts`, `googleApiUsageService.ts`, maps/admin services, client admin/enrichment UI                               | 외부 호출 전 usage reservation, admin-only visibility, instance hard cap                                                                                                                                                             |
+| Packing privacy/templates          | `server/src/services/packingService.ts`, Nest packing controller/service, shared packing schema, client packing UI                                  | Common/Personal/Shared viewer와 writer 권한, instance template scope                                                                                                                                                                 |
+| Calendar week start                | `client/src/utils/calendarWeek.ts`, `Settings/DisplaySettingsTab.tsx`, shared/Journey date pickers, `Vacay/VacayCalendar.tsx`                       | 개인 setting 우선, legacy Vacay plan 읽기 fallback, 기본 Monday                                                                                                                                                                      |
 | Vacay destructive year/invite flow | `server/src/services/vacayService.ts`, Nest Vacay controller/service, MCP Vacay tools, `client/src/pages/VacayPage.tsx`와 `pages/vacay/useVacay.ts` | 연도 삭제·초대 수락·fusion 해산을 immediate transaction으로 처리; 누락된 이관 연도·user-year balance·다중 accepted·owner orphan·fused/pending/ambiguous ownership은 보존 또는 fail-closed하고 실제 상태 변경 뒤에만 best-effort 알림 |
-| Trip/Vacay shift boundary | `server/src/services/tripService.ts`, `server/src/services/vacayService.ts`, trip unit/MCP tests | provenance가 없는 Vacay entry를 날짜 겹침만으로 이동하지 않는 포크 정책; 공식 #983의 반대 contract와 분리 |
-| Migration collision bridge   | `server/src/db/migrationRunner.ts`, `forkMigrations.ts`                                                                         | official numeric migration과 fork string ID 분리                         |
-| Android/package identity     | `android/twa/`, `server/src/nest/platform/android-release.routes.ts`                                                            | signing material은 Git/runtime 밖, 고정 파일만 공개                      |
+| Trip/Vacay shift boundary          | `server/src/services/tripService.ts`, `server/src/services/vacayService.ts`, trip unit/MCP tests                                                    | provenance가 없는 Vacay entry를 날짜 겹침만으로 이동하지 않는 포크 정책; 공식 #983의 반대 contract와 분리                                                                                                                            |
+| Migration collision bridge         | `server/src/db/migrationRunner.ts`, `forkMigrations.ts`                                                                                             | official numeric migration과 fork string ID 분리                                                                                                                                                                                     |
+| Android/package identity           | `android/twa/`, `server/src/nest/platform/android-release.routes.ts`                                                                                | signing material은 Git/runtime 밖, 고정 파일만 공개                                                                                                                                                                                  |
 
 세부 lane, retirement 조건과 다음 upstream release 절차는
 [`docs/upstream/README.md`](upstream/README.md)를 따른다.
@@ -118,16 +118,16 @@ plan 설정 화면에서는 더 이상 이 값을 편집하지 않는다. DB fie
 
 ## Verification map
 
-| Scope                | Command                                                                                              |
-| -------------------- | ---------------------------------------------------------------------------------------------------- |
-| Root build           | `npm run build`                                                                                      |
-| Root tests           | `npm test`                                                                                           |
-| Coverage             | `npm run test:cov`                                                                                   |
-| Shared contract/i18n | `npm run typecheck --workspace=shared`; `npm run i18n:parity:strict --workspace=shared`              |
-| Server               | `npm run typecheck --workspace=server`; `npm run test:coverage --workspace=server`                   |
+| Scope                | Command                                                                                                                                 |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Root build           | `npm run build`                                                                                                                         |
+| Root tests           | `npm test`                                                                                                                              |
+| Coverage             | `npm run test:cov`                                                                                                                      |
+| Shared contract/i18n | `npm run typecheck --workspace=shared`; `npm run i18n:parity:strict --workspace=shared`                                                 |
+| Server               | `npm run typecheck --workspace=server`; `npm run test:coverage --workspace=server`                                                      |
 | Client               | `npm run typecheck --workspace=client`; `npm run lint:pages --workspace=client`; `npm run test --workspace=client`; targeted Playwright |
-| Plugin SDK           | `cd plugin-sdk && npm run typecheck && npm test && npm run build`                                    |
-| Android TWA          | commands documented in `android/twa/README.md`                                                       |
+| Plugin SDK           | `cd plugin-sdk && npm run typecheck && npm test && npm run build`                                                                       |
+| Android TWA          | commands documented in `android/twa/README.md`                                                                                          |
 
 테스트 fixture는 `server/tests/fixtures/`와 client E2E setup을 사용한다. 운영 DB,
 credential 또는 실제 사용자 session을 일반 test input으로 사용하지 않는다.

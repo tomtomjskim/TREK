@@ -5,21 +5,22 @@
 
 ## Current baseline
 
-| 기준                     | 현재 값                                                              |
-| ------------------------ | -------------------------------------------------------------------- |
-| 애플리케이션 버전        | `3.4.1`                                                              |
-| v3.4.x 통합 기준 commit  | `86d3e9a01c73f0de1aeaa73031353a2ddb3373cd`                           |
-| Vacay hardening 기준     | `37a0784c33f01ab52fd2c84710e3c11f684e0f09`                           |
-| 포크 main/runtime source | `68e6b7df255751ed75020c825c2f034345209ce4`                           |
-| 운영 image               | `trek:3.4.1-jsnetworkcorp-68e6b7df`                                  |
-| 공식 release 기준        | exact `v3.4.1` tag target `a0994658890eae96624fb9cbe7f55867f047fea2` |
+| 기준                    | 현재 값                                                              |
+| ----------------------- | -------------------------------------------------------------------- |
+| 애플리케이션 버전       | `3.4.1`                                                              |
+| v3.4.x 통합 기준 commit | `86d3e9a01c73f0de1aeaa73031353a2ddb3373cd`                           |
+| Vacay hardening 기준    | `37a0784c33f01ab52fd2c84710e3c11f684e0f09`                           |
+| 포크 runtime source     | `7a50356e4cc469ea8cab902739642cf62e8ef24c`                           |
+| 운영 image              | `trek:3.4.1-jsnetworkcorp-7a50356e`                                  |
+| 공식 release 기준       | exact `v3.4.1` tag target `a0994658890eae96624fb9cbe7f55867f047fea2` |
 
 현재 runtime은 공식 v3.4.1 통합과 custom version SemVer correctness,
 packing-template 관리자 exact-once/race guard 위에 Vacay 입력 보존·융합
 실패-폐쇄·초대/연도 무결성 hardening, 출처 없는 trip/Vacay 자동 이동 중단과 fusion
-해산 balance 보존을 적용한 포크 commit `68e6b7df` 기준이다. 같은 commit이 개인 포크
-`main`과 운영 image에 사용된다. 공식 upstream PR은 수행하지 않았으며 이후의 문서
-commit은 runtime contract를 바꾸지 않는다.
+해산 balance 보존과 사용자별 calendar week-start 연결을 적용한 포크 runtime source
+`7a50356e` 기준이다. 이 source는 개인 포크 `main`에 반영됐고 운영 image에 사용된다.
+공식 upstream PR은 수행하지 않았으며 이후의 문서 commit은 runtime contract를 바꾸지
+않는다.
 현재 운영·롤백 상태는 별도 운영 위키가, 코드와 Git 이력은 이 저장소가 source of
 truth다.
 
