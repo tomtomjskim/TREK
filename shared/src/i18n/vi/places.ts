@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Thời gian trùng lặp với:',
   'places.formWebsite': 'Trang web',
   'places.formNotes': 'Ghi chú',
-  'places.formNotesPlaceholder': 'Ghi chú cá nhân...',
+  'places.formNotesPlaceholder': 'Ghi chú về địa điểm...',
   'places.formReservation': 'Sự đặt chỗ',
   'places.reservationNotesPlaceholder': 'Phiếu đặt chỗ, số xác nhận...',
   'places.mapsSearchPlaceholder': 'Tìm kiếm địa điểm...',

@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Zeitliche Überschneidung mit:',
   'places.formWebsite': 'Website',
   'places.formNotes': 'Notizen',
-  'places.formNotesPlaceholder': 'Persönliche Notizen...',
+  'places.formNotesPlaceholder': 'Notizen zum Ort...',
   'places.formReservation': 'Reservierung',
   'places.reservationNotesPlaceholder': 'Reservierungsnotizen, Bestätigungsnummer...',
   'places.mapsSearchPlaceholder': 'Ortssuche...',

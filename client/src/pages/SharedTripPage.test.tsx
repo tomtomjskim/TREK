@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '../../tests/helpers/render';
+import { render, screen, waitFor, fireEvent, within } from '../../tests/helpers/render';
 import { Routes, Route } from 'react-router';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../tests/helpers/msw/server';
@@ -9,15 +9,37 @@ import { useSettingsStore } from '../store/settingsStore';
 import SharedTripPage from './SharedTripPage';
 import L from 'leaflet';
 
+const markerTest = vi.hoisted(() => ({
+  props: [] as any[],
+  instances: new Map<string, { marker: any; element: HTMLElement; popup: HTMLElement }>(),
+}));
+
 // Mock react-leaflet (SharedTripPage renders a map)
 vi.mock('react-leaflet', () => ({
   MapContainer: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="map-container">{children}</div>
   ),
   TileLayer: ({ url }: { url: string }) => <div data-testid="raster-tiles" data-url={url} />,
-  Marker: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  Marker: ({ children, ...props }: { children?: React.ReactNode; [key: string]: any }) => {
+    const element = document.createElement('button');
+    Object.defineProperty(element, 'focus', { value: vi.fn() });
+    const popup = document.createElement('div');
+    const marker: any = {
+      getElement: () => element,
+      getPopup: () => ({ getElement: () => popup }),
+    };
+    // Leaflet itself opens a marker popup for Enter. The page must explicitly do
+    // that for Space, so tests trigger the real event path through openPopup.
+    marker.openPopup = vi.fn(() => props.eventHandlers?.popupopen?.({ target: marker }));
+    marker.closePopup = vi.fn(() => props.eventHandlers?.popupclose?.({ target: marker }));
+    markerTest.props.push(props);
+    markerTest.instances.set(props.title, { marker, element, popup });
+    props.ref?.(marker);
+    return <div data-testid="map-marker" data-marker-title={props.title}>{children}</div>;
+  },
   Polyline: () => <div data-testid="route-line" />,
   Tooltip: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  Popup: ({ children }: { children?: React.ReactNode }) => <div data-testid="place-popup">{children}</div>,
   useMap: () => ({
     fitBounds: vi.fn(),
     getCenter: vi.fn(() => ({ lat: 0, lng: 0 })),
@@ -57,6 +79,8 @@ beforeEach(() => {
   // SharedTripPage does NOT require authentication — do NOT seed auth store
   resetAllStores();
   vi.clearAllMocks();
+  markerTest.props.length = 0;
+  markerTest.instances.clear();
 });
 
 describe('SharedTripPage', () => {
@@ -323,15 +347,15 @@ describe('SharedTripPage', () => {
         expect(screen.getByText('Shared Paris Trip')).toBeInTheDocument();
       });
 
-      // Eiffel Tower is only in the mocked map tooltip (1 occurrence)
-      expect(screen.getAllByText('Eiffel Tower')).toHaveLength(1);
+      // The marker keeps its lightweight Tooltip and now has a Popup heading.
+      expect(screen.getAllByText('Eiffel Tower')).toHaveLength(2);
 
       // Click the day card header to expand it
       fireEvent.click(screen.getByText('Day One'));
 
       // Now Eiffel Tower also appears in the expanded day content
       await waitFor(() => {
-        expect(screen.getAllByText('Eiffel Tower')).toHaveLength(2);
+        expect(screen.getAllByText('Eiffel Tower')).toHaveLength(3);
       });
     });
   });
@@ -705,6 +729,22 @@ describe('SharedTripPage', () => {
       await waitFor(() => expect(screen.getByText('Hotel Ibis')).toBeInTheDocument());
       expect(screen.queryByTestId('map-container')).toBeNull();
     });
+
+    it('renders no Plan content when every public section is disabled', async () => {
+      await open('nothing-shared-token', payload({
+        permissions: {
+          share_map: false,
+          share_bookings: false,
+          share_packing: false,
+          share_budget: false,
+          share_collab: false,
+        },
+      }));
+
+      expect(screen.queryByRole('button', { name: /plan/i })).toBeNull();
+      expect(screen.queryByTestId('map-container')).toBeNull();
+      expect(screen.queryByText(/all days/i)).toBeNull();
+    });
   });
 
   describe('FE-PAGE-SHARED-024: day header details', () => {
@@ -792,15 +832,15 @@ describe('SharedTripPage', () => {
       }));
 
       // Unselected: both places are candidates, but only the geocoded one has a marker.
-      expect(screen.getAllByText('Louvre')).toHaveLength(1);
+      expect(screen.getAllByText('Louvre')).toHaveLength(2);
       expect(screen.queryByText('Seine Walk')).toBeNull();
 
       fireEvent.click(screen.getByText('Day One'));
-      await waitFor(() => expect(screen.getAllByText('Louvre')).toHaveLength(2));
+      await waitFor(() => expect(screen.getAllByText('Louvre')).toHaveLength(3));
 
       // Collapsing again restores the trip-wide marker set.
       fireEvent.click(screen.getByText('Day One'));
-      await waitFor(() => expect(screen.getAllByText('Louvre')).toHaveLength(1));
+      await waitFor(() => expect(screen.getAllByText('Louvre')).toHaveLength(2));
     });
   });
 
@@ -917,13 +957,13 @@ describe('SharedTripPage', () => {
       }));
 
       // All: both geocoded places are on the map, so Orsay's tooltip is present.
-      expect(screen.getByText('Orsay')).toBeInTheDocument();
+      expect(screen.getAllByText('Orsay')).toHaveLength(2);
 
       fireEvent.click(screen.getByRole('button', { name: 'Day 1' }));
       await waitFor(() => expect(screen.queryByText('Orsay')).toBeNull());
 
       fireEvent.click(screen.getByRole('button', { name: 'All' }));
-      await waitFor(() => expect(screen.getByText('Orsay')).toBeInTheDocument());
+      await waitFor(() => expect(screen.getAllByText('Orsay')).toHaveLength(2));
     });
 
     it('marks the active chip for assistive tech', async () => {
@@ -1350,6 +1390,172 @@ describe('SharedTripPage', () => {
 
       fireEvent.click(screen.getByText('Day Three'));
       await waitFor(() => expect(screen.getByText(/Airport Parking/)).toBeInTheDocument());
+    });
+  });
+
+  describe('FE-PAGE-SHARED-042: public place notes stay separate from address and description', () => {
+    it('renders the trip-wide marker detail and the expanded plan note independently', async () => {
+      const day = { id: 7, day_number: 1, date: '2026-07-01', title: 'Day One' };
+      const mapPlace = { id: 201, name: 'Louvre', lat: 48.86, lng: 2.33, notes: 'Shared map note' };
+      const planPlace = {
+        ...mapPlace,
+        address: 'Rue de Rivoli',
+        description: 'Museum description',
+        notes: 'Shared plan note',
+      };
+
+      await open('public-place-notes-token', payload({
+        days: [day],
+        places: [mapPlace],
+        assignments: { '7': [{ id: 301, order_index: 0, place: planPlace }] },
+      }));
+
+      expect(within(screen.getByTestId('shared-place-popup-201')).getByText('Shared map note')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('Day One'));
+      await waitFor(() => expect(screen.getByText('Rue de Rivoli')).toBeInTheDocument());
+      expect(within(screen.getByTestId('shared-plan-place-note-201')).getByText('Shared plan note')).toBeInTheDocument();
+    });
+  });
+
+  describe('FE-PAGE-SHARED-043: selected-day markers use their nested place projection', () => {
+    it('does not join a selected marker back to the trip-wide place pool', async () => {
+      const day = { id: 7, day_number: 1, date: '2026-07-01', title: 'Day One' };
+      const topLevelPlace = { id: 201, name: 'Louvre', lat: 48.86, lng: 2.33, notes: 'TOP_LEVEL_SENTINEL' };
+      const nestedPlace = { ...topLevelPlace, notes: 'NESTED_DAY_SENTINEL' };
+
+      await open('nested-note-token', payload({
+        days: [day],
+        places: [topLevelPlace],
+        assignments: { '7': [{ id: 301, order_index: 0, place: nestedPlace }] },
+      }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Day 1' }));
+      await waitFor(() => expect(screen.getAllByText('NESTED_DAY_SENTINEL').length).toBeGreaterThan(0));
+      expect(screen.queryByText('TOP_LEVEL_SENTINEL')).toBeNull();
+    });
+  });
+
+  describe('FE-PAGE-SHARED-044: place notes do not absorb assignment, day or collaboration notes', () => {
+    it('keeps the public place note sentinel scoped to place details', async () => {
+      const day = { id: 7, day_number: 1, date: '2026-07-01', title: 'Day One' };
+      const place = { id: 201, name: 'Louvre', lat: 48.86, lng: 2.33, notes: 'PLACE_SHARED_SENTINEL' };
+      await open('note-separation-token', payload({
+        days: [day],
+        places: [place],
+        assignments: { '7': [{ id: 301, order_index: 0, notes: 'ASSIGNMENT_SENTINEL', place }] },
+        dayNotes: { '7': [{ id: 401, text: 'DAY_NOTE_SENTINEL', sort_order: 0 }] },
+        permissions: { share_bookings: false, share_packing: false, share_budget: false, share_collab: true },
+        collab: [{ id: 501, username: 'Ari', text: 'COLLAB_SENTINEL', created_at: '2026-07-01T10:00:00Z' }],
+      }));
+
+      const popup = screen.getByTestId('shared-place-popup-201');
+      expect(within(popup).getByText('PLACE_SHARED_SENTINEL')).toBeInTheDocument();
+      expect(within(popup).queryByText('ASSIGNMENT_SENTINEL')).toBeNull();
+      expect(within(popup).queryByText('DAY_NOTE_SENTINEL')).toBeNull();
+      expect(within(popup).queryByText('COLLAB_SENTINEL')).toBeNull();
+    });
+  });
+
+  describe('FE-PAGE-SHARED-045: place-note display is safe and handles display-only edge cases', () => {
+    it('omits null, empty and whitespace-only notes, but preserves Markdown line breaks and long text safely', async () => {
+      const longUnbroken = 'x'.repeat(400);
+      await open('safe-note-token', payload({
+        places: [
+          { id: 1, name: 'Null', lat: 1, lng: 1, notes: null },
+          { id: 2, name: 'Empty', lat: 2, lng: 2, notes: '' },
+          { id: 3, name: 'Whitespace', lat: 3, lng: 3, notes: ' \n\t ' },
+          { id: 4, name: 'Markdown', lat: 4, lng: 4, notes: 'First line\nSecond [hours](https://example.com/hours)' },
+          { id: 5, name: 'Long', lat: 5, lng: 5, notes: longUnbroken },
+          { id: 6, name: 'Raw HTML', lat: 6, lng: 6, notes: '<script>window.__unsafe = true</script>' },
+        ],
+      }));
+
+      expect(screen.queryByTestId('shared-place-note-1')).toBeNull();
+      expect(screen.queryByTestId('shared-place-note-2')).toBeNull();
+      expect(screen.queryByTestId('shared-place-note-3')).toBeNull();
+      expect(screen.getByText(/First line/)).toBeInTheDocument();
+      expect(screen.getByText(/Second/)).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'hours' })).toHaveAttribute('target', '_blank');
+      expect(screen.getByText(longUnbroken)).toHaveStyle({ overflowWrap: 'anywhere' });
+      expect(document.querySelector('script')).toBeNull();
+      expect((window as any).__unsafe).toBeUndefined();
+    });
+  });
+
+  describe('FE-PAGE-SHARED-046: marker labels provide the place name to Leaflet', () => {
+    it('sets the title for both the trip-wide and selected-day marker shapes', async () => {
+      const day = { id: 7, day_number: 1, date: '2026-07-01', title: 'Day One' };
+      const place = { id: 201, name: 'Louvre', lat: 48.86, lng: 2.33, notes: 'Note' };
+      await open('marker-title-token', payload({
+        days: [day], places: [place], assignments: { '7': [{ id: 301, order_index: 0, place }] },
+      }));
+
+      expect(markerTest.props.some(props => props.title === 'Louvre')).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Day 1' }));
+      await waitFor(() => expect(markerTest.props.filter(props => props.title === 'Louvre').length).toBeGreaterThan(1));
+    });
+  });
+
+  describe('FE-PAGE-SHARED-047: only a keyboard-opened current marker regains focus on close', () => {
+    it('opens the popup itself for Space instead of relying on Leaflet\'s Enter-only default', async () => {
+      const place = { id: 201, name: 'Louvre', lat: 48.86, lng: 2.33, notes: 'First note' };
+      await open('marker-space-token', payload({ places: [place] }));
+
+      const louvre = markerTest.instances.get('Louvre')!;
+      const louvreProps = [...markerTest.props].reverse().find(props => props.title === 'Louvre')!;
+      const preventDefault = vi.fn();
+
+      expect(louvreProps.eventHandlers.keydown).toEqual(expect.any(Function));
+      louvreProps.eventHandlers.keydown({ target: louvre.marker, originalEvent: { key: ' ', preventDefault } });
+      expect(preventDefault).toHaveBeenCalledTimes(1);
+      expect(louvre.marker.openPopup).toHaveBeenCalledTimes(1);
+    });
+
+    it('restores on keyboard close or Escape, skips pointer close, and clears a stale opener', async () => {
+      const first = { id: 201, name: 'Louvre', lat: 48.86, lng: 2.33, notes: 'First note' };
+      const second = { id: 202, name: 'Orsay', lat: 48.85, lng: 2.32, notes: 'Second note' };
+      await open('marker-focus-token', payload({ places: [first, second] }));
+
+      const louvre = markerTest.instances.get('Louvre')!;
+      const orsay = markerTest.instances.get('Orsay')!;
+      const louvreProps = [...markerTest.props].reverse().find(props => props.title === 'Louvre')!;
+      const close = document.createElement('button');
+      close.className = 'leaflet-popup-close-button';
+      louvre.popup.append(close);
+
+      louvreProps.eventHandlers.keydown({ target: louvre.marker, originalEvent: { key: 'Enter' } });
+      louvre.marker.openPopup();
+      // Leaflet's focused-marker keypress opens before the page's legacy custom
+      // keypress callback. This ordering used to remove the new popup listener.
+      louvreProps.eventHandlers.keypress?.({ target: louvre.marker, originalEvent: { key: 'Enter' } });
+      fireEvent.keyDown(close, { key: 'Enter' });
+      louvreProps.eventHandlers.popupclose({ target: louvre.marker });
+      await Promise.resolve();
+      expect(louvre.element.focus).toHaveBeenCalledTimes(1);
+
+      louvreProps.eventHandlers.keydown({ target: louvre.marker, originalEvent: { key: 'Enter' } });
+      louvre.marker.openPopup();
+      louvreProps.eventHandlers.keypress?.({ target: louvre.marker, originalEvent: { key: 'Enter' } });
+      const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      fireEvent(louvre.popup, escape);
+      await Promise.resolve();
+      expect(escape.defaultPrevented).toBe(true);
+      expect(louvre.marker.closePopup).toHaveBeenCalledTimes(1);
+      expect(louvre.element.focus).toHaveBeenCalledTimes(2);
+
+      louvreProps.eventHandlers.keydown({ target: louvre.marker, originalEvent: { key: ' ', preventDefault: vi.fn() } });
+      fireEvent.pointerDown(close);
+      louvreProps.eventHandlers.popupclose({ target: louvre.marker });
+      expect(louvre.element.focus).toHaveBeenCalledTimes(2);
+
+      louvreProps.eventHandlers.keydown({ target: louvre.marker, originalEvent: { key: 'Enter' } });
+      louvre.marker.openPopup();
+      louvreProps.eventHandlers.keypress?.({ target: louvre.marker, originalEvent: { key: 'Enter' } });
+      orsay.marker.openPopup();
+      louvreProps.eventHandlers.popupclose({ target: louvre.marker });
+      await Promise.resolve();
+      expect(louvre.element.focus).toHaveBeenCalledTimes(2);
     });
   });
 });

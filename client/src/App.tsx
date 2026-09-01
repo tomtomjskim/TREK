@@ -287,6 +287,8 @@ export default function App() {
   const { loadSettings } = useSettingsStore()
   const { loadAddons } = useAddonStore()
   const { loadPlugins } = usePluginStore()
+  const location = useLocation()
+  const isSharedPage = location.pathname.startsWith('/shared/')
 
   useEffect(() => {
     if (!location.pathname.startsWith('/shared/') && !location.pathname.startsWith('/public/') && !location.pathname.startsWith('/login')) {
@@ -343,20 +345,18 @@ export default function App() {
   useInAppNotificationListener()
 
   useEffect(() => {
-    if (isAuthenticated) {
+    if (isAuthenticated && !isSharedPage) {
       loadSettings()
       loadAddons()
       loadPlugins()
     }
-  }, [isAuthenticated])
+  }, [isAuthenticated, isSharedPage])
 
   useEffect(() => {
+    if (isSharedPage) return
     registerSyncTriggers()
     return () => unregisterSyncTriggers()
-  }, [])
-
-  const location = useLocation()
-  const isSharedPage = location.pathname.startsWith('/shared/')
+  }, [isSharedPage])
 
   useEffect(() => {
     const run = () =>
@@ -383,11 +383,11 @@ export default function App() {
 
   return (
     <TranslationProvider>
-      {!isAuthPage && <ErrorBoundary boundaryId="widget:system-notice" fallback={null}><SystemNoticeHost /></ErrorBoundary>}
+      {isAuthenticated && !isAuthPage && !isSharedPage && <ErrorBoundary boundaryId="widget:system-notice" fallback={null}><SystemNoticeHost /></ErrorBoundary>}
       <ErrorBoundary boundaryId="widget:toast" fallback={null}><ToastContainer /></ErrorBoundary>
-      {!isAuthPage && <ErrorBoundary boundaryId="widget:background-tasks" fallback={null}><BackgroundTasksWidget /></ErrorBoundary>}
-      {!isAuthPage && (isPhone ? <MSaveToCollectionSheet /> : <SaveToCollectionModal />)}
-      <ErrorBoundary boundaryId="widget:offline-banner" fallback={null}><OfflineBanner /></ErrorBoundary>
+      {!isAuthPage && !isSharedPage && <ErrorBoundary boundaryId="widget:background-tasks" fallback={null}><BackgroundTasksWidget /></ErrorBoundary>}
+      {!isAuthPage && !isSharedPage && (isPhone ? <MSaveToCollectionSheet /> : <SaveToCollectionModal />)}
+      {!isSharedPage && <ErrorBoundary boundaryId="widget:offline-banner" fallback={null}><OfflineBanner /></ErrorBoundary>}
       {/* One boundary for all route chunks, above <Routes> so it stays mounted
           across navigations. react-router runs location updates inside a transition,
           so a mounted boundary keeps the current page on screen instead of flashing

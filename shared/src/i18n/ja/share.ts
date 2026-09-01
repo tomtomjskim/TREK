@@ -2,7 +2,8 @@ import type { TranslationStrings } from '../types';
 
 const share: TranslationStrings = {
   'share.linkTitle': '公開リンク',
-  'share.linkHint': 'ログイン不要で閲覧できるリンクを作成します（閲覧のみ）。',
+  'share.linkHint':
+    'このリンクを知っている人は、ログインせずにこの旅行を閲覧できます。閲覧専用で、編集はできません。地図・プランを共有すると、場所のメモと行程のメモもリンクを知っている人に表示されます。',
   'share.createLink': 'リンク作成',
   'share.deleteLink': 'リンク削除',
   'share.createError': 'リンクを作成できませんでした',

@@ -7,6 +7,11 @@ import { pwaManifest, pwaNavigateFallbackDenylist } from './pwa-manifest.js';
 // `npm run build:analyze` writes dist/stats.html — a treemap of what actually ended
 // up in each chunk. The plain build only reports chunk sizes, which tells you a chunk
 // is too big but not which dependency made it so.
+// Playwright starts an isolated backend on a per-run port. Honour the target
+// it supplies so E2E traffic can never fall through to another local TREK
+// instance that happens to own the normal development port.
+const proxyTarget = process.env.VITE_PROXY_TARGET || 'http://localhost:3001';
+
 export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
@@ -250,46 +255,46 @@ export default defineConfig(({ mode }) => ({
     },
     proxy: {
       '/api': {
-        target: 'http://localhost:3001',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/plugin-frame': {
-        target: 'http://localhost:3001',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/uploads': {
-        target: 'http://localhost:3001',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'http://localhost:3001',
+        target: proxyTarget,
         ws: true,
       },
       '/mcp': {
-        target: 'http://localhost:3001',
+        target: proxyTarget,
         changeOrigin: true,
       },
       // OAuth 2.1 endpoints handled by backend (SDK authorize handler + token/revoke)
       // /oauth/authorize goes to backend so the SDK can redirect to /oauth/consent
       // /oauth/consent is served by Vite as a SPA route (no proxy entry needed)
       '/oauth/authorize': {
-        target: 'http://localhost:3001',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/oauth/token': {
-        target: 'http://localhost:3001',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/oauth/register': {
-        target: 'http://localhost:3001',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/oauth/revoke': {
-        target: 'http://localhost:3001',
+        target: proxyTarget,
         changeOrigin: true,
       },
       '/.well-known': {
-        target: 'http://localhost:3001',
+        target: proxyTarget,
         changeOrigin: true,
       },
     },

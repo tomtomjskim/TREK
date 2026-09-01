@@ -75,7 +75,7 @@ const places: TranslationStrings = {
   'places.timeCollision': '시간 겹침:',
   'places.formWebsite': '웹사이트',
   'places.formNotes': '메모',
-  'places.formNotesPlaceholder': '개인 메모...',
+  'places.formNotesPlaceholder': '장소 메모...',
   'places.formReservation': '예약',
   'places.reservationNotesPlaceholder': '예약 메모, 확인 번호...',
   'places.mapsSearchPlaceholder': '장소 검색...',

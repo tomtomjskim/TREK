@@ -3,7 +3,7 @@ import type { TranslationStrings } from '../types';
 const share: TranslationStrings = {
   'share.linkTitle': 'Öffentlicher Link',
   'share.linkHint':
-    'Erstelle einen Link den jeder ohne Login nutzen kann, um diese Reise anzuschauen. Nur lesen — keine Bearbeitung möglich.',
+    'Jeder mit dem Link kann diese Reise ohne Anmeldung ansehen. Der Zugriff ist schreibgeschützt — Bearbeiten ist nicht möglich. Wenn Karte & Plan geteilt werden, sind Notizen zu Orten und zum Reiseplan für alle mit dem Link sichtbar.',
   'share.createLink': 'Link erstellen',
   'share.deleteLink': 'Link löschen',
   'share.createError': 'Link konnte nicht erstellt werden',

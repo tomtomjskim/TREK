@@ -3,7 +3,7 @@ import type { TranslationStrings } from '../types';
 const share: TranslationStrings = {
   'share.linkTitle': 'Veřejný odkaz',
   'share.linkHint':
-    'Vytvořte odkaz, kterým si může kdokoli prohlédnout tuto cestu bez přihlášení. Pouze pro čtení — úpravy nejsou možné.',
+    'Kdokoli s odkazem si může tuto cestu prohlédnout bez přihlášení. Pouze pro čtení — úpravy nejsou možné. Pokud sdílíte mapu a plán, poznámky k místům a itineráři uvidí každý, kdo má odkaz.',
   'share.createLink': 'Vytvořit odkaz',
   'share.deleteLink': 'Smazat odkaz',
   'share.createError': 'Nepodařilo se vytvořit odkaz',

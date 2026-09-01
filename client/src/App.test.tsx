@@ -6,6 +6,9 @@ import { http, HttpResponse } from 'msw'
 import { server } from '../tests/helpers/msw/server'
 import { useAuthStore } from './store/authStore'
 import { useSettingsStore } from './store/settingsStore'
+import { useAddonStore } from './store/addonStore'
+import { usePluginStore } from './store/pluginStore'
+import { useSystemNoticeStore } from './store/systemNoticeStore'
 import { resetAllStores } from '../tests/helpers/store'
 import { buildUser, buildSettings, buildTrip } from '../tests/helpers/factories'
 import { offlineDb } from './db/offlineDb'
@@ -382,6 +385,26 @@ describe('App — on-mount effects', () => {
     useAuthStore.setState({ isLoading: false, isAuthenticated: false, loadUser })
     renderApp('/shared/token123')
     expect(loadUser).not.toHaveBeenCalled()
+  })
+
+  it('FE-COMP-APP-016b: persisted auth does not start authenticated data loads on /shared/ paths', async () => {
+    const fetch = vi.fn().mockResolvedValue(undefined)
+    const loadSettings = vi.fn().mockResolvedValue(undefined)
+    const loadAddons = vi.fn().mockResolvedValue(undefined)
+    const loadPlugins = vi.fn().mockResolvedValue(undefined)
+    seedAuth({ isAuthenticated: true, user: buildUser(), loadUser: vi.fn().mockResolvedValue(undefined) })
+    useSettingsStore.setState({ loadSettings })
+    useAddonStore.setState({ loadAddons })
+    usePluginStore.setState({ loadPlugins })
+    useSystemNoticeStore.setState({ notices: [], loaded: false, fetching: false, fetch })
+
+    renderApp('/shared/token123')
+    await act(async () => { await Promise.resolve() })
+
+    expect(fetch).not.toHaveBeenCalled()
+    expect(loadSettings).not.toHaveBeenCalled()
+    expect(loadAddons).not.toHaveBeenCalled()
+    expect(loadPlugins).not.toHaveBeenCalled()
   })
 
   it('FE-COMP-APP-017: GET /api/auth/app-config is called on mount', async () => {

@@ -3,7 +3,7 @@ import type { TranslationStrings } from '../types';
 const share: TranslationStrings = {
   'share.linkTitle': 'Nyilvános link',
   'share.linkHint':
-    'Hozz létre egy linket, amellyel bárki megtekintheti ezt az utazást bejelentkezés nélkül. Csak olvasható — szerkesztés nem lehetséges.',
+    'Mindenki, aki rendelkezik a linkkel, megtekintheti ezt az utazást bejelentkezés nélkül. Csak olvasható — szerkeszteni nem lehet. A térkép és a terv megosztásakor a helyekhez és az útitervhez tartozó jegyzetek mindenki számára láthatók, aki rendelkezik a linkkel.',
   'share.createLink': 'Link létrehozása',
   'share.deleteLink': 'Link törlése',
   'share.createError': 'Nem sikerült létrehozni a linket',

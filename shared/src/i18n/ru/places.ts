@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Пересечение по времени с:',
   'places.formWebsite': 'Сайт',
   'places.formNotes': 'Заметки',
-  'places.formNotesPlaceholder': 'Личные заметки...',
+  'places.formNotesPlaceholder': 'Заметки о месте...',
   'places.formReservation': 'Бронирование',
   'places.reservationNotesPlaceholder': 'Заметки о бронировании, номер подтверждения...',
   'places.mapsSearchPlaceholder': 'Поиск мест...',

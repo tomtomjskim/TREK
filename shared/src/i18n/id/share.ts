@@ -3,7 +3,7 @@ import type { TranslationStrings } from '../types';
 const share: TranslationStrings = {
   'share.linkTitle': 'Tautan Publik',
   'share.linkHint':
-    'Buat tautan yang bisa digunakan siapa saja untuk melihat perjalanan ini tanpa masuk. Hanya baca — tidak bisa diedit.',
+    'Siapa pun yang memiliki tautan dapat melihat perjalanan ini tanpa login. Hanya baca — tidak dapat diedit. Jika Peta & Rencana dibagikan, catatan tempat dan rencana perjalanan akan terlihat oleh siapa pun yang memiliki tautan.',
   'share.createLink': 'Buat tautan',
   'share.deleteLink': 'Hapus tautan',
   'share.createError': 'Gagal membuat tautan',

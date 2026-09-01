@@ -33,7 +33,7 @@ export function useSharedTrip() {
     const p = data.permissions || {}
     if (p.share_map === false && activeTab === 'plan') {
       setActiveTab(
-        p.share_bookings ? 'bookings' : p.share_packing ? 'packing' : p.share_budget ? 'budget' : p.share_collab ? 'collab' : 'plan'
+        p.share_bookings ? 'bookings' : p.share_packing ? 'packing' : p.share_budget ? 'budget' : p.share_collab ? 'collab' : ''
       )
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

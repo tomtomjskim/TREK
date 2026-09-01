@@ -16,9 +16,13 @@ import {
   Wallet,
 } from 'lucide-react';
 import { createElement, useEffect, useRef } from 'react';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import { renderIconMarkup } from '../utils/iconMarkup';
-import { MapContainer, Marker, Polyline, TileLayer, Tooltip, useMap } from 'react-leaflet';
+import { MapContainer, Marker, Polyline, Popup, TileLayer, Tooltip, useMap } from 'react-leaflet';
 import { getCategoryIcon } from '../components/shared/categoryIcons';
+import { markdownLinkComponents } from '../components/shared/markdownLink';
 import { OFM_POSITRON, DEFAULT_MAP_CENTER, DEFAULT_MAP_ZOOM, MAP_MAX_ZOOM, attributionForTile } from '../constants/mapDefaults';
 import VectorBasemap from '../components/Map/VectorBasemap';
 import { SUPPORTED_LANGUAGES, useTranslation } from '../i18n';
@@ -34,6 +38,14 @@ import { resolveBasemap } from '../utils/tileUrl';
 import { useSharedTrip } from './sharedTrip/useSharedTrip';
 
 const TRANSPORT_ICONS = { flight: Plane, train: Train, bus: Bus, car: Car, cruise: Ship };
+
+function displayPlaceNote(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function isPopupCloseControl(target: EventTarget | null) {
+  return target instanceof Element && Boolean(target.closest('.leaflet-popup-close-button'));
+}
 
 // Injected into Leaflet's marker HTML, where CSS variables cannot reach - the same
 // reason MapView.tsx is exempt from theme:lint outright.
@@ -100,6 +112,80 @@ export default function SharedTripPage() {
     showLangPicker,
     setShowLangPicker,
   } = useSharedTrip();
+  // `Map` is also the icon import used by the tab button below.
+  const markerRefs = useRef(new globalThis.Map<string, any>());
+  const keyboardOpenerRef = useRef<{ key: string; element: HTMLElement } | null>(null);
+  const shouldRestoreFocusRef = useRef(false);
+  const popupListenerCleanupRef = useRef<(() => void) | null>(null);
+
+  const clearKeyboardOpener = () => {
+    popupListenerCleanupRef.current?.();
+    popupListenerCleanupRef.current = null;
+    keyboardOpenerRef.current = null;
+    shouldRestoreFocusRef.current = false;
+  };
+
+  const recordKeyboardOpener = (key: string, marker: any) => {
+    const markerElement = marker?.getElement?.() ?? markerRefs.current.get(key)?.getElement?.();
+    if (!markerElement) return;
+    popupListenerCleanupRef.current?.();
+    popupListenerCleanupRef.current = null;
+    keyboardOpenerRef.current = { key, element: markerElement };
+    shouldRestoreFocusRef.current = false;
+  };
+
+  // Leaflet creates the close control outside React's Popup children. These listeners
+  // are deliberately attached only to the opened Popup so a share page never reaches
+  // into another map instance (or the rest of the document) to restore focus.
+  const onMarkerPopupOpen = (key: string, event: any) => {
+    const marker = event.target;
+    const markerElement = marker?.getElement?.();
+    const opener = keyboardOpenerRef.current;
+    if (!markerElement || opener?.key !== key || opener.element !== markerElement) {
+      clearKeyboardOpener();
+    }
+
+    const popupElement = marker?.getPopup?.()?.getElement?.();
+    if (!popupElement) return;
+    popupListenerCleanupRef.current?.();
+    const onKeyDown = (keyboardEvent: KeyboardEvent) => {
+      if (keyboardEvent.key === 'Escape') {
+        keyboardEvent.preventDefault();
+        keyboardEvent.stopPropagation();
+        shouldRestoreFocusRef.current = true;
+        marker.closePopup?.();
+      } else if (
+        (keyboardEvent.key === 'Enter' || keyboardEvent.key === ' ') &&
+        isPopupCloseControl(keyboardEvent.target)
+      ) {
+        shouldRestoreFocusRef.current = true;
+      }
+    };
+    const onPointerDown = (pointerEvent: Event) => {
+      if (isPopupCloseControl(pointerEvent.target)) shouldRestoreFocusRef.current = false;
+    };
+    popupElement.addEventListener('keydown', onKeyDown, true);
+    popupElement.addEventListener('pointerdown', onPointerDown, true);
+    popupElement.addEventListener('touchstart', onPointerDown, true);
+    popupListenerCleanupRef.current = () => {
+      popupElement.removeEventListener('keydown', onKeyDown, true);
+      popupElement.removeEventListener('pointerdown', onPointerDown, true);
+      popupElement.removeEventListener('touchstart', onPointerDown, true);
+    };
+  };
+
+  const onMarkerPopupClose = (key: string, event: any) => {
+    popupListenerCleanupRef.current?.();
+    popupListenerCleanupRef.current = null;
+    const opener = keyboardOpenerRef.current;
+    const markerElement = event.target?.getElement?.();
+    if (opener?.key === key && opener.element === markerElement && shouldRestoreFocusRef.current) {
+      queueMicrotask(() => opener.element.focus());
+    }
+    if (opener?.key === key) clearKeyboardOpener();
+  };
+
+  useEffect(() => () => popupListenerCleanupRef.current?.(), []);
 
   if (error)
     return (
@@ -187,10 +273,9 @@ export default function SharedTripPage() {
   const initialView = framed ?? { center: DEFAULT_MAP_CENTER, zoom: DEFAULT_MAP_ZOOM };
 
   // A visitor of a share link has no settings of their own, so the basemap is the
-  // app default: OpenFreeMap, a vector style that needs no key at all. The owner's
-  // CARTO key still travels in the payload and is still applied, because the
-  // fallback is only a fallback — a raster template reaching this page keeps
-  // working, and without the key CARTO would stamp "API KEY REQUIRED" over it.
+  // app default: OpenFreeMap, a vector style that needs no key at all. The public
+  // payload keeps `cartoApiKey` only as an empty compatibility field; it must not
+  // carry an owner's provider credential into an anonymous page.
   const basemap = resolveBasemap(null, OFM_POSITRON, cartoApiKey);
 
   return (
@@ -218,15 +303,18 @@ export default function SharedTripPage() {
             }}
           />
         )}
-        {/* Background decoration */}
-        <div
-          className="bg-[rgba(255,255,255,0.03)]"
-          style={{ position: 'absolute', top: -60, right: -60, width: 200, height: 200, borderRadius: '50%' }}
-        />
-        <div
-          className="bg-[rgba(255,255,255,0.02)]"
-          style={{ position: 'absolute', bottom: -40, left: -40, width: 150, height: 150, borderRadius: '50%' }}
-        />
+        {/* Clip only the off-canvas decoration. Clipping the whole header would
+            also cut off the language picker dropdown. */}
+        <div aria-hidden="true" style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
+          <div
+            className="bg-[rgba(255,255,255,0.03)]"
+            style={{ position: 'absolute', top: -60, right: -60, width: 200, height: 200, borderRadius: '50%' }}
+          />
+          <div
+            className="bg-[rgba(255,255,255,0.02)]"
+            style={{ position: 'absolute', bottom: -40, left: -40, width: 150, height: 150, borderRadius: '50%' }}
+          />
+        </div>
 
         {/* Logo */}
         <div
@@ -439,7 +527,7 @@ export default function SharedTripPage() {
         </div>
 
         {/* Map */}
-        {activeTab === 'plan' && (
+        {activeTab === 'plan' && permissions?.share_map !== false && (
           <>
             {/* Day picker at the map. Same setter as the day card below, so the map and
                 the expanded day can never disagree. Without it the only way to narrow the
@@ -515,11 +603,67 @@ export default function SharedTripPage() {
                     interactive={false}
                   />
                 )}
-                {mapPlaces.map((p: any) => (
-                  <Marker key={p.id} position={[p.lat, p.lng]} icon={createMarkerIcon(p, dayOrderMap[p.id] ?? null)}>
-                    <Tooltip>{p.name}</Tooltip>
-                  </Marker>
-                ))}
+                {mapPlaces.map((p: any) => {
+                  const markerKey = `${selectedDay ?? 'all'}:${p.id}`;
+                  const note = displayPlaceNote(p.notes);
+                  return (
+                    <Marker
+                      key={p.id}
+                      ref={(marker) => {
+                        if (marker) markerRefs.current.set(markerKey, marker);
+                        else markerRefs.current.delete(markerKey);
+                      }}
+                      position={[p.lat, p.lng]}
+                      icon={createMarkerIcon(p, dayOrderMap[p.id] ?? null)}
+                      title={p.name}
+                      eventHandlers={{
+                        click: (event: any) => {
+                          // A native keyboard click has detail 0; keep the opener recorded
+                          // by keypress in that case, but never return pointer focus.
+                          if (event.originalEvent?.detail !== 0) clearKeyboardOpener();
+                        },
+                        keydown: (event: any) => {
+                          const key = event.originalEvent?.key;
+                          // Leaflet's default Enter action opens before its keypress event.
+                          // Record the opener here so popupopen retains its listener.
+                          if (key === 'Enter') {
+                            recordKeyboardOpener(markerKey, event.target);
+                            return;
+                          }
+                          if (key !== ' ') return;
+                          // Leaflet opens a focused marker for Enter but not Space. Handle
+                          // Space before its keypress phase so it neither scrolls the page nor
+                          // relies on a browser-specific keypress default.
+                          event.originalEvent.preventDefault?.();
+                          recordKeyboardOpener(markerKey, event.target);
+                          event.target?.openPopup?.();
+                        },
+                        popupopen: (event: any) => onMarkerPopupOpen(markerKey, event),
+                        popupclose: (event: any) => onMarkerPopupClose(markerKey, event),
+                      }}
+                    >
+                      <Tooltip>{p.name}</Tooltip>
+                      <Popup>
+                        <div
+                          data-testid={`shared-place-popup-${p.id}`}
+                          className="bg-surface-card text-content"
+                          style={{ maxHeight: 180, overflowY: 'auto', overflowWrap: 'anywhere', padding: '2px 0' }}
+                        >
+                          <strong style={{ display: 'block', fontSize: 'calc(13px * var(--fs-scale-body, 1))' }}>{p.name}</strong>
+                          {note && (
+                            <div
+                              data-testid={`shared-place-note-${p.id}`}
+                              className="collab-note-md text-content-muted"
+                              style={{ marginTop: 6, fontSize: 'calc(12px * var(--fs-scale-body, 1))', lineHeight: 1.5, overflowWrap: 'anywhere' }}
+                            >
+                              <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={markdownLinkComponents}>{note}</Markdown>
+                            </div>
+                          )}
+                        </div>
+                      </Popup>
+                    </Marker>
+                  );
+                })}
               </MapContainer>
             </div>
 
@@ -796,6 +940,7 @@ export default function SharedTripPage() {
                           const place = item.data.place;
                           if (!place) return null;
                           const cat = categories?.find((c: any) => c.id === place.category_id);
+                          const note = displayPlaceNote(place.notes);
                           return (
                             <div
                               key={`p-${item.data.id}`}
@@ -847,6 +992,15 @@ export default function SharedTripPage() {
                                     }}
                                   >
                                     {place.address || place.description}
+                                  </div>
+                                )}
+                                {note && (
+                                  <div
+                                    data-testid={`shared-plan-place-note-${place.id}`}
+                                    className="collab-note-md text-content-muted"
+                                    style={{ marginTop: 4, fontSize: 'calc(10px * var(--fs-scale-caption, 1))', lineHeight: 1.4, overflowWrap: 'anywhere' }}
+                                  >
+                                    <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={markdownLinkComponents}>{note}</Markdown>
                                   </div>
                                 )}
                               </div>

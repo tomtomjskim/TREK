@@ -3,7 +3,7 @@ import type { TranslationStrings } from '../types';
 const share: TranslationStrings = {
   'share.linkTitle': 'Enllaç públic',
   'share.linkHint':
-    'Crea un enllaç que qualsevol pot utilitzar per veure aquest viatge sense iniciar sessió. Només lectura — no es pot editar.',
+    'Qualsevol persona amb l’enllaç pot veure aquest viatge sense iniciar sessió. Només lectura — no es pot editar. Si comparteixes el mapa i el pla, les notes dels llocs i de l’itinerari seran visibles per a tothom qui tingui l’enllaç.',
   'share.createLink': "Crea l'enllaç",
   'share.deleteLink': "Elimina l'enllaç",
   'share.createError': "No s'ha pogut crear l'enllaç",

@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Tidsöverlappning med:',
   'places.formWebsite': 'Hemsida',
   'places.formNotes': 'Noteringar',
-  'places.formNotesPlaceholder': 'Personliga anteckningar...',
+  'places.formNotesPlaceholder': 'Anteckningar om platsen...',
   'places.formReservation': 'Bokning',
   'places.reservationNotesPlaceholder': 'Bokningsinformation, bekräftelsenummer...',
   'places.mapsSearchPlaceholder': 'Sök efter platser...',

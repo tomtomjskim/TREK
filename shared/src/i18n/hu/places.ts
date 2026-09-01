@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Időbeli átfedés:',
   'places.formWebsite': 'Weboldal',
   'places.formNotes': 'Jegyzetek',
-  'places.formNotesPlaceholder': 'Személyes jegyzetek...',
+  'places.formNotesPlaceholder': 'Helyhez tartozó jegyzetek...',
   'places.formReservation': 'Foglalás',
   'places.reservationNotesPlaceholder': 'Foglalási jegyzetek, visszaigazolási szám...',
   'places.mapsSearchPlaceholder': 'Helyek keresése...',

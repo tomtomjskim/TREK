@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Časový překryv s:',
   'places.formWebsite': 'Webové stránky',
   'places.formNotes': 'Poznámky',
-  'places.formNotesPlaceholder': 'Osobní poznámky...',
+  'places.formNotesPlaceholder': 'Poznámky k místu...',
   'places.formReservation': 'Rezervace',
   'places.reservationNotesPlaceholder': 'Poznámky k rezervaci, potvrzovací kód...',
   'places.mapsSearchPlaceholder': 'Hledat místa...',

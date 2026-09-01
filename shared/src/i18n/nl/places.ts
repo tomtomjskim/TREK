@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Tijdoverlap met:',
   'places.formWebsite': 'Website',
   'places.formNotes': 'Notities',
-  'places.formNotesPlaceholder': 'Persoonlijke notities...',
+  'places.formNotesPlaceholder': 'Notities over de plek...',
   'places.formReservation': 'Reservering',
   'places.reservationNotesPlaceholder': 'Reserveringsnotities, bevestigingsnummer...',
   'places.mapsSearchPlaceholder': 'Plaatsen zoeken...',

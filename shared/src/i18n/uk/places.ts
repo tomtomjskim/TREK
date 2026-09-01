@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Перетин за часом із:',
   'places.formWebsite': 'Веб-сайт',
   'places.formNotes': 'Нотатки',
-  'places.formNotesPlaceholder': 'Особисті нотатки...',
+  'places.formNotesPlaceholder': 'Нотатки про місце...',
   'places.formReservation': 'Бронювання',
   'places.reservationNotesPlaceholder': 'Нотатки про бронювання, номер підтвердження...',
   'places.mapsSearchPlaceholder': 'Пошук місць...',

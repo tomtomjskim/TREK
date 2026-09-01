@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': '時間が重複しています：',
   'places.formWebsite': 'ウェブサイト',
   'places.formNotes': 'メモ',
-  'places.formNotesPlaceholder': '個人的なメモ…',
+  'places.formNotesPlaceholder': '場所のメモ…',
   'places.formReservation': '予約',
   'places.reservationNotesPlaceholder': '予約メモ、確認番号など…',
   'places.mapsSearchPlaceholder': '場所を検索…',

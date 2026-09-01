@@ -75,7 +75,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Waktu tumpang tindih dengan:',
   'places.formWebsite': 'Situs web',
   'places.formNotes': 'Catatan',
-  'places.formNotesPlaceholder': 'Catatan pribadi...',
+  'places.formNotesPlaceholder': 'Catatan tempat...',
   'places.formReservation': 'Reservasi',
   'places.reservationNotesPlaceholder': 'Catatan reservasi, nomor konfirmasi...',
   'places.mapsSearchPlaceholder': 'Cari tempat...',

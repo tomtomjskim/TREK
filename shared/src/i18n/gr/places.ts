@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Επικάλυψη ώρας με:',
   'places.formWebsite': 'Ιστοσελίδα',
   'places.formNotes': 'Σημειώσεις',
-  'places.formNotesPlaceholder': 'Προσωπικές σημειώσεις...',
+  'places.formNotesPlaceholder': 'Σημειώσεις για το μέρος...',
   'places.formReservation': 'Κράτηση',
   'places.reservationNotesPlaceholder': 'Σημειώσεις κράτησης, αριθμός επιβεβαίωσης...',
   'places.mapsSearchPlaceholder': 'Αναζήτηση μερών...',

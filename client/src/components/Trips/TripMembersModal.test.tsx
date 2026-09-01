@@ -240,6 +240,16 @@ describe('TripMembersModal', () => {
     expect(await screen.findByText('Public Link')).toBeInTheDocument();
   });
 
+  it('FE-COMP-MEMBERS-057: public link disclosure explains shared place and itinerary notes', async () => {
+    asShareOwner();
+
+    render(<TripMembersModal {...defaultProps} />);
+
+    expect(await screen.findByText(
+      'Anyone with the link can view this trip without logging in. Read-only — no editing possible. If Map & Plan is shared, place and itinerary notes are visible to anyone with the link.',
+    )).toBeInTheDocument();
+  });
+
   it('FE-COMP-MEMBERS-018: create share link shows URL after clicking create', async () => {
     const user = userEvent.setup();
     seedStore(usePermissionsStore, { permissions: { share_manage: 'trip_owner' } });

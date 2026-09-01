@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'تداخل في الوقت مع:',
   'places.formWebsite': 'الموقع الإلكتروني',
   'places.formNotes': 'ملاحظات',
-  'places.formNotesPlaceholder': 'ملاحظات شخصية...',
+  'places.formNotesPlaceholder': 'ملاحظات المكان...',
   'places.formReservation': 'حجز',
   'places.reservationNotesPlaceholder': 'ملاحظات الحجز، رقم التأكيد...',
   'places.mapsSearchPlaceholder': 'ابحث عن أماكن...',

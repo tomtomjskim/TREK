@@ -76,7 +76,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Solapamiento horario con:',
   'places.formWebsite': 'Página web',
   'places.formNotes': 'Notas',
-  'places.formNotesPlaceholder': 'Notas personales...',
+  'places.formNotesPlaceholder': 'Notas del lugar...',
   'places.formReservation': 'Reserva',
   'places.reservationNotesPlaceholder': 'Notas de reserva, número de confirmación...',
   'places.mapsSearchPlaceholder': 'Buscar lugares...',

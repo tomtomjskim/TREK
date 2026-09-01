@@ -78,7 +78,7 @@ const places: TranslationStrings = {
   'places.timeCollision': 'Zaman şununla çakışıyor:',
   'places.formWebsite': 'Web sitesi',
   'places.formNotes': 'Notlar',
-  'places.formNotesPlaceholder': 'Kişisel notlar...',
+  'places.formNotesPlaceholder': 'Yer notları...',
   'places.formReservation': 'Rezervasyon',
   'places.reservationNotesPlaceholder': 'Rezervasyon notları, onay numarası...',
   'places.mapsSearchPlaceholder': 'Yerleri ara...',

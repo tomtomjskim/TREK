@@ -3,7 +3,7 @@ import type { TranslationStrings } from '../types';
 const share: TranslationStrings = {
   'share.linkTitle': 'Liên kết công khai',
   'share.linkHint':
-    'Tạo một liên kết mà bất kỳ ai cũng có thể sử dụng để xem chuyến đi này mà không cần đăng nhập. Chỉ đọc — không thể chỉnh sửa.',
+    'Bất kỳ ai có liên kết đều có thể xem chuyến đi này mà không cần đăng nhập. Chỉ đọc — không thể chỉnh sửa. Khi chia sẻ Bản đồ & Kế hoạch, ghi chú về địa điểm và lịch trình sẽ hiển thị với bất kỳ ai có liên kết.',
   'share.createLink': 'Tạo liên kết',
   'share.deleteLink': 'Xóa liên kết',
   'share.createError': 'Không thể tạo liên kết',

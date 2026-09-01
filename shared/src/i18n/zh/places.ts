@@ -75,7 +75,7 @@ const places: TranslationStrings = {
   'places.timeCollision': '时间冲突：',
   'places.formWebsite': '网站',
   'places.formNotes': '备注',
-  'places.formNotesPlaceholder': '个人备注...',
+  'places.formNotesPlaceholder': '地点备注…',
   'places.formReservation': '预订',
   'places.reservationNotesPlaceholder': '预订备注、确认号...',
   'places.mapsSearchPlaceholder': '搜索地点...',
