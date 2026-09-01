@@ -133,6 +133,137 @@ describe('PluginRuntimeService dev-link', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32')('rejects an external symlink without managed dev-link provenance before enabling it', async () => {
+    const id = 'unmanaged-external';
+    const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trekplug-unmanaged-'));
+    const dest = path.join(codeRoot, id);
+    fs.mkdirSync(path.join(externalDir, 'server'), { recursive: true });
+    fs.writeFileSync(path.join(externalDir, 'server', 'index.js'), 'module.exports = {};');
+    fs.symlinkSync(externalDir, dest, 'dir');
+    testDb.prepare(
+      "INSERT INTO plugins (id, name, type, version, api_version, trek_range, permissions, granted_permissions, config, source_repo, status, enabled) VALUES (?, 'X', 'integration', '1.0.0', 1, '>=3.0.0', '[]', '', '{}', 'local:upload', 'inactive', 0)",
+    ).run(id);
+
+    try {
+      await expect(runtime.activate(id)).rejects.toMatchObject({ code: 'PLUGIN_CODE_ORIGIN_INVALID' });
+      expect(runtime.isActive(id)).toBe(false);
+      expect(testDb.prepare('SELECT enabled, status FROM plugins WHERE id = ?').get(id)).toMatchObject({ enabled: 0, status: 'inactive' });
+    } finally {
+      testDb.prepare('DELETE FROM plugins WHERE id = ?').run(id);
+      fs.rmSync(dest, { force: true });
+      fs.rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('rejects a stale managed symlink when dev-link is off before enabling it', async () => {
+    const id = 'stale-managed';
+    const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trekplug-stale-'));
+    const dest = path.join(codeRoot, id);
+    fs.mkdirSync(path.join(externalDir, 'server'), { recursive: true });
+    fs.writeFileSync(path.join(externalDir, 'server', 'index.js'), 'module.exports = {};');
+    fs.symlinkSync(externalDir, dest, 'dir');
+    testDb.prepare(
+      "INSERT INTO plugins (id, name, type, version, api_version, trek_range, permissions, granted_permissions, config, source_repo, status, enabled) VALUES (?, 'X', 'integration', '1.0.0', 1, '>=3.0.0', '[]', '', '{}', 'local:link', 'inactive', 0)",
+    ).run(id);
+
+    delete process.env.TREK_PLUGINS_DEV_LINK;
+    try {
+      await expect(runtime.activate(id)).rejects.toMatchObject({ code: 'PLUGIN_CODE_ORIGIN_INVALID' });
+      expect(runtime.isActive(id)).toBe(false);
+      expect(testDb.prepare('SELECT enabled, status FROM plugins WHERE id = ?').get(id)).toMatchObject({ enabled: 0, status: 'inactive' });
+    } finally {
+      process.env.TREK_PLUGINS_DEV_LINK = '1';
+      testDb.prepare('DELETE FROM plugins WHERE id = ?').run(id);
+      fs.rmSync(dest, { force: true });
+      fs.rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back enabled, status, and grants when supervisor spawn fails', async () => {
+    const id = 'spawn-fails';
+    fs.mkdirSync(path.join(codeRoot, id), { recursive: true });
+    testDb.prepare(
+      "INSERT INTO plugins (id, name, type, version, api_version, trek_range, permissions, granted_permissions, config, source_repo, status, enabled) VALUES (?, 'X', 'integration', '1.0.0', 1, '>=3.0.0', '[]', '[\"old\"]', '{}', 'local:upload', 'active', 0)",
+    ).run(id);
+    const supervisor = (runtime as unknown as { supervisor: { activate: ReturnType<typeof vi.spyOn> } }).supervisor;
+    const activation = vi.spyOn(supervisor, 'activate').mockRejectedValueOnce(new Error('spawn failed'));
+
+    try {
+      await expect(runtime.activate(id)).rejects.toThrow('spawn failed');
+      expect(testDb.prepare('SELECT enabled, status, granted_permissions FROM plugins WHERE id = ?').get(id)).toMatchObject({
+        enabled: 0,
+        status: 'inactive',
+        granted_permissions: '["old"]',
+      });
+    } finally {
+      activation.mockRestore();
+      testDb.prepare('DELETE FROM plugins WHERE id = ?').run(id);
+      fs.rmSync(path.join(codeRoot, id), { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('blocks an unmanaged external origin during crash respawn after a symlink swap', async () => {
+    const id = 'respawn-origin';
+    const externalDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trekplug-respawn-external-'));
+    const dest = path.join(codeRoot, id);
+    fs.mkdirSync(path.join(dest, 'server'), { recursive: true });
+    fs.writeFileSync(path.join(dest, 'server', 'index.js'), "module.exports = { async onLoad() { setTimeout(() => process.exit(42), 500); } };");
+    fs.mkdirSync(path.join(externalDir, 'server'), { recursive: true });
+    fs.writeFileSync(path.join(externalDir, 'server', 'index.js'), 'module.exports = {};');
+    testDb.prepare(
+      "INSERT INTO plugins (id, name, type, version, api_version, trek_range, permissions, granted_permissions, config, source_repo, status, enabled) VALUES (?, 'X', 'integration', '1.0.0', 1, '>=3.0.0', '[]', '', '{}', 'local:upload', 'inactive', 0)",
+    ).run(id);
+
+    try {
+      await runtime.activate(id);
+      fs.rmSync(dest, { recursive: true, force: true });
+      fs.symlinkSync(externalDir, dest, 'dir');
+      for (let i = 0; i < 40; i++) {
+        const row = testDb.prepare('SELECT enabled, status FROM plugins WHERE id = ?').get(id) as { enabled: number; status: string };
+        if (row.enabled === 0 && row.status === 'inactive') break;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      expect(testDb.prepare('SELECT enabled, status FROM plugins WHERE id = ?').get(id)).toMatchObject({ enabled: 0, status: 'inactive' });
+      expect(runtime.isActive(id)).toBe(false);
+    } finally {
+      await runtime.deactivate(id).catch(() => {});
+      testDb.prepare('DELETE FROM plugins WHERE id = ?').run(id);
+      fs.rmSync(dest, { recursive: true, force: true });
+      fs.rmSync(externalDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rolls back dependencies newly enabled for a target whose spawn fails', async () => {
+    const dependency = 'rollback-dep';
+    const target = 'rollback-target';
+    fs.mkdirSync(path.join(codeRoot, dependency), { recursive: true });
+    fs.mkdirSync(path.join(codeRoot, target), { recursive: true });
+    testDb.prepare(
+      "INSERT INTO plugins (id, name, type, version, api_version, trek_range, permissions, granted_permissions, config, dependencies, source_repo, status, enabled) VALUES (?, 'D', 'integration', '1.0.0', 1, '>=3.0.0', '[]', '', '{}', '{}', 'local:upload', 'inactive', 0)",
+    ).run(dependency);
+    testDb.prepare(
+      "INSERT INTO plugins (id, name, type, version, api_version, trek_range, permissions, granted_permissions, config, dependencies, source_repo, status, enabled) VALUES (?, 'T', 'integration', '1.0.0', 1, '>=3.0.0', '[]', '', '{}', ?, 'local:upload', 'inactive', 0)",
+    ).run(target, JSON.stringify({ requiredAddons: [], pluginDependencies: [{ id: dependency, version: '>=1.0.0' }] }));
+    const supervisor = (runtime as unknown as { supervisor: { activate: ReturnType<typeof vi.spyOn> } }).supervisor;
+    const activation = vi.spyOn(supervisor, 'activate').mockImplementation(async (id: string) => {
+      if (id === target) throw new Error('target spawn failed');
+    });
+
+    try {
+      await expect(runtime.activate(target)).rejects.toThrow('target spawn failed');
+      expect(testDb.prepare('SELECT enabled, status, granted_permissions FROM plugins WHERE id = ?').get(dependency)).toMatchObject({
+        enabled: 0,
+        status: 'inactive',
+        granted_permissions: '',
+      });
+    } finally {
+      activation.mockRestore();
+      testDb.prepare('DELETE FROM plugins WHERE id IN (?, ?)').run(dependency, target);
+      fs.rmSync(path.join(codeRoot, dependency), { recursive: true, force: true });
+      fs.rmSync(path.join(codeRoot, target), { recursive: true, force: true });
+    }
+  });
+
   it('reload rejects an unknown or non-linked plugin', async () => {
     await expect(runtime.reload('ghost')).rejects.toThrow(/not found/);
     await expect(runtime.reload('installed')).rejects.toThrow(/not dev-linked/);

@@ -23,7 +23,7 @@ import { discoverPlugins } from './install/discovery';
 import { parseJsonText, parseManifest, parseMcpToolCapabilities } from './install/manifest';
 import { scanForNativeBinaries } from './install/native-scan';
 import { devLinkEnabled, DEV_LINK_SOURCE } from './dev-link';
-import { pluginCodeDir, pluginDataDir } from './paths';
+import { pluginCodeDir, pluginDataDir, pluginCodeDirIsExternal, pluginRealCodeDir, pluginPermissionArgs } from './paths';
 import { assertHostCompatible, PluginRegistryService, RegistryError } from './registry/registry.service';
 import { hostSatisfies, hostVersion } from './install/host-compat';
 import { keyFingerprint } from './signature-status';
@@ -87,7 +87,8 @@ export type PluginDependencyCode =
   /** The plugin never declared a range, so we can't know that it does. */
   | 'TREK_VERSION_UNKNOWN'
   /** The plugin's manifest apiVersion is newer than this TREK's plugin-API surface. */
-  | 'API_VERSION_INCOMPATIBLE';
+  | 'API_VERSION_INCOMPATIBLE'
+  | 'PLUGIN_CODE_ORIGIN_INVALID';
 
 /**
  * Thrown when a plugin can't activate because a required addon is disabled, a declared
@@ -109,6 +110,15 @@ export class PluginDependencyError extends Error {
   ) {
     super(message);
     this.name = 'PluginDependencyError';
+  }
+}
+
+/** A code path that cannot be resolved is not a dependency mismatch, but is still fail-closed. */
+export class PluginCodeOriginError extends Error {
+  readonly code = 'PLUGIN_CODE_ORIGIN_INVALID' as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'PluginCodeOriginError';
   }
 }
 
@@ -151,6 +161,8 @@ export class PluginRuntimeService implements OnApplicationBootstrap, OnModuleDes
         this.pruneErrorLog(id);
       } catch { /* DB unavailable — a log line must never crash the host */ }
     },
+    beforeSpawn: (id, jsMode) => this.preparePluginSpawn(id, jsMode),
+    onSpawnFailure: (id) => this.reconcileSpawnFailure(id),
   });
 
   // Filesystem watchers for dev-linked plugins (id -> watcher), so a rebuild of the
@@ -238,7 +250,7 @@ export class PluginRuntimeService implements OnApplicationBootstrap, OnModuleDes
         this.activate(id).catch((e) => {
           // A plugin whose required addon is off (or a dependency is missing) at boot
           // must not stay marked enabled — reconcile the row so the UI reflects reality.
-          if (e instanceof PluginDependencyError || e instanceof DependencyCycleError) {
+          if (e instanceof PluginDependencyError || e instanceof PluginCodeOriginError || e instanceof DependencyCycleError) {
             this.deactivate(id).catch(() => {});
           }
           /* other failures: status is persisted as error by the supervisor hook */
@@ -471,11 +483,34 @@ export class PluginRuntimeService implements OnApplicationBootstrap, OnModuleDes
     // may consent-widen; dependencies are auto-enabled at their existing grant.
     const toCheck = rootInstalled ? order : [id];
     for (const nodeId of toCheck) this.assertActivatable(nodeId, installed, nodeId === id ? consentWiden : false);
+    // Semantic dependency/consent errors take precedence for legacy rows whose code
+    // tree is gone. Resolve every code origin only after the chain is semantically valid.
+    for (const nodeId of toCheck) this.assertPluginCodeOrigin(nodeId);
 
-    // Enable dependencies first (skip ones already enabled), then the target.
-    for (const nodeId of order) {
-      if (nodeId !== id && installed.get(nodeId)?.enabled) continue;
-      await this.spawnActivated(nodeId);
+    // Enable dependencies first (skip ones already enabled), then the target. If a
+    // later child fails, leave the graph as it was before this activation attempt:
+    // dependencies enabled only for this attempt must not survive a failed target.
+    const newlyActivated: Array<{ id: string; grantedPermissions: string }> = [];
+    try {
+      for (const nodeId of order) {
+        if (nodeId !== id && installed.get(nodeId)?.enabled) continue;
+        const before = this.db.prepare('SELECT granted_permissions FROM plugins WHERE id = ?').get(nodeId) as
+          | { granted_permissions: string }
+          | undefined;
+        await this.spawnActivated(nodeId);
+        newlyActivated.push({ id: nodeId, grantedPermissions: before?.granted_permissions ?? '' });
+      }
+    } catch (error) {
+      for (const activated of newlyActivated.reverse()) {
+        await this.deactivate(activated.id).catch(() => {});
+        // `deactivate` normally performs this update itself. Restore the grant
+        // marker even if its lifecycle cleanup hit an already-closed child/db.
+        try {
+          this.db.prepare("UPDATE plugins SET granted_permissions = ?, status = 'inactive', enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+            .run(activated.grantedPermissions, activated.id);
+        } catch { /* preserve the original activation error */ }
+      }
+      throw error;
     }
   }
 
@@ -558,8 +593,8 @@ export class PluginRuntimeService implements OnApplicationBootstrap, OnModuleDes
 
   /** Mark a (pre-validated) plugin enabled and spawn its child. */
   private async spawnActivated(id: string): Promise<void> {
-    const row = this.db.prepare('SELECT permissions, config FROM plugins WHERE id = ?').get(id) as
-      | { permissions: string; config: string }
+    const row = this.db.prepare('SELECT permissions, config, granted_permissions FROM plugins WHERE id = ?').get(id) as
+      | { permissions: string; config: string; granted_permissions: string }
       | undefined;
     if (!row) throw new Error(`plugin ${id} not found`);
     const declared = parseArray(row.permissions).filter(isKnownPermission);
@@ -575,7 +610,53 @@ export class PluginRuntimeService implements OnApplicationBootstrap, OnModuleDes
     // who widens it. The egress list is spawn-time only, which is why changing it
     // re-spawns the plugin (see setOperatorEgressHosts).
     const egress = [...new Set([...manifestHosts, ...this.operatorEgressHosts(id)])];
-    await this.supervisor.activate(id, new Set(declared), config, egress);
+    try {
+      await this.supervisor.activate(id, new Set(declared), config, egress);
+    } catch (error) {
+      await this.supervisor.disable(id).catch(() => {});
+      this.db.prepare("UPDATE plugins SET granted_permissions = ?, status = 'inactive', enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+        .run(row.granted_permissions, id);
+      throw error;
+    }
+  }
+
+  /** Resolve and authorize the exact code path immediately before every child spawn. */
+  private preparePluginSpawn(id: string, jsMode: boolean): { codeDir: string; permissionArgs?: string[] } {
+    const row = this.db.prepare('SELECT source_repo FROM plugins WHERE id = ?').get(id) as { source_repo: string | null } | undefined;
+    if (!row) throw new Error(`plugin ${id} not found`);
+    const codeDir = this.resolvePluginCodeOrigin(id, row.source_repo);
+    return jsMode ? { codeDir, permissionArgs: pluginPermissionArgs(id, codeDir) } : { codeDir };
+  }
+
+  private assertPluginCodeOrigin(id: string): void {
+    const row = this.db.prepare('SELECT source_repo FROM plugins WHERE id = ?').get(id) as { source_repo: string | null } | undefined;
+    if (!row) throw new Error(`plugin ${id} not found`);
+    this.resolvePluginCodeOrigin(id, row.source_repo);
+  }
+
+  /** Fail closed for missing/unreadable paths and for external paths without provenance. */
+  private resolvePluginCodeOrigin(id: string, sourceRepo: string | null): string {
+    try {
+      const codeDir = pluginRealCodeDir(id);
+      if (pluginCodeDirIsExternal(id, codeDir) && (!devLinkEnabled() || sourceRepo !== DEV_LINK_SOURCE)) {
+        throw new PluginDependencyError(
+          `plugin ${id} code resolves outside the configured plugin code root without managed dev-link provenance`,
+          'PLUGIN_CODE_ORIGIN_INVALID',
+        );
+      }
+      return codeDir;
+    } catch (error) {
+      if (error instanceof PluginDependencyError) throw error;
+      const detail = error instanceof Error ? `: ${error.message}` : '';
+      throw new PluginCodeOriginError(`plugin ${id} code path cannot be resolved${detail}`);
+    }
+  }
+
+  /** Crash-respawn/preparation failures must make the DB reflect an inactive child. */
+  private reconcileSpawnFailure(id: string): void {
+    try {
+      this.db.prepare("UPDATE plugins SET status = 'inactive', enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(id);
+    } catch { /* a DB lifecycle failure must not escape a supervisor callback */ }
   }
 
   /** Hosts an admin added for this plugin (empty unless it declared `operatorEgress`). */

@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { fork, type ChildProcess } from 'node:child_process';
 import { readEnv } from '../../../app-config';
-import { resolveChildEntry, pluginCodeDir, pluginRealCodeDir, pluginPermissionArgs, ensurePluginModuleType } from '../paths';
+import { resolveChildEntry, pluginRealCodeDir, pluginPermissionArgs, ensurePluginModuleType } from '../paths';
 import { HOOK_PERMISSION, USER_DATA_PERMISSION, EVENTS_PERMISSION, type Envelope, type RpcError, type RpcRequest } from '../protocol/envelope';
 import type { PluginRpcHost } from '../host/rpc-host';
 import { scheduleJobs, stopJobs, type ScheduledJob } from '../host/plugin-jobs';
@@ -30,6 +30,10 @@ export type PluginStatus = 'starting' | 'active' | 'error' | 'stopped';
 export interface SupervisorHooks {
   onStatus?(id: string, status: PluginStatus, error?: string): void;
   onLog?(id: string, level: string, msg: string, meta?: unknown): void;
+  /** Revalidate code provenance and return the exact resolved path for this spawn. */
+  beforeSpawn?(id: string, jsMode: boolean): { codeDir: string; permissionArgs?: string[] };
+  /** A synchronous spawn-preparation failure, including a crash-respawn refusal. */
+  onSpawnFailure?(id: string, error: Error): void;
   /** Any non-lifecycle event the child emits (e.g. a plugin's own signals). */
   onEvent?(id: string, topic: string, data: unknown): void;
 }
@@ -158,7 +162,11 @@ export class PluginSupervisor {
     const promise = new Promise<void>((resolve, reject) => {
       sup.activation = { resolve, reject };
       this.armActivationDeadline(sup);
-      this.spawn(sup);
+      try {
+        this.spawn(sup);
+      } catch (error) {
+        this.failSpawn(sup, error, true);
+      }
     });
     // Activation can be rejected by a timeout, a load-error, a crash-out, or a shutdown
     // mid-start. That must reach a caller that awaits activate(), but must NOT crash the
@@ -461,11 +469,25 @@ export class PluginSupervisor {
     // fs/child_process/native jail on top of the env scrub and RPC boundary.
     // Use the plugin's REAL path + ensure it has a package.json so the sandboxed
     // child can resolve its own module type without a broad read grant.
-    const codeDir = jsMode ? pluginRealCodeDir(sup.id) : pluginCodeDir(sup.id);
+    const prepared = this.hooks.beforeSpawn?.(sup.id, jsMode);
+    const codeDir = prepared?.codeDir ?? pluginRealCodeDir(sup.id);
     if (jsMode) ensurePluginModuleType(codeDir);
-    const argv = jsMode ? [...execArgv, ...pluginPermissionArgs(sup.id)] : execArgv;
-    const child = fork(entry, [sup.id, codeDir], {
-      cwd: forkCwd ?? codeDir,
+    // The runtime guard runs before module preparation, so repeat the realpath
+    // and directory check after it immediately before fork. This closes the
+    // preparation -> use window where a plugin symlink can be relinked.
+    const finalCodeDir = pluginRealCodeDir(sup.id);
+    if (finalCodeDir !== codeDir) {
+      throw new Error(`plugin ${sup.id} code origin changed during spawn preparation`);
+    }
+    const finalStat = fs.lstatSync(finalCodeDir);
+    if (!finalStat.isDirectory()) {
+      throw new Error(`plugin ${sup.id} code origin is not a directory`);
+    }
+    // Build the permission grant from the same final path used by fork/cwd;
+    // never carry a stale prepared path across the final revalidation.
+    const argv = jsMode ? [...execArgv, ...pluginPermissionArgs(sup.id, finalCodeDir)] : execArgv;
+    const child = fork(entry, [sup.id, finalCodeDir], {
+      cwd: forkCwd ?? finalCodeDir,
       execArgv: argv,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       // Whitelist env — nothing inherited. No JWT_SECRET, no DB creds, no PATH-leaked secrets.
@@ -703,7 +725,12 @@ export class PluginSupervisor {
       // true and this stale timer would respawn a GHOST child from the old entry. Only
       // respawn when the entry is still THIS one and still awaiting its restart.
       if (this.running.get(sup.id) !== sup || sup.status !== 'starting') return;
-      this.spawn(sup);
+      try {
+        this.spawn(sup);
+      } catch (error) {
+        this.failSpawn(sup, error, false);
+        return;
+      }
       // A respawn needs the SAME activation deadline as a first activation — otherwise a
       // plugin that hangs in onLoad after a crash sits in 'starting' forever, pegging a
       // core and buffering events that never flush (the reaper ignores non-active).
@@ -793,5 +820,18 @@ export class PluginSupervisor {
   private setStatus(sup: Supervised, status: PluginStatus, error?: string): void {
     sup.status = status;
     this.hooks.onStatus?.(sup.id, status, error);
+  }
+
+  private failSpawn(sup: Supervised, error: unknown, remove: boolean): void {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    this.clearActivationTimer(sup);
+    sup.child?.kill('SIGKILL');
+    sup.child = null;
+    if (remove) this.running.delete(sup.id);
+    else this.setStatus(sup, 'error', failure.message);
+    this.hooks.onSpawnFailure?.(sup.id, failure);
+    sup.activation?.reject(failure);
+    sup.activation = undefined;
+    sup.rpcHost.dispose();
   }
 }

@@ -2,10 +2,12 @@
  * Small pure helpers of the plugin module (#plugins): permission recognition and
  * the code/data path resolution (both the env-override and default branches).
  */
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { isKnownPermission, METHOD_PERMISSION, KNOWN_METHODS, HOOK_PERMISSION } from '../../../src/nest/plugins/protocol/envelope';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { pluginsCodeRoot, pluginsDataRoot, pluginCodeDir, pluginDataDir, pluginDbFile, resolveChildEntry, serverCodeRoot, pluginPermissionArgs, pluginRealCodeDir, ensurePluginModuleType } from '../../../src/nest/plugins/paths';
+import { pluginsCodeRoot, pluginsDataRoot, pluginCodeDir, pluginDataDir, pluginDbFile, resolveChildEntry, serverCodeRoot, pluginPermissionArgs, pluginRealCodeDir, pluginCodeDirIsExternal, ensurePluginModuleType } from '../../../src/nest/plugins/paths';
 
 afterEach(() => {
   delete process.env.TREK_PLUGINS_DIR;
@@ -62,26 +64,89 @@ describe('paths', () => {
 
   it('builds scoped OS-permission flags for a plugin child (default on)', () => {
     delete process.env.TREK_PLUGIN_PERMISSIONS;
-    const args = pluginPermissionArgs('flight-tracker');
-    expect(args).toContain('--permission');
-    // read is scoped to the compiled server dir + this plugin's own code dir…
-    expect(args.some((a) => a === `--allow-fs-read=${serverCodeRoot()}`)).toBe(true);
-    expect(args.some((a) => a === `--allow-fs-read=${pluginCodeDir('flight-tracker')}`)).toBe(true);
-    // …and never grants fs-write / child_process / the data root.
-    expect(args.some((a) => a.startsWith('--allow-fs-write'))).toBe(false);
-    expect(args.some((a) => a.startsWith('--allow-child-process'))).toBe(false);
-    expect(serverCodeRoot()).not.toContain(`${require('node:path').sep}data`);
+    const codeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-path-perm-code-'));
+    try {
+      process.env.TREK_PLUGINS_DIR = codeRoot;
+      fs.mkdirSync(path.join(codeRoot, 'flight-tracker'), { recursive: true });
+      const args = pluginPermissionArgs('flight-tracker');
+      expect(args).toContain('--permission');
+      // read is scoped to the compiled server dir + this plugin's own code dir…
+      expect(args.some((a) => a === `--allow-fs-read=${serverCodeRoot()}`)).toBe(true);
+      expect(args.some((a) => a === `--allow-fs-read=${path.join(codeRoot, 'flight-tracker')}`)).toBe(true);
+      // …and never grants fs-write / child_process / the data root.
+      expect(args.some((a) => a.startsWith('--allow-fs-write'))).toBe(false);
+      expect(args.some((a) => a.startsWith('--allow-child-process'))).toBe(false);
+      expect(serverCodeRoot()).not.toContain(`${require('node:path').sep}data`);
+    } finally {
+      fs.rmSync(codeRoot, { recursive: true, force: true });
+    }
   });
 
   it('lets an operator opt out of the permission model', () => {
     process.env.TREK_PLUGIN_PERMISSIONS = 'off';
-    expect(pluginPermissionArgs('flight-tracker')).toEqual([]);
-    delete process.env.TREK_PLUGIN_PERMISSIONS;
+    const codeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-path-perm-off-code-'));
+    try {
+      process.env.TREK_PLUGINS_DIR = codeRoot;
+      fs.mkdirSync(path.join(codeRoot, 'flight-tracker'), { recursive: true });
+      expect(pluginPermissionArgs('flight-tracker')).toEqual([]);
+    } finally {
+      fs.rmSync(codeRoot, { recursive: true, force: true });
+      delete process.env.TREK_PLUGIN_PERMISSIONS;
+    }
   });
 
-  it('pluginRealCodeDir falls back to the lexical path when the dir is absent', () => {
-    // no such plugin installed -> realpathSync throws -> lexical path returned
-    expect(pluginRealCodeDir('does-not-exist')).toBe(pluginCodeDir('does-not-exist'));
+  it('rejects a plugin code path that cannot be resolved', () => {
+    expect(() => pluginRealCodeDir('does-not-exist')).toThrow(/cannot resolve|realpath/i);
+  });
+
+  it.skipIf(process.platform === 'win32')('refuses permission grants for an external symlink when dev-link is off', () => {
+    const codeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-path-code-'));
+    const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-path-external-'));
+    try {
+      process.env.TREK_PLUGINS_DIR = codeRoot;
+      delete process.env.TREK_PLUGINS_DEV_LINK;
+      fs.symlinkSync(externalRoot, path.join(codeRoot, 'external'), 'dir');
+
+      expect(() => pluginPermissionArgs('external')).toThrow(/outside|dev-link|external/i);
+    } finally {
+      fs.rmSync(codeRoot, { recursive: true, force: true });
+      fs.rmSync(externalRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('uses the real configured root when the plugin root itself is a symlink', () => {
+    const realRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-path-real-root-'));
+    const aliasParent = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-path-alias-root-'));
+    const aliasRoot = path.join(aliasParent, 'plugins');
+    try {
+      fs.symlinkSync(realRoot, aliasRoot, 'dir');
+      fs.mkdirSync(path.join(realRoot, 'inside'), { recursive: true });
+      process.env.TREK_PLUGINS_DIR = aliasRoot;
+      delete process.env.TREK_PLUGINS_DEV_LINK;
+      expect(pluginCodeDirIsExternal('inside')).toBe(false);
+      expect(pluginPermissionArgs('inside')).toContain(`--allow-fs-read=${path.join(realRoot, 'inside')}`);
+    } finally {
+      fs.rmSync(aliasParent, { recursive: true, force: true });
+      fs.rmSync(realRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects permission args when the configured plugin root realpath fails', () => {
+    const codeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-path-root-fail-'));
+    const pluginDir = path.join(codeRoot, 'inside');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    process.env.TREK_PLUGINS_DIR = codeRoot;
+    const originalRealpathSync = fs.realpathSync;
+    const realpath = vi.spyOn(fs, 'realpathSync').mockImplementation((target) => {
+      if (path.resolve(String(target)) === path.resolve(codeRoot)) throw new Error('root realpath denied');
+      return originalRealpathSync(target);
+    });
+    try {
+      expect(() => pluginPermissionArgs('inside')).toThrow(/root realpath|origin|resolve/i);
+    } finally {
+      realpath.mockRestore();
+      fs.rmSync(codeRoot, { recursive: true, force: true });
+    }
   });
 
   it('ensurePluginModuleType writes a commonjs package.json only when absent', () => {

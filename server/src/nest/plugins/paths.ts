@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { readEnv } from '../../app-config';
+import { devLinkEnabled } from './dev-link';
 
 /**
  * Filesystem layout for the plugin system (#plugins). Code and data are two
@@ -55,14 +56,30 @@ export function pluginCodeDir(id: string): string {
  * (Docker mounts `server/data` -> a volume), and the OS permission model checks
  * REAL paths — forking the child from the real path keeps path resolution from
  * ever touching the symlinked parent (which would need a broad read grant).
- * Falls back to the lexical path if the dir does not exist yet.
+ * Throws when the entry cannot be resolved; callers must never grant a jail path
+ * for code that does not exist.
  */
 export function pluginRealCodeDir(id: string): string {
   try {
     return fs.realpathSync(pluginCodeDir(id));
-  } catch {
-    return pluginCodeDir(id);
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : '';
+    throw new Error(`cannot resolve plugin code directory for ${id}${detail}`, { cause: error });
   }
+}
+
+/** Whether an existing plugin entry resolves outside the real plugin-code root. */
+export function pluginCodeDirIsExternal(id: string, resolvedCodeDir = pluginRealCodeDir(id)): boolean {
+  const codeDir = resolvedCodeDir;
+  let root: string;
+  try {
+    root = fs.realpathSync(pluginsCodeRoot());
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : '';
+    throw new Error(`cannot resolve plugin code root${detail}`, { cause: error });
+  }
+  const relative = path.relative(root, codeDir);
+  return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
 }
 
 /**
@@ -134,7 +151,10 @@ export function serverCodeRoot(): string {
  * Empty (opt-out) when TREK_PLUGIN_PERMISSIONS=off.
  */
 let warnedPermissionsOff = false;
-export function pluginPermissionArgs(pluginId: string): string[] {
+export function pluginPermissionArgs(pluginId: string, resolvedCodeDir = pluginRealCodeDir(pluginId)): string[] {
+  if (pluginCodeDirIsExternal(pluginId, resolvedCodeDir) && !devLinkEnabled()) {
+    throw new Error(`plugin ${pluginId} resolves outside the configured plugin code root while dev-link is disabled`);
+  }
   if (readEnv().plugins.permissionsOff) {
     // Refuse outright when somebody other than this install's admin runs it. A
     // warning is the right answer for a machine its owner chose to trust; here
@@ -166,6 +186,6 @@ export function pluginPermissionArgs(pluginId: string): string[] {
     // which also holds the `data` symlink to trek.db and the secret files.
     `--allow-fs-read=${path.join(codeRoot, '..', 'package.json')}`,
     // The plugin's own code, by REAL path (see pluginRealCodeDir).
-    `--allow-fs-read=${pluginRealCodeDir(pluginId)}`,
+    `--allow-fs-read=${resolvedCodeDir}`,
   ];
 }
