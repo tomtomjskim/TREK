@@ -4,7 +4,7 @@ import fs from 'fs';
 import { readEnv } from '../app-config';
 import { applyDurabilityPragmas } from './durability';
 import { createTables } from './schema';
-import { runMigrations } from './migrations';
+import { runMigrations } from './migrationRunner';
 import { runSeeds } from './seeds';
 import { Place, Tag } from '../types';
 

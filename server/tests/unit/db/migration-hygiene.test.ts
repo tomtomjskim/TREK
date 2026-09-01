@@ -21,7 +21,9 @@ import { resolve } from 'node:path';
 import { createTestDb } from '../../helpers/test-db';
 
 const MIGRATIONS_PATH = resolve(__dirname, '../../../src/db/migrations.ts');
+const DATABASE_PATH = resolve(__dirname, '../../../src/db/database.ts');
 const migrationsSource = readFileSync(MIGRATIONS_PATH, 'utf8');
+const databaseSource = readFileSync(DATABASE_PATH, 'utf8');
 
 /**
  * Strip line and block comments so commented-out SQL (or prose mentioning
@@ -35,6 +37,13 @@ function stripComments(src: string): string {
 }
 
 const scannableSource = stripComments(migrationsSource);
+
+describe('migration hygiene — runtime entry point', () => {
+  it('routes database startup through the fork-aware migration adapter', () => {
+    expect(databaseSource).toMatch(/from ['"]\.\/migrationRunner['"]/);
+    expect(databaseSource).not.toMatch(/from ['"]\.\/migrations['"]/);
+  });
+});
 
 interface DestructiveHit {
   /** Normalised signature used as the allowlist key, e.g. "DROP TABLE budget_items". */

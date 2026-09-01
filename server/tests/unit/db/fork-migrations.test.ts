@@ -1,85 +1,178 @@
-import { FORK_MIGRATION_IDS, LEGACY_COLLISION_BRIDGE_ID, runMigrations } from '../../../src/db/migrationRunner';
+import {
+  FORK_MIGRATION_TABLE_SQL,
+  GOOGLE_API_USAGE_MIGRATION_ID,
+  PACKING_TEMPLATE_SCOPE_MIGRATION_ID,
+  runForkMigrations,
+} from '../../../src/db/forkMigrations';
+import {
+  FORK_MIGRATION_IDS,
+  LEGACY_COLLISION_BRIDGE_ID,
+  prepareLegacyForkSchema,
+  runMigrations,
+} from '../../../src/db/migrationRunner';
+import { runMigrations as runOfficialMigrations } from '../../../src/db/migrations';
+import { createTables } from '../../../src/db/schema';
 
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-type PackingSchema = 'legacy' | 'scoped' | 'drifted';
+type PackingSchema = 'legacy' | 'scoped' | 'scope-only' | 'owner-only' | 'drifted';
+type OfficialImageVersion = 171 | 172 | 173 | 175 | 'latest';
 
 interface FixtureOptions {
-  version: number;
-  googleUsage?: boolean;
-  official172?: boolean;
-  official173?: boolean;
+  marker?: number;
+  officialImageVersion?: OfficialImageVersion;
+  googleUsage?: 'missing' | 'valid' | 'malformed';
   packing?: PackingSchema;
+  forkHistory?: readonly string[];
 }
 
 const openDbs: Database.Database[] = [];
+const officialImages = new Map<OfficialImageVersion, Buffer>();
+let latestOfficialVersion = 0;
 
-function createFixture({
-  version,
-  googleUsage = false,
-  official172 = false,
-  official173 = false,
-  packing = 'legacy',
-}: FixtureOptions): Database.Database {
-  const db = new Database(':memory:');
+function schemaVersion(db: Database.Database): number {
+  return (db.prepare('SELECT version FROM schema_version').get() as { version: number }).version;
+}
+
+function setSchemaVersion(db: Database.Database, version: number): void {
+  db.prepare('UPDATE schema_version SET version = ?').run(version);
+}
+
+function track(db: Database.Database): Database.Database {
   openDbs.push(db);
+  return db;
+}
+
+function tableExists(db: Database.Database, table: string): boolean {
+  return !!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+}
+
+function createOfficialBase(): Database.Database {
+  const db = new Database(':memory:');
   db.exec('PRAGMA foreign_keys = ON');
+  createTables(db);
   db.exec(`
-    CREATE TABLE schema_version (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      version INTEGER NOT NULL
-    );
-    INSERT INTO schema_version (version) VALUES (${version});
-
-    CREATE TABLE users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT NOT NULL UNIQUE
-    );
-    INSERT INTO users (id, username) VALUES (1, 'creator'), (2, 'owner');
-
-    CREATE TABLE plugins (id TEXT PRIMARY KEY);
+    CREATE TABLE schema_version (version INTEGER NOT NULL);
+    INSERT INTO schema_version (version) VALUES (19);
   `);
+  return db;
+}
 
-  if (official172) {
-    db.exec(`
-      ALTER TABLE plugins ADD COLUMN update_block_code TEXT;
-      ALTER TABLE plugins ADD COLUMN update_block_detail TEXT;
-      ALTER TABLE plugins ADD COLUMN update_block_version TEXT;
-    `);
+function advanceOfficialSchemaTo(db: Database.Database, target: number): void {
+  const stopBefore = target + 1;
+  const exitSignal = new Error(`intercepted process.exit while generating official schema ${target}`);
+  const boundarySignal = new Error(`official schema image boundary ${target}`);
+  const originalPrepare = db.prepare.bind(db);
+  const prepareSpy = vi.spyOn(db, 'prepare').mockImplementation((sql: string) => {
+    const statement = originalPrepare(sql);
+    if (sql.replace(/\s+/g, ' ').trim() === 'UPDATE schema_version SET version = ?') {
+      const originalRun = statement.run.bind(statement);
+      statement.run = (...params: unknown[]) => {
+        if (params[0] === stopBefore) throw boundarySignal;
+        return originalRun(...params);
+      };
+    }
+    return statement;
+  });
+  const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+    throw exitSignal;
+  });
+
+  try {
+    expect(() => runOfficialMigrations(db)).toThrow(exitSignal);
+  } finally {
+    exitSpy.mockRestore();
+    prepareSpy.mockRestore();
   }
-  if (official173) db.exec('ALTER TABLE plugins ADD COLUMN trek_range TEXT;');
 
+  expect(schemaVersion(db)).toBe(target);
+}
+
+function buildOfficialImages(): void {
+  const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+  try {
+    let db = createOfficialBase();
+    advanceOfficialSchemaTo(db, 171);
+    officialImages.set(171, db.serialize());
+    db.close();
+
+    for (const target of [172, 173, 175] as const) {
+      const previous = target === 172 ? 171 : target === 173 ? 172 : 173;
+      db = new Database(officialImages.get(previous)!);
+      db.exec('PRAGMA foreign_keys = ON');
+      advanceOfficialSchemaTo(db, target);
+      officialImages.set(target, db.serialize());
+      db.close();
+    }
+
+    db = new Database(officialImages.get(175)!);
+    db.exec('PRAGMA foreign_keys = ON');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code) => {
+      throw new Error(`unexpected process.exit(${String(code)}) while generating latest official schema`);
+    });
+    try {
+      runOfficialMigrations(db);
+    } finally {
+      exitSpy.mockRestore();
+    }
+    latestOfficialVersion = schemaVersion(db);
+    officialImages.set('latest', db.serialize());
+    db.close();
+  } finally {
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  }
+}
+
+function cloneOfficialImage(version: OfficialImageVersion): Database.Database {
+  const db = track(new Database(officialImages.get(version)!));
+  db.exec('PRAGMA foreign_keys = ON');
+  return db;
+}
+
+function packingTableSql(packing: PackingSchema): string {
   if (packing === 'legacy') {
-    db.exec(`
+    return `
       CREATE TABLE packing_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
-    `);
-  } else if (packing === 'scoped') {
-    db.exec(`
+    `;
+  }
+
+  if (packing === 'scope-only') {
+    return `
       CREATE TABLE packing_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        scope TEXT NOT NULL DEFAULT 'instance'
-          CHECK (scope IN ('instance', 'personal')),
+        scope TEXT NOT NULL DEFAULT 'instance',
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+  }
+
+  if (packing === 'owner-only') {
+    return `
+      CREATE TABLE packing_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
         owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
         created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        CONSTRAINT packing_templates_scope_owner_check CHECK (
-          (scope = 'instance' AND owner_id IS NULL) OR
-          (scope = 'personal' AND owner_id IS NOT NULL)
-        )
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
-      CREATE INDEX idx_packing_templates_scope_owner_created
-        ON packing_templates(scope, owner_id, created_at);
-    `);
-  } else {
-    db.exec(`
-      CREATE TABLE trips (id INTEGER PRIMARY KEY AUTOINCREMENT);
+    `;
+  }
+
+  if (packing === 'drifted') {
+    return `
       CREATE TABLE packing_templates (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
@@ -88,41 +181,93 @@ function createFixture({
         created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE SET NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
-    `);
+    `;
   }
 
-  db.exec(`
-    CREATE TABLE packing_template_categories (
+  return `
+    CREATE TABLE packing_templates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      template_id INTEGER NOT NULL REFERENCES packing_templates(id) ON DELETE CASCADE,
       name TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0
+      scope TEXT NOT NULL DEFAULT 'instance'
+        CHECK (scope IN ('instance', 'personal')),
+      owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT packing_templates_scope_owner_check CHECK (
+        (scope = 'instance' AND owner_id IS NULL) OR
+        (scope = 'personal' AND owner_id IS NOT NULL)
+      )
     );
-    CREATE TABLE packing_template_items (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      category_id INTEGER NOT NULL REFERENCES packing_template_categories(id) ON DELETE CASCADE,
-      name TEXT NOT NULL,
-      sort_order INTEGER NOT NULL DEFAULT 0
-    );
-  `);
+    CREATE INDEX idx_packing_templates_scope_owner_created
+      ON packing_templates(scope, owner_id, created_at);
+  `;
+}
+
+function rebuildPackingSchema(db: Database.Database, packing: PackingSchema): void {
+  db.exec('PRAGMA foreign_keys = OFF');
+  try {
+    db.exec(`
+      DROP TABLE IF EXISTS packing_template_items;
+      DROP TABLE IF EXISTS packing_template_categories;
+      DROP TABLE IF EXISTS packing_templates;
+      ${packingTableSql(packing)}
+      CREATE TABLE packing_template_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_id INTEGER NOT NULL REFERENCES packing_templates(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE packing_template_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category_id INTEGER NOT NULL REFERENCES packing_template_categories(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON');
+  }
+}
+
+function seedFixtureRows(db: Database.Database, packing: PackingSchema): void {
+  db.prepare(
+    `INSERT INTO users (id, username, email, password_hash)
+     VALUES (1, 'creator', 'creator@example.test', 'test-only'),
+            (2, 'owner', 'owner@example.test', 'test-only')`,
+  ).run();
 
   if (packing === 'scoped') {
     db.prepare(
-      "INSERT INTO packing_templates (id, name, scope, owner_id, created_by, created_at) VALUES (10, 'Legacy template', 'instance', NULL, 1, '2026-07-01 00:00:00')",
+      `INSERT INTO packing_templates (id, name, scope, owner_id, created_by, created_at)
+       VALUES (10, 'Legacy template', 'instance', NULL, 1, '2026-07-01 00:00:00')`,
+    ).run();
+  } else if (packing === 'scope-only' || packing === 'drifted') {
+    db.prepare(
+      `INSERT INTO packing_templates (id, name, scope, created_by, created_at)
+       VALUES (10, 'Legacy template', 'instance', 1, '2026-07-01 00:00:00')`,
+    ).run();
+  } else if (packing === 'owner-only') {
+    db.prepare(
+      `INSERT INTO packing_templates (id, name, owner_id, created_by, created_at)
+       VALUES (10, 'Legacy template', NULL, 1, '2026-07-01 00:00:00')`,
     ).run();
   } else {
     db.prepare(
-      "INSERT INTO packing_templates (id, name, created_by, created_at) VALUES (10, 'Legacy template', 1, '2026-07-01 00:00:00')",
+      `INSERT INTO packing_templates (id, name, created_by, created_at)
+       VALUES (10, 'Legacy template', 1, '2026-07-01 00:00:00')`,
     ).run();
   }
+
   db.exec(`
     INSERT INTO packing_template_categories (id, template_id, name, sort_order)
       VALUES (20, 10, 'Gear', 0);
     INSERT INTO packing_template_items (id, category_id, name, sort_order)
       VALUES (30, 20, 'Backpack', 0);
   `);
+}
 
-  if (googleUsage) {
+function createGoogleUsage(db: Database.Database, state: 'valid' | 'malformed'): void {
+  if (state === 'valid') {
     db.exec(`
       CREATE TABLE google_api_usage (
         period TEXT NOT NULL,
@@ -134,8 +279,43 @@ function createFixture({
       INSERT INTO google_api_usage (period, sku, attempts, updated_at)
         VALUES ('2026-07', 'text_search_pro', 7, 1720000000000);
     `);
+    return;
   }
 
+  db.exec(`
+    CREATE TABLE google_api_usage (
+      period TEXT PRIMARY KEY,
+      attempts TEXT
+    );
+  `);
+}
+
+function createFixture({
+  marker,
+  officialImageVersion = 171,
+  googleUsage = 'missing',
+  packing = 'legacy',
+  forkHistory = [],
+}: FixtureOptions = {}): Database.Database {
+  const db = cloneOfficialImage(officialImageVersion);
+  if (marker !== undefined) setSchemaVersion(db, marker);
+  rebuildPackingSchema(db, packing);
+  seedFixtureRows(db, packing);
+
+  if (googleUsage !== 'missing') createGoogleUsage(db, googleUsage);
+  if (forkHistory.length > 0) {
+    db.exec(FORK_MIGRATION_TABLE_SQL);
+    const insert = db.prepare('INSERT INTO fork_schema_migrations (id) VALUES (?)');
+    for (const id of forkHistory) insert.run(id);
+  }
+
+  return db;
+}
+
+function createFreshFixture(): Database.Database {
+  const db = track(new Database(':memory:'));
+  db.exec('PRAGMA foreign_keys = ON');
+  createTables(db);
   return db;
 }
 
@@ -144,13 +324,14 @@ function columnNames(db: Database.Database, table: string): string[] {
 }
 
 function migrationIds(db: Database.Database): string[] {
+  if (!tableExists(db, 'fork_schema_migrations')) return [];
   return (db.prepare('SELECT id FROM fork_schema_migrations ORDER BY id').all() as Array<{ id: string }>).map(
     (row) => row.id,
   );
 }
 
-function expectIntegrated(db: Database.Database): void {
-  expect(db.prepare('SELECT version FROM schema_version').get()).toEqual({ version: 175 });
+function expectIntegrated(db: Database.Database, bridgeExpected: boolean, expectedForeignKeys = 1): void {
+  expect(schemaVersion(db)).toBe(latestOfficialVersion);
   expect(columnNames(db, 'plugins')).toEqual(
     expect.arrayContaining(['update_block_code', 'update_block_detail', 'update_block_version', 'trek_range']),
   );
@@ -158,152 +339,229 @@ function expectIntegrated(db: Database.Database): void {
   expect(columnNames(db, 'google_api_usage')).toEqual(
     expect.arrayContaining(['period', 'sku', 'attempts', 'updated_at']),
   );
-  expect(db.prepare('SELECT template_id FROM packing_template_categories WHERE id = 20').get()).toEqual({
-    template_id: 10,
-  });
-  expect(db.prepare('SELECT category_id FROM packing_template_items WHERE id = 30').get()).toEqual({
-    category_id: 20,
-  });
+
+  if (db.prepare('SELECT 1 FROM packing_templates WHERE id = 10').get()) {
+    expect(db.prepare('SELECT template_id FROM packing_template_categories WHERE id = 20').get()).toEqual({
+      template_id: 10,
+    });
+    expect(db.prepare('SELECT category_id FROM packing_template_items WHERE id = 30').get()).toEqual({
+      category_id: 20,
+    });
+  }
+
+  expect(db.prepare('PRAGMA quick_check').all()).toEqual([{ quick_check: 'ok' }]);
   expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
-  expect(migrationIds(db)).toEqual(expect.arrayContaining([...FORK_MIGRATION_IDS]));
+  expect(Number(db.pragma('foreign_keys', { simple: true }))).toBe(expectedForeignKeys);
+
+  const expectedIds = [...FORK_MIGRATION_IDS, ...(bridgeExpected ? [LEGACY_COLLISION_BRIDGE_ID] : [])].sort();
+  expect(migrationIds(db)).toEqual(expectedIds);
+  expect(db.prepare('SELECT id, COUNT(*) AS count FROM fork_schema_migrations GROUP BY id ORDER BY id').all()).toEqual(
+    expectedIds.map((id) => ({ id, count: 1 })),
+  );
 }
+
+function runTwiceAndExpectStable(db: Database.Database, bridgeExpected = false, expectedForeignKeys = 1): void {
+  runMigrations(db);
+  expectIntegrated(db, bridgeExpected, expectedForeignKeys);
+  const afterFirstRun = db.serialize();
+
+  runMigrations(db);
+  expectIntegrated(db, bridgeExpected, expectedForeignKeys);
+  expect(db.serialize().equals(afterFirstRun)).toBe(true);
+}
+
+function expectFailureWithoutMutation(db: Database.Database, expected: RegExp): void {
+  const before = db.serialize();
+  expect(() => runMigrations(db)).toThrow(expected);
+  expect(db.serialize().equals(before)).toBe(true);
+}
+
+beforeAll(() => {
+  buildOfficialImages();
+});
 
 afterEach(() => {
   while (openDbs.length > 0) openDbs.pop()?.close();
 });
 
-describe('fork migration runner — official/fork namespace split', () => {
-  it('migrates a stock official 171 database through official 175 and both fork migrations', () => {
-    const db = createFixture({ version: 171 });
-
-    runMigrations(db);
-
-    expectIntegrated(db);
-    expect(migrationIds(db)).not.toContain(LEGACY_COLLISION_BRIDGE_ID);
+describe('fork migration runner — generated official schema matrix', () => {
+  it('DB-FRESH migrates createTables output to the latest official and fork schemas twice', () => {
+    runTwiceAndExpectStable(createFreshFixture());
   });
 
-  it('recognises legacy fork 172, preserves usage, and replays official 172..175', () => {
-    const db = createFixture({ version: 172, googleUsage: true });
+  it.each([171, 172, 173, 175] as const)(
+    'DB-STOCK-%i migrates the source-derived official image and remains stable on replay',
+    (version) => {
+      runTwiceAndExpectStable(createFixture({ officialImageVersion: version }));
+    },
+  );
 
-    runMigrations(db);
+  it('DB-LEGACY-172 rewinds the collision marker, preserves usage, and replays official migrations', () => {
+    const db = createFixture({ marker: 172, googleUsage: 'valid' });
 
-    expectIntegrated(db);
+    runTwiceAndExpectStable(db, true);
+
     expect(db.prepare('SELECT attempts FROM google_api_usage').get()).toEqual({ attempts: 7 });
-    expect(migrationIds(db)).toContain(LEGACY_COLLISION_BRIDGE_ID);
   });
 
-  it('recognises legacy fork 173, preserves the scoped graph, and replays official 172..175', () => {
-    const db = createFixture({ version: 173, googleUsage: true, packing: 'scoped' });
+  it('DB-LEGACY-173 rewinds the collision marker and preserves the scoped template graph', () => {
+    const db = createFixture({ marker: 173, googleUsage: 'valid', packing: 'scoped' });
 
-    runMigrations(db);
+    runTwiceAndExpectStable(db, true);
 
-    expectIntegrated(db);
     expect(db.prepare('SELECT scope, owner_id, created_by FROM packing_templates WHERE id = 10').get()).toEqual({
       scope: 'instance',
       owner_id: null,
       created_by: 1,
     });
-    expect(migrationIds(db)).toContain(LEGACY_COLLISION_BRIDGE_ID);
+    expect(db.prepare('SELECT attempts FROM google_api_usage').get()).toEqual({ attempts: 7 });
   });
 
-  it.each([
-    { version: 172, official172: true, official173: false },
-    { version: 173, official172: true, official173: true },
-  ])('continues a stock official partial schema at version $version', (options) => {
-    const db = createFixture(options);
-
-    runMigrations(db);
-
-    expectIntegrated(db);
-    expect(migrationIds(db)).not.toContain(LEGACY_COLLISION_BRIDGE_ID);
-  });
-
-  it('resumes stock official migration 173 when its schema committed before marker 172 advanced', () => {
-    const db = createFixture({ version: 172, official172: true, official173: true });
-
-    runMigrations(db);
-
-    expectIntegrated(db);
-    expect(migrationIds(db)).not.toContain(LEGACY_COLLISION_BRIDGE_ID);
-  });
-
-  it.each([
-    { version: 172, official172: true, official173: false },
-    { version: 173, official172: true, official173: true },
-  ])('resumes an interrupted legacy bridge after official version $version was recorded', (options) => {
-    const db = createFixture({ ...options, googleUsage: true, packing: 'scoped' });
-    db.exec(`
-      CREATE TABLE fork_schema_migrations (
-        id TEXT PRIMARY KEY,
-        applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    db.prepare('INSERT INTO fork_schema_migrations (id) VALUES (?)').run(LEGACY_COLLISION_BRIDGE_ID);
-
-    runMigrations(db);
-
-    expectIntegrated(db);
-    expect(migrationIds(db)).toContain(LEGACY_COLLISION_BRIDGE_ID);
-  });
-
-  it('resumes a bridge when official migration 173 committed before marker 172 advanced', () => {
+  it('DB-CURRENT-FORK advances marker 175 with exact fork IDs and preserves personal ownership', () => {
     const db = createFixture({
-      version: 172,
-      googleUsage: true,
-      official172: true,
-      official173: true,
+      officialImageVersion: 175,
+      googleUsage: 'valid',
       packing: 'scoped',
+      forkHistory: FORK_MIGRATION_IDS,
     });
-    db.exec(`
-      CREATE TABLE fork_schema_migrations (
-        id TEXT PRIMARY KEY,
-        applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    db.prepare('INSERT INTO fork_schema_migrations (id) VALUES (?)').run(LEGACY_COLLISION_BRIDGE_ID);
-
-    runMigrations(db);
-
-    expectIntegrated(db);
-    expect(migrationIds(db)).toContain(LEGACY_COLLISION_BRIDGE_ID);
-  });
-
-  it('is idempotent and preserves personal template ownership on a second run', () => {
-    const db = createFixture({ version: 171 });
-    runMigrations(db);
     db.prepare(
       "INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES ('Private', 'personal', 2, 2)",
     ).run();
-    const before = migrationIds(db);
 
-    runMigrations(db);
+    runTwiceAndExpectStable(db);
 
-    expect(migrationIds(db)).toEqual(before);
     expect(db.prepare("SELECT scope, owner_id FROM packing_templates WHERE name = 'Private'").get()).toEqual({
       scope: 'personal',
       owner_id: 2,
     });
   });
 
-  it('fails closed for an ambiguous local marker instead of skipping official migrations', () => {
-    const db = createFixture({ version: 173, googleUsage: true });
+  it('DB-OFFICIAL-CRASH resumes when official migration 173 committed before marker 172 advanced', () => {
+    const db = createFixture({ officialImageVersion: 173, marker: 172 });
 
-    expect(() => runMigrations(db)).toThrow(/unknown or mixed schema state/i);
-    expect(db.prepare('SELECT version FROM schema_version').get()).toEqual({ version: 173 });
-    expect(columnNames(db, 'plugins')).not.toContain('update_block_code');
+    runTwiceAndExpectStable(db);
   });
 
-  it('fails closed when local and official 172 signatures are mixed', () => {
-    const db = createFixture({ version: 172, googleUsage: true, official172: true });
+  it('DB-BRIDGE-CRASH rolls back bridge history and marker together, then resumes', () => {
+    const db = createFixture({ marker: 172, googleUsage: 'valid' });
+    const before = db.serialize();
+    db.exec(`
+      CREATE TEMP TRIGGER interrupt_legacy_bridge
+      BEFORE UPDATE OF version ON schema_version
+      WHEN NEW.version = 171
+      BEGIN
+        SELECT RAISE(ABORT, 'bridge interruption');
+      END;
+    `);
 
-    expect(() => runMigrations(db)).toThrow(/unknown or mixed schema state/i);
-    expect(db.prepare('SELECT version FROM schema_version').get()).toEqual({ version: 172 });
+    expect(() => prepareLegacyForkSchema(db)).toThrow(/bridge interruption/i);
+    expect(schemaVersion(db)).toBe(172);
+    expect(migrationIds(db)).toEqual([]);
+    expect(db.serialize().equals(before)).toBe(true);
+
+    db.exec('DROP TRIGGER temp.interrupt_legacy_bridge');
+    runTwiceAndExpectStable(db, true);
   });
 
-  it('fails closed when the deployed packing scope signature has drifted', () => {
-    const db = createFixture({ version: 173, googleUsage: true, packing: 'drifted' });
+  it('DB-FORK-CRASH rolls back a fork schema body when recording its stable ID fails, then resumes', () => {
+    const db = createFixture({ officialImageVersion: 'latest' });
+    db.exec(FORK_MIGRATION_TABLE_SQL);
+    const before = db.serialize();
+    db.exec(`
+      CREATE TEMP TRIGGER interrupt_fork_id_write
+      BEFORE INSERT ON fork_schema_migrations
+      WHEN NEW.id = '${GOOGLE_API_USAGE_MIGRATION_ID}'
+      BEGIN
+        SELECT RAISE(ABORT, 'fork id interruption');
+      END;
+    `);
 
-    expect(() => runMigrations(db)).toThrow(/packing_templates schema does not match/i);
-    expect(db.prepare('SELECT version FROM schema_version').get()).toEqual({ version: 173 });
+    expect(() => runForkMigrations(db)).toThrow(/fork id interruption/i);
+    expect(tableExists(db, 'google_api_usage')).toBe(false);
+    expect(migrationIds(db)).toEqual([]);
+    expect(db.serialize().equals(before)).toBe(true);
+
+    db.exec('DROP TRIGGER temp.interrupt_fork_id_write');
+    runTwiceAndExpectStable(db);
+  });
+
+  it.each([
+    { label: 'enabled', pragma: 'ON', expected: 1 },
+    { label: 'disabled', pragma: 'OFF', expected: 0 },
+  ])(
+    'DB-FORK-CRASH rolls back the packing rebuild with foreign keys $label, preserves the pragma, then resumes',
+    ({ pragma, expected }) => {
+      const db = createFixture({
+        officialImageVersion: 'latest',
+        googleUsage: 'valid',
+        forkHistory: [GOOGLE_API_USAGE_MIGRATION_ID],
+      });
+      db.exec(`PRAGMA foreign_keys = ${pragma}`);
+      const before = db.serialize();
+      db.exec(`
+      CREATE TEMP TRIGGER interrupt_packing_fork_id_write
+      BEFORE INSERT ON fork_schema_migrations
+      WHEN NEW.id = '${PACKING_TEMPLATE_SCOPE_MIGRATION_ID}'
+      BEGIN
+        SELECT RAISE(ABORT, 'packing fork id interruption');
+      END;
+    `);
+
+      expect(() => runForkMigrations(db)).toThrow(/packing fork id interruption/i);
+      expect(columnNames(db, 'packing_templates')).not.toContain('scope');
+      expect(migrationIds(db)).toEqual([GOOGLE_API_USAGE_MIGRATION_ID]);
+      expect(Number(db.pragma('foreign_keys', { simple: true }))).toBe(expected);
+      expect(db.serialize().equals(before)).toBe(true);
+
+      db.exec('DROP TRIGGER temp.interrupt_packing_fork_id_write');
+      runTwiceAndExpectStable(db, false, expected);
+    },
+  );
+
+  it('DB-NESTED rejects adapter and direct fork execution inside an existing transaction without mutation', () => {
+    const db = createFixture({ officialImageVersion: 'latest' });
+    const before = db.serialize();
+
+    expect(() => db.transaction(() => runMigrations(db))()).toThrow(/outside an existing transaction/i);
+    expect(db.serialize().equals(before)).toBe(true);
+    expect(() => db.transaction(() => runForkMigrations(db))()).toThrow(/outside an existing transaction/i);
+    expect(db.serialize().equals(before)).toBe(true);
+  });
+});
+
+describe('fork migration runner — unknown states fail closed', () => {
+  it('rejects mixed local and stock-official signatures', () => {
+    expectFailureWithoutMutation(
+      createFixture({ officialImageVersion: 172, marker: 172, googleUsage: 'valid' }),
+      /unknown or mixed schema state/i,
+    );
+  });
+
+  it.each(['scope-only', 'owner-only', 'drifted'] as const)('rejects a %s packing schema', (packing) => {
+    expectFailureWithoutMutation(
+      createFixture({ marker: 173, googleUsage: 'valid', packing }),
+      /packing_templates schema does not match/i,
+    );
+  });
+
+  it('rejects a malformed google usage schema', () => {
+    expectFailureWithoutMutation(
+      createFixture({ marker: 172, googleUsage: 'malformed' }),
+      /google_api_usage schema does not match/i,
+    );
+  });
+
+  it('rejects a partial official collision signature', () => {
+    const db = createFixture({ officialImageVersion: 172, marker: 172 });
+    db.exec('ALTER TABLE plugins DROP COLUMN update_block_detail');
+
+    expectFailureWithoutMutation(db, /unknown or mixed schema state/i);
+  });
+
+  it('rejects multiple official marker rows', () => {
+    const db = createFixture();
+    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(171);
+
+    expectFailureWithoutMutation(db, /at most one row/i);
   });
 });

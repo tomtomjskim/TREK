@@ -183,23 +183,34 @@ export function assertPackingTemplateScopeSchema(db: Database.Database): void {
   }
 }
 
-function migrateGoogleApiUsage(db: Database.Database): void {
-  if (googleApiUsageSchemaState(db) === 'missing') {
-    db.exec(`
-      CREATE TABLE google_api_usage (
-        period TEXT NOT NULL,
-        sku TEXT NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (period, sku)
-      )
-    `);
-  }
-  assertGoogleApiUsageSchema(db);
+type RecordApplied = () => void;
+
+function migrateGoogleApiUsage(db: Database.Database, recordApplied: RecordApplied): void {
+  db.transaction(() => {
+    if (googleApiUsageSchemaState(db) === 'missing') {
+      db.exec(`
+        CREATE TABLE google_api_usage (
+          period TEXT NOT NULL,
+          sku TEXT NOT NULL,
+          attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (period, sku)
+        )
+      `);
+    }
+    assertGoogleApiUsageSchema(db);
+    recordApplied();
+  })();
 }
 
-function migratePackingTemplateScope(db: Database.Database): void {
-  if (packingTemplateSchemaState(db) === 'scoped') return;
+function migratePackingTemplateScope(db: Database.Database, recordApplied: RecordApplied): void {
+  if (packingTemplateSchemaState(db) === 'scoped') {
+    db.transaction(() => {
+      assertPackingTemplateScopeSchema(db);
+      recordApplied();
+    })();
+    return;
+  }
 
   const foreignKeysEnabled = Number(db.pragma('foreign_keys', { simple: true })) === 1;
   if (foreignKeysEnabled) db.exec('PRAGMA foreign_keys = OFF');
@@ -237,11 +248,12 @@ function migratePackingTemplateScope(db: Database.Database): void {
       if (violations.length > 0) {
         throw new Error(`packing template scope migration produced ${violations.length} foreign key violation(s)`);
       }
+      assertPackingTemplateScopeSchema(db);
+      recordApplied();
     })();
   } finally {
     if (foreignKeysEnabled) db.exec('PRAGMA foreign_keys = ON');
   }
-  assertPackingTemplateScopeSchema(db);
 }
 
 const forkMigrations = [
@@ -250,14 +262,16 @@ const forkMigrations = [
 ] as const;
 
 export function runForkMigrations(db: Database.Database): void {
+  if (db.inTransaction) {
+    throw new Error('Fork migrations must run outside an existing transaction');
+  }
   db.exec(FORK_MIGRATION_TABLE_SQL);
   const hasMigration = db.prepare('SELECT 1 FROM fork_schema_migrations WHERE id = ?');
   const recordMigration = db.prepare('INSERT INTO fork_schema_migrations (id) VALUES (?)');
 
   for (const migration of forkMigrations) {
     if (!hasMigration.get(migration.id)) {
-      migration.run(db);
-      recordMigration.run(migration.id);
+      migration.run(db, () => recordMigration.run(migration.id));
     }
   }
 

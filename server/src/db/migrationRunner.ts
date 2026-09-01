@@ -96,6 +96,9 @@ export function prepareLegacyForkSchema(db: Database.Database): void {
 }
 
 export function runMigrations(db: Database.Database): void {
+  if (db.inTransaction) {
+    throw new Error('Migration adapter must run outside an existing transaction');
+  }
   prepareLegacyForkSchema(db);
   runOfficialMigrations(db);
   runForkMigrations(db);
