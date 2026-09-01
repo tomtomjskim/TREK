@@ -128,7 +128,7 @@ describe('createOrUpdate', () => {
     const before = Date.now();
     const result = svc.createOrUpdate(String(trip.id), user.id, {});
     expect(result.created).toBe(true);
-    expect(result.token).toMatch(/^[A-Za-z0-9_-]+$/); // base64url
+    expect(result.token).toMatch(/^[A-Za-z0-9_-]{32,}$/); // minimum base64url token shape
     const row = shareRow(trip.id);
     expect(row.token).toBe(result.token);
     expect(row.created_by).toBe(user.id);
@@ -463,6 +463,28 @@ describe('getSharedPlacePhotoKey', () => {
     serveKey.mockReturnValue('abc.jpg');
     expect(await svc.getSharedPlacePhotoKey(token, placeId)).toBe('abc.jpg');
     expect(serveKey).toHaveBeenCalledWith(placeId);
+  });
+
+  it('SHARE-SVC-034: revocation closes payload/photo access and reissue uses a different token', async () => {
+    const { user, trip, token } = seedSharedTrip();
+    const place = createPlace(testDb, trip.id);
+    const placeId = 'ChIJrevokedPhoto';
+    testDb.prepare('UPDATE places SET image_url = ? WHERE id = ?')
+      .run(`/api/maps/place-photo/${placeId}/bytes`, place.id);
+    serveKey.mockReturnValue('revoked-photo.jpg');
+
+    expect(svc.getSharedTripData(token)).not.toBeNull();
+    expect(await svc.getSharedPlacePhotoKey(token, placeId)).toBe('revoked-photo.jpg');
+
+    svc.remove(String(trip.id));
+    expect(svc.getSharedTripData(token)).toBeNull();
+    expect(await svc.getSharedPlacePhotoKey(token, placeId)).toBeNull();
+
+    const reissued = svc.createOrUpdate(String(trip.id), user.id, {});
+    expect(reissued.token).not.toBe(token);
+    expect(reissued.token).toMatch(/^[A-Za-z0-9_-]{32,}$/);
+    expect(svc.getSharedTripData(reissued.token)).not.toBeNull();
+    expect(await svc.getSharedPlacePhotoKey(reissued.token, placeId)).toBe('revoked-photo.jpg');
   });
 });
 

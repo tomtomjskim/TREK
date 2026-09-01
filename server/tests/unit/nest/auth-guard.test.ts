@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { HttpException } from '@nestjs/common';
+import { GUARDS_METADATA } from '@nestjs/common/constants';
 import type { Request } from 'express';
 
 vi.mock('../../../src/nest/auth/jwt-verify', () => ({ extractToken: vi.fn(), verifyJwtAndLoadUser: vi.fn() }));
@@ -12,6 +13,7 @@ import { CookieAuthGuard } from '../../../src/nest/auth/cookie-auth.guard';
 import { OptionalJwtGuard } from '../../../src/nest/auth/optional-jwt.guard';
 import { AdminGuard } from '../../../src/nest/auth/admin.guard';
 import { PasskeyEnabledGuard } from '../../../src/nest/auth/passkey-enabled.guard';
+import { GlobalAuthGuard } from '../../../src/nest/auth/global-auth.guard';
 import { PasskeyController } from '../../../src/nest/auth/passkey.controller';
 import { RateLimitService } from '../../../src/nest/common/rate-limit.service';
 
@@ -38,11 +40,19 @@ import type { PasskeyService } from '../../../src/nest/auth/passkey.service';
 import { setAuthCookie } from '../../../src/nest/common/cookie';
 import type { AuditService } from '../../../src/nest/audit/audit.service';
 import type { User } from '../../../src/types';
+import { IS_PUBLIC, OPTIONAL_AUTH } from '../../../src/nest/auth/public.decorator';
 
 const user = { id: 1, username: 'u', role: 'user', email: 'u@example.test' } as User;
 
 function context(req: unknown) {
   return { switchToHttp: () => ({ getRequest: () => req }) } as never;
+}
+function globalContext(req: unknown, handler: object, controller: object) {
+  return {
+    getHandler: () => handler,
+    getClass: () => controller,
+    switchToHttp: () => ({ getRequest: () => req }),
+  } as never;
 }
 function thrown(fn: () => unknown): { status: number; body: unknown } {
   try { fn(); } catch (err) {
@@ -62,6 +72,98 @@ async function thrownAsync(fn: () => Promise<unknown>): Promise<{ status: number
 }
 
 beforeEach(() => vi.clearAllMocks());
+
+describe('GlobalAuthGuard', () => {
+  function setup(options: {
+    publicRoute?: boolean;
+    optionalRoute?: boolean;
+    handlerGuards?: unknown[];
+    controllerGuards?: unknown[];
+  } = {}) {
+    const req: Record<string, unknown> = { headers: {} };
+    const handler = {};
+    const controller = {};
+    const reflector = {
+      getAllAndOverride: vi.fn((key: string) => {
+        if (key === IS_PUBLIC) return options.publicRoute ? { reason: 'test' } : undefined;
+        if (key === OPTIONAL_AUTH) return options.optionalRoute ? { reason: 'test' } : undefined;
+        return undefined;
+      }),
+      get: vi.fn((key: string, target: object) => {
+        if (key !== GUARDS_METADATA) return undefined;
+        return target === handler ? options.handlerGuards : options.controllerGuards;
+      }),
+    };
+    return { guard: new GlobalAuthGuard(reflector as never), req, ctx: globalContext(req, handler, controller) };
+  }
+
+  it('@Public allows anonymous access without resolving a token', () => {
+    const { guard, ctx } = setup({ publicRoute: true });
+    expect(guard.canActivate(ctx)).toBe(true);
+    expect(extractToken).not.toHaveBeenCalled();
+    expect(verifyJwtAndLoadUser).not.toHaveBeenCalled();
+  });
+
+  it('@OptionalAuth allows anonymous access and attaches null', () => {
+    const { guard, req, ctx } = setup({ optionalRoute: true });
+    vi.mocked(extractToken).mockReturnValue(null);
+    expect(guard.canActivate(ctx)).toBe(true);
+    expect(req.user).toBeNull();
+  });
+
+  it('@OptionalAuth attaches the verified user when a token is present', () => {
+    const { guard, req, ctx } = setup({ optionalRoute: true });
+    vi.mocked(extractToken).mockReturnValue('tok');
+    vi.mocked(verifyJwtAndLoadUser).mockReturnValue(user);
+    expect(guard.canActivate(ctx)).toBe(true);
+    expect(req.user).toBe(user);
+  });
+
+  it('default-denies a request without a token', () => {
+    const { guard, ctx } = setup();
+    vi.mocked(extractToken).mockReturnValue(null);
+    expect(thrown(() => guard.canActivate(ctx))).toEqual({
+      status: 401,
+      body: { error: 'Access token required', code: 'AUTH_REQUIRED' },
+    });
+  });
+
+  it('default-denies an invalid token', () => {
+    const { guard, ctx } = setup();
+    vi.mocked(extractToken).mockReturnValue('tok');
+    vi.mocked(verifyJwtAndLoadUser).mockReturnValue(null);
+    expect(thrown(() => guard.canActivate(ctx))).toEqual({
+      status: 401,
+      body: { error: 'Invalid or expired token', code: 'AUTH_REQUIRED' },
+    });
+  });
+
+  it('attaches the verified user for a valid default-deny route', () => {
+    const { guard, req, ctx } = setup();
+    vi.mocked(extractToken).mockReturnValue('tok');
+    vi.mocked(verifyJwtAndLoadUser).mockReturnValue(user);
+    expect(guard.canActivate(ctx)).toBe(true);
+    expect(req.user).toBe(user);
+  });
+
+  it.each([
+    ['handler', { handlerGuards: [class HandlerGuard {}] }],
+    ['controller', { controllerGuards: [class ControllerGuard {}] }],
+  ])('stands down for a declared %s guard chain while attaching null for anonymous access', (_scope, metadata) => {
+    const { guard, req, ctx } = setup(metadata);
+    vi.mocked(extractToken).mockReturnValue(null);
+    expect(guard.canActivate(ctx)).toBe(true);
+    expect(req.user).toBeNull();
+  });
+
+  it('stands down for a declared guard chain while attaching the verified user', () => {
+    const { guard, req, ctx } = setup({ handlerGuards: [class HandlerGuard {}] });
+    vi.mocked(extractToken).mockReturnValue('tok');
+    vi.mocked(verifyJwtAndLoadUser).mockReturnValue(user);
+    expect(guard.canActivate(ctx)).toBe(true);
+    expect(req.user).toBe(user);
+  });
+});
 
 describe('JwtAuthGuard', () => {
   const guard = new JwtAuthGuard();

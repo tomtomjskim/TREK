@@ -563,7 +563,7 @@ describe('Shared trip — place photos in shared links (issue #1100)', () => {
       .post(`/api/trips/${trip.id}/share-link`)
       .set('Cookie', authCookie(user.id))
       .send({});
-    return { token, place };
+    return { token, place, trip, user };
   }
 
   it('SHARE-016 — shared payload rewrites place image_url to the public token-scoped proxy', async () => {
@@ -625,6 +625,22 @@ describe('Shared trip — place photos in shared links (issue #1100)', () => {
     expect(res.text ?? '').toBe('');
   });
 
+  it('SHARE-020b — an expired token returns payload 404 and photo 204 with no-store', async () => {
+    const { token, trip } = await setupSharedPlaceWithPhoto();
+    await placePhotoCache.put(PLACE_ID, photoBytes, null);
+    cachedFilePath = path.join(DEFAULT_UPLOADS_ROOT, 'photos/google', `${crypto.createHash('sha1').update(PLACE_ID).digest('hex')}.jpg`);
+    expect((await request(app).get(`/api/shared/${token}`)).status).toBe(200);
+    expect((await request(app).get(`/api/shared/${token}/place-photo/${encodeURIComponent(PLACE_ID)}/bytes`)).status).toBe(200);
+
+    testDb.prepare('UPDATE share_tokens SET expires_at = ? WHERE trip_id = ?')
+      .run('2020-01-01T00:00:00.000Z', trip.id);
+
+    expect((await request(app).get(`/api/shared/${token}`)).status).toBe(404);
+    const expiredPhoto = await request(app).get(`/api/shared/${token}/place-photo/${encodeURIComponent(PLACE_ID)}/bytes`);
+    expect(expiredPhoto.status).toBe(204);
+    expect(expiredPhoto.headers['cache-control']).toBe('no-store');
+  });
+
   // Regression — GHSA-9hc8 sibling: place photos are part of the map/itinerary,
   // so the proxy must stream nothing when the owner disabled the map, even
   // with a valid token + cached bytes.
@@ -643,5 +659,34 @@ describe('Shared trip — place photos in shared links (issue #1100)', () => {
     const res = await request(app).get(`/api/shared/${token}/place-photo/${encodeURIComponent(PLACE_ID)}/bytes`);
     expect(res.status).toBe(204);
     expect(res.text ?? '').toBe('');
+  });
+
+  it('SHARE-032 — revocation closes payload/photo access and reissue uses a different token', async () => {
+    const { token, trip, user } = await setupSharedPlaceWithPhoto();
+    await placePhotoCache.put(PLACE_ID, photoBytes, null);
+    cachedFilePath = path.join(DEFAULT_UPLOADS_ROOT, 'photos/google', `${crypto.createHash('sha1').update(PLACE_ID).digest('hex')}.jpg`);
+
+    expect((await request(app).get(`/api/shared/${token}`)).status).toBe(200);
+    expect((await request(app).get(`/api/shared/${token}/place-photo/${encodeURIComponent(PLACE_ID)}/bytes`)).status).toBe(200);
+
+    const revoked = await request(app)
+      .delete(`/api/trips/${trip.id}/share-link`)
+      .set('Cookie', authCookie(user.id));
+    expect(revoked.status).toBe(200);
+
+    expect((await request(app).get(`/api/shared/${token}`)).status).toBe(404);
+    const revokedPhoto = await request(app).get(`/api/shared/${token}/place-photo/${encodeURIComponent(PLACE_ID)}/bytes`);
+    expect(revokedPhoto.status).toBe(204);
+    expect(revokedPhoto.headers['cache-control']).toBe('no-store');
+
+    const reissued = await request(app)
+      .post(`/api/trips/${trip.id}/share-link`)
+      .set('Cookie', authCookie(user.id))
+      .send({});
+    expect(reissued.status).toBe(201);
+    expect(reissued.body.token).not.toBe(token);
+    expect(reissued.body.token).toMatch(/^[A-Za-z0-9_-]{32,}$/);
+    expect((await request(app).get(`/api/shared/${reissued.body.token}`)).status).toBe(200);
+    expect((await request(app).get(`/api/shared/${reissued.body.token}/place-photo/${encodeURIComponent(PLACE_ID)}/bytes`)).status).toBe(200);
   });
 });
