@@ -202,6 +202,226 @@ describe('Shared trip access', () => {
     expect(res.body.trip.title).toBe('Paris Adventure');
   });
 
+  it('SHARE-031 — HTTP response uses the exact reviewed key set for every enabled section', async () => {
+    const keys = (value: Record<string, unknown>) => Object.keys(value).sort();
+    const { user } = createUser(testDb, { username: 'public-owner' });
+    const trip = createTrip(testDb, user.id, {
+      title: 'Exact public contract',
+      description: 'Public description',
+      start_date: '2026-09-01',
+      end_date: '2026-09-01',
+    });
+    testDb.prepare('UPDATE trips SET cover_image = ?, currency = ? WHERE id = ?')
+      .run('/uploads/public-cover.jpg', 'KRW', trip.id);
+    const day = testDb.prepare('SELECT id, day_number FROM days WHERE trip_id = ?').get(trip.id) as { id: number; day_number: number };
+    testDb.prepare('UPDATE days SET title = ?, notes = ? WHERE id = ?')
+      .run('Public day', 'FORBIDDEN_DAY_ROW_SENTINEL', day.id);
+    const categoryResult = testDb.prepare(
+      "INSERT INTO categories (name, color, icon, user_id) VALUES ('Museum', '#112233', 'Landmark', ?)"
+    ).run(user.id);
+    const categoryId = Number(categoryResult.lastInsertRowid);
+    const place = createPlace(testDb, trip.id, { name: 'Public place', category_id: categoryId });
+    testDb.prepare(`
+      UPDATE places SET description = ?, address = ?, place_time = ?, end_time = ?, image_url = ?, notes = ?,
+        google_place_id = ?, website = ?, reservation_notes = ? WHERE id = ?
+    `).run(
+      'Public place description', 'Public address', '09:00', '10:00', '/uploads/public-place.jpg',
+      'PLACE_SHARED_SENTINEL', 'FORBIDDEN_PROVIDER_SENTINEL', 'FORBIDDEN_WEBSITE_SENTINEL',
+      'FORBIDDEN_PLACE_BOOKING_SENTINEL', place.id,
+    );
+    const assignment = createDayAssignment(testDb, day.id, place.id, { notes: 'FORBIDDEN_ASSIGNMENT_SENTINEL' });
+    createDayNote(testDb, day.id, trip.id, { text: 'Public timeline note', time: '08:30' });
+
+    const reservationResult = testDb.prepare(`
+      INSERT INTO reservations (
+        trip_id, day_id, end_day_id, assignment_id, title, type, status, reservation_time,
+        reservation_end_time, location, confirmation_number, notes, metadata, day_plan_position
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      trip.id, day.id, day.id, assignment.id, 'Public flight', 'flight', 'confirmed',
+      '2026-09-01T11:00:00Z', '2026-09-01T13:00:00Z', 'Public terminal',
+      'FORBIDDEN_CONFIRMATION_SENTINEL', 'FORBIDDEN_RESERVATION_NOTE_SENTINEL',
+      JSON.stringify({
+        airline: 'Safe Air',
+        flight_number: 'SA100',
+        provider_id: 'FORBIDDEN_METADATA_SENTINEL',
+        legs: [{
+          from: 'ICN', to: 'NRT', dep_day_id: day.id, dep_time: '11:00', arr_day_id: day.id,
+          arr_time: '13:00', day_positions: { [day.id]: 1, ignored: 'FORBIDDEN_POSITION_SENTINEL' },
+          secret: 'FORBIDDEN_LEG_SENTINEL',
+        }],
+      }),
+      2,
+    );
+    const reservationId = Number(reservationResult.lastInsertRowid);
+    testDb.prepare('INSERT INTO reservation_day_positions (reservation_id, day_id, position) VALUES (?, ?, ?)')
+      .run(reservationId, day.id, 1.5);
+    testDb.prepare(`
+      INSERT INTO day_accommodations (trip_id, place_id, start_day_id, end_day_id, confirmation, notes)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(trip.id, place.id, day.id, day.id, 'FORBIDDEN_STAY_CONFIRMATION', 'FORBIDDEN_STAY_NOTE');
+    testDb.prepare(`
+      INSERT INTO packing_items (trip_id, name, category, checked, is_private, owner_id)
+      VALUES (?, 'Public passport', 'Documents', 0, 0, ?)
+    `).run(trip.id, user.id);
+    testDb.prepare(`
+      INSERT INTO packing_items (trip_id, name, category, checked, is_private, owner_id)
+      VALUES (?, 'FORBIDDEN_PRIVATE_PACKING_SENTINEL', 'Private', 0, 1, ?)
+    `).run(trip.id, user.id);
+    testDb.prepare(`
+      INSERT INTO budget_items (trip_id, category, name, total_price, currency, note)
+      VALUES (?, 'Transport', 'Public fare', 12000, 'KRW', 'FORBIDDEN_BUDGET_NOTE_SENTINEL')
+    `).run(trip.id);
+    testDb.prepare(`
+      INSERT INTO collab_messages (trip_id, user_id, text, deleted)
+      VALUES (?, ?, 'Public chat message', 0)
+    `).run(trip.id, user.id);
+
+    const created = await request(app)
+      .post(`/api/trips/${trip.id}/share-link`)
+      .set('Cookie', authCookie(user.id))
+      .send({
+        share_map: true,
+        share_bookings: true,
+        share_packing: true,
+        share_budget: true,
+        share_collab: true,
+      });
+    const res = await request(app).get(`/api/shared/${created.body.token}`);
+
+    expect(res.status).toBe(200);
+    expect(keys(res.body)).toEqual([
+      'accommodations', 'assignments', 'baseCurrency', 'budget', 'cartoApiKey', 'categories', 'collab',
+      'dayNotes', 'days', 'packing', 'permissions', 'places', 'reservations', 'trip',
+    ].sort());
+    expect(keys(res.body.trip)).toEqual(['cover_image', 'currency', 'description', 'end_date', 'start_date', 'title']);
+    expect(keys(res.body.permissions)).toEqual([
+      'share_bookings', 'share_budget', 'share_collab', 'share_map', 'share_packing',
+    ]);
+    expect(keys(res.body.days[0])).toEqual(['date', 'day_number', 'id', 'title']);
+    expect(keys(res.body.assignments[day.id][0])).toEqual(['id', 'order_index', 'place']);
+    expect(keys(res.body.assignments[day.id][0].place)).toEqual([
+      'address', 'category', 'category_id', 'description', 'end_time', 'id', 'image_url', 'lat', 'lng',
+      'name', 'notes', 'place_time',
+    ]);
+    expect(keys(res.body.assignments[day.id][0].place.category)).toEqual(['color', 'icon']);
+    expect(keys(res.body.places[0])).toEqual([
+      'category_color', 'category_icon', 'id', 'lat', 'lng', 'name', 'notes',
+    ]);
+    expect(keys(res.body.categories[0])).toEqual(['color', 'id']);
+    expect(keys(res.body.dayNotes[day.id][0])).toEqual(['id', 'sort_order', 'text', 'time']);
+    expect(keys(res.body.reservations[0])).toEqual([
+      'assignment_id', 'day_id', 'day_plan_position', 'day_positions', 'end_day_id', 'id', 'location',
+      'metadata', 'reservation_end_time', 'reservation_time', 'status', 'title', 'type',
+    ]);
+    expect(keys(res.body.reservations[0].metadata)).toEqual(['airline', 'flight_number', 'legs']);
+    expect(keys(res.body.reservations[0].metadata.legs[0])).toEqual([
+      'arr_day_id', 'arr_time', 'day_positions', 'dep_day_id', 'dep_time', 'from', 'to',
+    ]);
+    expect(keys(res.body.reservations[0].metadata.legs[0].day_positions)).toEqual([String(day.id)]);
+    expect(keys(res.body.accommodations[0])).toEqual(['end_day_id', 'id', 'place_name', 'start_day_id']);
+    expect(keys(res.body.packing[0])).toEqual(['category', 'checked', 'id', 'name']);
+    expect(keys(res.body.budget[0])).toEqual(['category', 'currency', 'id', 'name', 'total_price']);
+    expect(keys(res.body.collab[0])).toEqual(['avatar', 'created_at', 'id', 'text', 'username']);
+    expect(res.body.assignments[day.id][0].place.notes).toBe('PLACE_SHARED_SENTINEL');
+    expect(res.body.places[0].notes).toBe('PLACE_SHARED_SENTINEL');
+
+    const serialized = JSON.stringify(res.body);
+    for (const forbidden of [
+      'FORBIDDEN_DAY_ROW_SENTINEL', 'FORBIDDEN_PROVIDER_SENTINEL', 'FORBIDDEN_WEBSITE_SENTINEL',
+      'FORBIDDEN_PLACE_BOOKING_SENTINEL', 'FORBIDDEN_ASSIGNMENT_SENTINEL',
+      'FORBIDDEN_CONFIRMATION_SENTINEL', 'FORBIDDEN_RESERVATION_NOTE_SENTINEL',
+      'FORBIDDEN_METADATA_SENTINEL', 'FORBIDDEN_POSITION_SENTINEL', 'FORBIDDEN_LEG_SENTINEL',
+      'FORBIDDEN_STAY_CONFIRMATION', 'FORBIDDEN_STAY_NOTE', 'FORBIDDEN_PRIVATE_PACKING_SENTINEL',
+      'FORBIDDEN_BUDGET_NOTE_SENTINEL',
+    ]) expect(serialized).not.toContain(forbidden);
+  });
+
+  it('SHARE-031b — disabled flags keep empty shapes and issue no section query', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const day = createDay(testDb, trip.id);
+    const place = createPlace(testDb, trip.id, { name: 'NO_QUERY_PLACE_SENTINEL' });
+    createDayAssignment(testDb, day.id, place.id);
+    testDb.prepare("UPDATE places SET notes = 'NO_QUERY_NOTE_SENTINEL' WHERE id = ?").run(place.id);
+    testDb.prepare("INSERT INTO reservations (trip_id, title) VALUES (?, 'NO_QUERY_BOOKING_SENTINEL')").run(trip.id);
+    testDb.prepare("INSERT INTO packing_items (trip_id, name) VALUES (?, 'NO_QUERY_PACKING_SENTINEL')").run(trip.id);
+    testDb.prepare("INSERT INTO budget_items (trip_id, name) VALUES (?, 'NO_QUERY_BUDGET_SENTINEL')").run(trip.id);
+    testDb.prepare("INSERT INTO collab_messages (trip_id, user_id, text, deleted) VALUES (?, ?, 'NO_QUERY_COLLAB_SENTINEL', 0)")
+      .run(trip.id, user.id);
+    const created = await request(app)
+      .post(`/api/trips/${trip.id}/share-link`)
+      .set('Cookie', authCookie(user.id))
+      .send({
+        share_map: false,
+        share_bookings: false,
+        share_packing: false,
+        share_budget: false,
+        share_collab: false,
+      });
+
+    const allSpy = vi.spyOn(DatabaseService.prototype, 'all');
+    const getSpy = vi.spyOn(DatabaseService.prototype, 'get');
+    try {
+      const res = await request(app).get(`/api/shared/${created.body.token}`);
+      expect(res.status).toBe(200);
+      expect(res.body.days).toEqual([]);
+      expect(res.body.assignments).toEqual({});
+      expect(res.body.dayNotes).toEqual({});
+      expect(res.body.places).toEqual([]);
+      expect(res.body.categories).toEqual([]);
+      expect(res.body.reservations).toEqual([]);
+      expect(res.body.accommodations).toEqual([]);
+      expect(res.body.packing).toEqual([]);
+      expect(res.body.budget).toEqual([]);
+      expect(res.body.collab).toEqual([]);
+      expect(JSON.stringify(res.body)).not.toContain('NO_QUERY_');
+
+      const allSql = allSpy.mock.calls.map(([sql]) => String(sql)).join('\n').toLowerCase();
+      const getSql = getSpy.mock.calls.map(([sql]) => String(sql)).join('\n').toLowerCase();
+      for (const table of [
+        'days', 'day_assignments', 'day_notes', 'places', 'categories', 'reservations',
+        'day_accommodations', 'packing_items', 'budget_items', 'collab_messages',
+      ]) expect(allSql).not.toContain(table);
+      expect(getSql).not.toContain('settings');
+      expect(getSql).not.toContain('app_settings');
+    } finally {
+      allSpy.mockRestore();
+      getSpy.mockRestore();
+    }
+  });
+
+  it('SHARE-031c — malformed booking metadata and cross-trip place links fail closed over HTTP', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const otherTrip = createTrip(testDb, user.id);
+    const day = createDay(testDb, trip.id);
+    const foreignPlace = createPlace(testDb, otherTrip.id, { name: 'FOREIGN_PLACE_SENTINEL' });
+    testDb.prepare("UPDATE places SET notes = 'FOREIGN_NOTE_SENTINEL' WHERE id = ?").run(foreignPlace.id);
+    createDayAssignment(testDb, day.id, foreignPlace.id, { notes: 'FOREIGN_ASSIGNMENT_SENTINEL' });
+    testDb.prepare(`
+      INSERT INTO day_accommodations (trip_id, place_id, start_day_id, end_day_id)
+      VALUES (?, ?, ?, ?)
+    `).run(trip.id, foreignPlace.id, day.id, day.id);
+    testDb.prepare(`
+      INSERT INTO reservations (trip_id, title, metadata)
+      VALUES (?, 'Malformed metadata booking', '{not-json')
+    `).run(trip.id);
+
+    const created = await request(app)
+      .post(`/api/trips/${trip.id}/share-link`)
+      .set('Cookie', authCookie(user.id))
+      .send({ share_map: true, share_bookings: true });
+    const res = await request(app).get(`/api/shared/${created.body.token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.assignments).toEqual({});
+    expect(res.body.accommodations).toEqual([]);
+    expect(res.body.reservations).toHaveLength(1);
+    expect(res.body.reservations[0].metadata).toEqual({});
+    expect(JSON.stringify(res.body)).not.toContain('FOREIGN_');
+  });
+
   it('SHARE-007 — GET /shared/:token hides budget when share_budget=false', async () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
@@ -343,6 +563,7 @@ describe('Shared trip — day assignments and notes', () => {
     const day = createDay(testDb, trip.id, { date: '2025-06-01' });
     const place = createPlace(testDb, trip.id, { name: 'Colosseum', lat: 41.89, lng: 12.49 });
     createDayAssignment(testDb, day.id, place.id, { notes: 'Amazing site' });
+    testDb.prepare('UPDATE places SET notes = ? WHERE id = ?').run('PLACE_SHARED_SENTINEL', place.id);
 
     const create = await request(app)
       .post(`/api/trips/${trip.id}/share-link`)
@@ -358,6 +579,9 @@ describe('Shared trip — day assignments and notes', () => {
     expect(dayAssignments).toHaveLength(1);
     expect(dayAssignments[0].place.name).toBe('Colosseum');
     expect(dayAssignments[0].place.lat).toBe(41.89);
+    expect(dayAssignments[0].place.notes).toBe('PLACE_SHARED_SENTINEL');
+    expect(res.body.places.find((entry: any) => entry.id === place.id).notes).toBe('PLACE_SHARED_SENTINEL');
+    expect(JSON.stringify(res.body)).not.toContain('Amazing site');
   });
 
   it('SHARE-011 — shared trip with day notes includes notes in response', async () => {
@@ -524,8 +748,8 @@ describe('Shared trip — display currency (issue #1361)', () => {
   });
 });
 
-describe('Shared trip: CARTO tile key (issue #2054)', () => {
-  it('SHARE-029: the payload carries the owner\'s carto_api_key, behind it the admin instance default', async () => {
+describe('Shared trip: CARTO tile key privacy', () => {
+  it('SHARE-029: the payload never carries an owner or instance CARTO key', async () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
     testDb.prepare("INSERT INTO app_settings (key, value) VALUES ('default_user_setting_carto_api_key', 'instance-key')").run();
@@ -537,11 +761,11 @@ describe('Shared trip: CARTO tile key (issue #2054)', () => {
 
     const inherited = await request(app).get(`/api/shared/${token}`);
     expect(inherited.status).toBe(200);
-    expect(inherited.body.cartoApiKey).toBe('instance-key');
+    expect(inherited.body.cartoApiKey).toBe('');
 
     testDb.prepare("INSERT INTO settings (user_id, key, value) VALUES (?, 'carto_api_key', 'owner-key')").run(user.id);
     const own = await request(app).get(`/api/shared/${token}`);
-    expect(own.body.cartoApiKey).toBe('owner-key');
+    expect(own.body.cartoApiKey).toBe('');
   });
 });
 
@@ -566,13 +790,12 @@ describe('Shared trip — place photos in shared links (issue #1100)', () => {
     return { token, place, trip, user };
   }
 
-  it('SHARE-016 — shared payload rewrites place image_url to the public token-scoped proxy', async () => {
+  it('SHARE-016 — compact top-level map places omit image_url', async () => {
     const { token } = await setupSharedPlaceWithPhoto();
     const res = await request(app).get(`/api/shared/${token}`);
     expect(res.status).toBe(200);
-    const place = res.body.places.find((p: any) => p.image_url);
-    expect(place.image_url).toBe(`/api/shared/${token}/place-photo/${encodeURIComponent(PLACE_ID)}/bytes`);
-    expect(place.image_url.startsWith('/api/maps/')).toBe(false);
+    expect(res.body.places).toHaveLength(1);
+    expect(res.body.places[0]).not.toHaveProperty('image_url');
   });
 
   it('SHARE-017 — shared payload rewrites assignment place image_url too', async () => {
