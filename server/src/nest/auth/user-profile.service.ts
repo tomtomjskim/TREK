@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { readEnv, getAppUrl } from '../../app-config';
+import { readEnv } from '../../app-config';
 import { DatabaseService } from '../database/database.service';
 import { StorageService } from '../storage/storage.service';
 import { decrypt_api_key, maybe_encrypt_api_key } from '../common/crypto/apiKeyCrypto';
@@ -15,6 +15,7 @@ import {
 } from '../settings/instance-api-keys';
 import { SEARCH_TEXT_FIELD_MASK } from '../maps/maps.helpers';
 import { User } from '../../types';
+import { GoogleApiTransportService } from '../google-api-usage/google-api-transport.service';
 
 /**
  * The account a user administers about themselves: display settings, avatar,
@@ -35,6 +36,7 @@ export class UserProfileService {
   constructor(
     private readonly db: DatabaseService,
     private readonly storage: StorageService,
+    private readonly googleTransport: GoogleApiTransportService,
   ) {}
 
   /**
@@ -348,15 +350,15 @@ export class UserProfileService {
     const { key: maps_api_key } = resolveApiKey(this.db, 'maps_api_key', userId, readEnv().maps.placesApiKey);
     if (maps_api_key) {
       try {
-        // Same Referer as maps.service googleFetch — without it, keys with an
+        // Same Referer as every map call through GoogleApiTransportService — without it, keys with an
         // HTTP-referrer restriction fail validation while real requests succeed.
-        const referer = readEnv().app.appUrl ? getAppUrl() : undefined;
-        const mapsRes = await fetch(
-          `https://places.googleapis.com/v1/places:searchText`,
-          {
+        const mapsRes = await this.googleTransport.fetch({
+            url: 'https://places.googleapis.com/v1/places:searchText',
+            sku: 'text_search_enterprise',
+            label: 'validateKeys(searchText)',
+            init: {
             method: 'POST',
             headers: {
-              ...(referer ? { Referer: referer } : {}),
               'Content-Type': 'application/json',
               'X-Goog-Api-Key': maps_api_key,
               // The mask the real search sends. A narrower probe passes on keys
@@ -364,8 +366,8 @@ export class UserProfileService {
               'X-Goog-FieldMask': SEARCH_TEXT_FIELD_MASK,
             },
             body: JSON.stringify({ textQuery: 'test' }),
-          }
-        );
+            },
+          });
         result.maps = mapsRes.status === 200;
         let error_text: string | null = null;
         let error_json: any = null;

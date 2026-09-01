@@ -7,11 +7,12 @@
  * change, and what is left behind on teardown.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
+import { act, render, waitFor } from '@testing-library/react'
 import type * as L from 'leaflet'
 import { maplibreGL as bridge } from '@maplibre/maplibre-gl-leaflet'
 import { VectorBasemap, attachVectorBasemap, hideLabelLayers, type GlLeafletLayer } from './VectorBasemap'
 import { OFM_POSITRON, OFM_DARK, OFM_ATTRIBUTION } from '../../constants/mapDefaults'
+import { useSettingsStore } from '../../store/settingsStore'
 
 const addAttribution = vi.fn()
 /** Only the two things the component touches; casting keeps the mock honest about that. */
@@ -38,6 +39,7 @@ vi.mock('@maplibre/maplibre-gl-leaflet', () => {
           { id: 'country-label', type: 'symbol' },
         ],
       })),
+      getLayoutProperty: vi.fn(() => ['get', 'name']),
       setLayoutProperty: vi.fn(),
     }
     const layer: Record<string, unknown> = { remove: vi.fn(), getMaplibreMap: vi.fn(() => gl) }
@@ -57,6 +59,7 @@ interface MockGl {
   on: Spy
   isStyleLoaded: Spy
   getStyle: Spy
+  getLayoutProperty: Spy
   setLayoutProperty: Spy
 }
 
@@ -69,6 +72,7 @@ function lastLayer(): { layer: GlLeafletLayer; gl: MockGl } {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  useSettingsStore.setState({ settings: { ...useSettingsStore.getState().settings, map_label_language: 'ko', language: 'en' } } as any)
 })
 
 describe('VectorBasemap', () => {
@@ -113,6 +117,57 @@ describe('VectorBasemap', () => {
 
     unmount()
     expect(layer.remove).toHaveBeenCalled()
+  })
+
+  it('FE-COMP-VECBM-004b: applies the saved label language to the Leaflet GL bridge', async () => {
+    render(<VectorBasemap style={OFM_POSITRON} />)
+    await waitFor(() => expect(maplibreGL).toHaveBeenCalledTimes(1))
+
+    const { gl } = lastLayer()
+    gl.isStyleLoaded.mockReturnValue(true)
+    const onStyleLoad = gl.on.mock.calls.find((call: unknown[]) => call[0] === 'style.load')?.[1] as (() => void) | undefined
+    onStyleLoad?.()
+
+    // The component must use the bridge's current style API, not a provider-specific
+    // Mapbox config call that is unavailable on OpenFreeMap/MapLibre.
+    expect(gl.setLayoutProperty).toHaveBeenCalledWith(
+      'place-city',
+      'text-field',
+      ['coalesce', ['get', 'name:ko'], ['get', 'name_ko'], ['get', 'name']],
+    )
+  })
+
+  it('FE-COMP-VECBM-004c: a later style reload keeps the latest label language', async () => {
+    render(<VectorBasemap style={OFM_POSITRON} />)
+    await waitFor(() => expect(maplibreGL).toHaveBeenCalledTimes(1))
+
+    const { gl } = lastLayer()
+    const onStyleLoad = gl.on.mock.calls.find((call: unknown[]) => call[0] === 'style.load')?.[1] as (() => void) | undefined
+
+    act(() => {
+      useSettingsStore.setState({
+        settings: { ...useSettingsStore.getState().settings, map_label_language: 'en' },
+      } as any)
+    })
+    await waitFor(() => expect(gl.setLayoutProperty).toHaveBeenCalledWith(
+      'place-city',
+      'text-field',
+      ['coalesce', ['get', 'name:en'], ['get', 'name_en'], ['get', 'name']],
+    ))
+
+    gl.setLayoutProperty.mockClear()
+    onStyleLoad?.()
+
+    expect(gl.setLayoutProperty).toHaveBeenCalledWith(
+      'place-city',
+      'text-field',
+      ['coalesce', ['get', 'name:en'], ['get', 'name_en'], ['get', 'name']],
+    )
+    expect(gl.setLayoutProperty).not.toHaveBeenCalledWith(
+      'place-city',
+      'text-field',
+      ['coalesce', ['get', 'name:ko'], ['get', 'name_ko'], ['get', 'name']],
+    )
   })
 })
 

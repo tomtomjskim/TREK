@@ -263,7 +263,7 @@ export class PlaceEnrichmentService {
    * working, and there is nothing here that warrants a migration.
    */
   enrichDisabled(): boolean {
-    const row = this.database.get<{ value: string }>('SELECT value FROM app_settings WHERE key = ?', 'places_enrich_enabled');
+    const row = this.database.get<{ value: string }>("SELECT value FROM app_settings WHERE key IN ('places_enrichment_enabled', 'places_enrich_enabled') ORDER BY CASE key WHEN 'places_enrichment_enabled' THEN 0 ELSE 1 END LIMIT 1");
     return row?.value === 'false';
   }
 

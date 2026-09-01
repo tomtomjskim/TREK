@@ -21,9 +21,15 @@ import {
   TILE_CONCURRENCY,
   type TileBbox,
 } from '../../../src/sync/tilePrefetcher';
-import { offlineDb, clearAll, upsertSyncMeta } from '../../../src/db/offlineDb';
+import { offlineDb, clearAll, reopenAnonymous, reopenForUser, upsertSyncMeta } from '../../../src/db/offlineDb';
 import { setAuthed } from '../../../src/sync/authGate';
 import { buildPlace } from '../../helpers/factories';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(res => { resolve = res; });
+  return { promise, resolve };
+}
 
 beforeEach(async () => {
   await clearAll();
@@ -221,6 +227,14 @@ describe('prefetchTiles — normal operation', () => {
     expect(vi.mocked(fetch)).toHaveBeenCalled();
   });
 
+  it('counts an opaque no-cors response as a successful tile fetch', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, type: 'opaque' }));
+    const bbox: TileBbox = { minLat: 48.84, maxLat: 48.87, minLng: 2.33, maxLng: 2.37 };
+    const count = await prefetchTiles(bbox, 'https://{s}.example.com/{z}/{x}/{y}.png', 10, 10);
+
+    expect(count).toBeGreaterThan(0);
+  });
+
   it('stops at zoom level where cap is exceeded', async () => {
     // Use a very small MAX_TILES override by using a huge bbox
     const bbox: TileBbox = { minLat: -80, maxLat: 80, minLng: -170, maxLng: 170 };
@@ -377,6 +391,153 @@ describe('prefetchTilesForTrip', () => {
     const calls = vi.mocked(fetch).mock.calls.length;
     expect(calls).toBeGreaterThan(0);
     expect(calls).toBeLessThanOrEqual(MAX_TILES);
+  });
+
+  it('does not update syncMeta when logout happens during an in-flight tile fetch', async () => {
+    await reopenForUser(1);
+    await upsertSyncMeta({ tripId: 1, lastSyncedAt: Date.now(), status: 'idle', tilesBbox: null, filesCachedCount: 0 });
+    const pending: Array<ReturnType<typeof deferred<{ ok: boolean }>>> = [];
+    vi.stubGlobal('fetch', vi.fn(() => {
+      const request = deferred<{ ok: boolean }>();
+      pending.push(request);
+      return request.promise;
+    }));
+
+    const task = prefetchTilesForTrip(1, [buildPlace({ trip_id: 1, lat: 48.8566, lng: 2.3522 })], 'https://{s}.example.com/{z}/{x}/{y}.png');
+    await vi.waitFor(() => expect(pending).toHaveLength(TILE_CONCURRENCY));
+    setAuthed(false);
+    await reopenAnonymous();
+    await upsertSyncMeta({ tripId: 1, lastSyncedAt: Date.now(), status: 'idle', tilesBbox: null, filesCachedCount: 0 });
+    pending.forEach(request => request.resolve({ ok: true }));
+    await task;
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(TILE_CONCURRENCY);
+    expect((await offlineDb.syncMeta.get(1))!.tilesBbox).toBeNull();
+  });
+
+  it('does not update the new account DB with an old tile run after account switch', async () => {
+    await reopenForUser(1);
+    await upsertSyncMeta({ tripId: 1, lastSyncedAt: Date.now(), status: 'idle', tilesBbox: null, filesCachedCount: 0 });
+    const pending: Array<ReturnType<typeof deferred<{ ok: boolean }>>> = [];
+    let initialRequests = 0;
+    vi.stubGlobal('fetch', vi.fn(() => {
+      if (initialRequests >= TILE_CONCURRENCY) return Promise.resolve({ ok: true });
+      const request = deferred<{ ok: boolean }>();
+      pending.push(request);
+      initialRequests += 1;
+      return request.promise;
+    }));
+
+    const task = prefetchTilesForTrip(1, [buildPlace({ trip_id: 1, lat: 48.8566, lng: 2.3522 })], 'https://{s}.example.com/{z}/{x}/{y}.png');
+    await vi.waitFor(() => expect(pending).toHaveLength(TILE_CONCURRENCY));
+    setAuthed(false);
+    await reopenAnonymous();
+    setAuthed(true);
+    await reopenForUser(2);
+    await upsertSyncMeta({ tripId: 1, lastSyncedAt: Date.now(), status: 'idle', tilesBbox: null, filesCachedCount: 0 });
+    pending.forEach(request => request.resolve({ ok: true }));
+    await task;
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(TILE_CONCURRENCY);
+    expect((await offlineDb.syncMeta.get(1))!.tilesBbox).toBeNull();
+    await reopenAnonymous();
+  });
+
+  it('invalidates an in-flight tile run when clearTileCache starts', async () => {
+    await reopenForUser(1);
+    await upsertSyncMeta({ tripId: 1, lastSyncedAt: Date.now(), status: 'idle', tilesBbox: null, filesCachedCount: 0 });
+    const pending: Array<ReturnType<typeof deferred<{ ok: boolean }>>> = [];
+    let initialRequests = 0;
+    const clearDone = deferred<boolean>();
+    vi.stubGlobal('fetch', vi.fn(() => {
+      if (initialRequests >= TILE_CONCURRENCY) return Promise.resolve({ ok: true });
+      const request = deferred<{ ok: boolean }>();
+      pending.push(request);
+      initialRequests += 1;
+      return request.promise;
+    }));
+    vi.stubGlobal('caches', {
+      open: vi.fn().mockResolvedValue({ match: vi.fn().mockResolvedValue(undefined) }),
+      delete: vi.fn(() => clearDone.promise),
+    });
+
+    const task = prefetchTilesForTrip(1, [buildPlace({ trip_id: 1, lat: 48.8566, lng: 2.3522 })], 'https://{s}.example.com/{z}/{x}/{y}.png');
+    await vi.waitFor(() => expect(pending).toHaveLength(TILE_CONCURRENCY));
+    const clearing = clearTileCache();
+    await vi.waitFor(() => expect(vi.mocked(caches.delete)).toHaveBeenCalled());
+    pending.forEach(request => request.resolve({ ok: true }));
+    await task;
+
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(TILE_CONCURRENCY);
+    expect((await offlineDb.syncMeta.get(1))!.tilesBbox).toBeNull();
+    clearDone.resolve(true);
+    await clearing;
+    await reopenAnonymous();
+  });
+
+  it('does not mark the bbox complete when a tile fetch fails, so the next run retries', async () => {
+    await upsertSyncMeta({ tripId: 1, lastSyncedAt: Date.now(), status: 'idle', tilesBbox: null, filesCachedCount: 0 });
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('tile unavailable')));
+    const places = [buildPlace({ trip_id: 1, lat: 48.8566, lng: 2.3522 })];
+
+    await prefetchTilesForTrip(1, places, 'https://{s}.example.com/{z}/{x}/{y}.png');
+    expect((await offlineDb.syncMeta.get(1))!.tilesBbox).toBeNull();
+
+    vi.mocked(fetch).mockResolvedValue({ ok: true } as Response);
+    await prefetchTilesForTrip(1, places, 'https://{s}.example.com/{z}/{x}/{y}.png');
+    expect(vi.mocked(fetch)).toHaveBeenCalled();
+    expect((await offlineDb.syncMeta.get(1))!.tilesBbox).not.toBeNull();
+  });
+
+  it('does not mark vector metadata complete after style failure and retries next run', async () => {
+    const tripId = 731;
+    const places = [buildPlace({ trip_id: tripId, lat: 37.5, lng: 127.0 })];
+    await upsertSyncMeta({ tripId, lastSyncedAt: Date.now(), status: 'idle', tilesBbox: null, filesCachedCount: 0 });
+    const fetchMock = vi.fn(async () => { throw new Error('style unavailable'); });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await prefetchTilesForTrip(tripId, places, 'https://tiles.openfreemap.org/styles/positron');
+    const firstRunCalls = fetchMock.mock.calls.length;
+    expect((await offlineDb.syncMeta.get(tripId))!.tilesBbox).toBeNull();
+
+    await prefetchTilesForTrip(tripId, places, 'https://tiles.openfreemap.org/styles/positron');
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(firstRunCalls);
+  });
+
+  it('does not copy old metadata into a new account during clearTileCache', async () => {
+    const tripId = 732;
+    await reopenForUser(1);
+    setAuthed(true);
+    await upsertSyncMeta({
+      tripId,
+      lastSyncedAt: Date.now(),
+      status: 'idle',
+      tilesBbox: [2, 1, 4, 3],
+      filesCachedCount: 0,
+    });
+    const clearGate = deferred<boolean>();
+    vi.stubGlobal('caches', { delete: vi.fn(() => clearGate.promise) });
+    const clearing = clearTileCache();
+    await vi.waitFor(() => expect(vi.mocked(caches.delete)).toHaveBeenCalled());
+
+    setAuthed(false);
+    await reopenAnonymous();
+    setAuthed(true);
+    await reopenForUser(2);
+    await upsertSyncMeta({
+      tripId,
+      lastSyncedAt: Date.now(),
+      status: 'idle',
+      tilesBbox: [9, 9, 10, 10],
+      filesCachedCount: 0,
+    });
+    clearGate.resolve(true);
+    await clearing;
+
+    expect((await offlineDb.syncMeta.get(tripId))?.tilesBbox).toEqual([9, 9, 10, 10]);
+    setAuthed(false);
+    await reopenAnonymous();
   });
 });
 

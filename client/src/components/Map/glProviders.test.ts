@@ -130,6 +130,33 @@ describe('glProviders', () => {
     expect(field).toEqual(original)
   })
 
+  it('uses the new style expression after a style reload with the same layer id', () => {
+    let textField: unknown = ['get', 'name']
+    let style: { layers: Array<{ id: string; type: string }> } = {
+      layers: [{ id: 'road-label', type: 'symbol' }],
+    }
+    const map = {
+      getStyle: vi.fn(() => style),
+      getLayoutProperty: vi.fn(() => textField),
+      setLayoutProperty: vi.fn((_layerId: string, _property: string, value: unknown) => {
+        textField = value
+      }),
+    }
+
+    applyMapLibreLabelLanguage(map, 'ko')
+
+    style = { layers: [{ id: 'road-label', type: 'symbol' }] }
+    textField = ['get', 'name:ko']
+    applyMapLibreLabelLanguage(map, 'en')
+
+    expect(map.setLayoutProperty).toHaveBeenLastCalledWith('road-label', 'text-field', [
+      'coalesce',
+      ['get', 'name:en'],
+      ['get', 'name_en'],
+      ['get', 'name:ko'],
+    ])
+  })
+
   it('supports token-style name fields while leaving unrelated text untouched', () => {
     const fields: Record<string, unknown> = { label: '{name}', ref: '{ref}' }
     const map = {

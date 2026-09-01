@@ -4,11 +4,12 @@ import userEvent from '@testing-library/user-event'
 import { render } from '../../../tests/helpers/render'
 import { resetAllStores, seedStore } from '../../../tests/helpers/store'
 import { useVacayStore } from '../../store/vacayStore'
+import { useSettingsStore } from '../../store/settingsStore'
 import VacayCalendar from './VacayCalendar'
 
 vi.mock('./VacayMonthCard', () => ({
-  default: ({ year, month, onCellClick }: any) => (
-    <div data-testid={`month-card-${month}`} data-year={year}>
+  default: ({ year, month, onCellClick, weekStart }: any) => (
+    <div data-testid={`month-card-${month}`} data-year={year} data-week-start={weekStart}>
       <button onClick={() => onCellClick(`2025-01-${String(month + 1).padStart(2, '0')}`)}>
         click-{month}
       </button>
@@ -47,6 +48,44 @@ describe('VacayCalendar', () => {
     render(<VacayCalendar />)
 
     expect(screen.getAllByTestId(/^month-card-/)).toHaveLength(12)
+  })
+
+  it('FE-COMP-VACAYCALENDAR-013: a personal Sunday-first preference overrides the legacy plan value', () => {
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, calendar_week_start: 0 },
+    })
+    seedStore(useVacayStore, {
+      selectedYear: 2025,
+      entries: [],
+      companyHolidays: [],
+      holidays: {},
+      plan: { ...basePlan, week_start: 1 },
+      users: [],
+      selectedUserId: null,
+    })
+
+    render(<VacayCalendar />)
+
+    expect(screen.getByTestId('month-card-0')).toHaveAttribute('data-week-start', '0')
+  })
+
+  it('FE-COMP-VACAYCALENDAR-014: an unset personal preference preserves the legacy plan value', () => {
+    useSettingsStore.setState({
+      settings: { ...useSettingsStore.getState().settings, calendar_week_start: undefined },
+    })
+    seedStore(useVacayStore, {
+      selectedYear: 2025,
+      entries: [],
+      companyHolidays: [],
+      holidays: {},
+      plan: { ...basePlan, week_start: 0 },
+      users: [],
+      selectedUserId: null,
+    })
+
+    render(<VacayCalendar />)
+
+    expect(screen.getByTestId('month-card-0')).toHaveAttribute('data-week-start', '0')
   })
 
   it('FE-COMP-VACAYCALENDAR-001a: renders January to December of the selected year by default', () => {

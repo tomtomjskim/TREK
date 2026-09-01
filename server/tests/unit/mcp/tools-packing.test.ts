@@ -456,6 +456,27 @@ describe('Tool: update_packing_item bag, quantity, weight, privacy', () => {
     expect(broadcastMock).toHaveBeenCalledWith(trip.id, 'packing:updated', expect.any(Object));
   });
 
+  it('refuses to publish a Shared item when the caller is only a recipient', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: recipient } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, recipient.id);
+    const item = createPackingItem(testDb, trip.id, { name: 'Medication' });
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ? WHERE id = ?').run(owner.id, item.id);
+    testDb.prepare('INSERT INTO packing_item_recipients (item_id, user_id) VALUES (?, ?)').run(item.id, recipient.id);
+
+    await withHarness(recipient.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'update_packing_item',
+        arguments: { tripId: trip.id, itemId: item.id, is_private: false },
+      });
+      expect(result.isError).toBe(true);
+    });
+
+    expect(itemRow(item.id).is_private).toBe(1);
+    expect(broadcastMock).not.toHaveBeenCalled();
+  });
+
   it('refuses a bag id that is not a number', async () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);

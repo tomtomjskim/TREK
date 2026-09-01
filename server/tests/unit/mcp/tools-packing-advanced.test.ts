@@ -40,7 +40,7 @@ vi.mock('../../../src/websocket', () => ({ broadcast: broadcastMock }));
 import { createTables } from '../../../src/db/schema';
 import { runMigrations } from '../../../src/db/migrationRunner';
 import { resetTestDb } from '../../helpers/test-db';
-import { createUser, createAdmin, createTrip, createPackingItem } from '../../helpers/factories';
+import { addTripMember, createUser, createAdmin, createTrip, createPackingItem } from '../../helpers/factories';
 import { createMcpHarness, parseToolResult, type McpHarness } from '../../helpers/mcp-harness';
 
 beforeAll(() => {
@@ -102,6 +102,24 @@ describe('Tool: reorder_packing_items', () => {
       });
       expect(result.isError).toBe(true);
     });
+  });
+
+  it('does not reorder another member\'s private item even when its id is supplied', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, member.id);
+    const hidden = createPackingItem(testDb, trip.id, { name: 'Owner private' });
+    const common = createPackingItem(testDb, trip.id, { name: 'Common' });
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ?, sort_order = 7 WHERE id = ?').run(owner.id, hidden.id);
+    await withHarness(member.id, async (h) => {
+      await h.client.callTool({
+        name: 'reorder_packing_items',
+        arguments: { tripId: trip.id, orderedIds: [hidden.id, common.id] },
+      });
+    });
+
+    expect(testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(hidden.id)).toEqual({ sort_order: 7 });
   });
 });
 

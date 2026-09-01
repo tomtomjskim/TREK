@@ -77,15 +77,20 @@ function fontStacks(style: StyleDoc): string[] {
  * the Service Worker's handler, so a repeated or resumed run over a warm cache
  * costs almost nothing. Same reasoning as the raster side.
  */
-async function warm(cache: Cache | null, url: string): Promise<boolean> {
+type WarmResult = 'cached' | 'fetched' | 'failed'
+
+async function warm(cache: Cache | null, url: string, isCancelled: () => boolean = () => false): Promise<WarmResult> {
   try {
-    if (cache && (await cache.match(url))) return false
+    if (!cache) return 'failed'
+    if (isCancelled()) return 'failed'
+    if (await cache.match(url)) return 'cached'
     const res = await fetch(url, { mode: 'cors' })
-    if (!res.ok) return false
-    await cache?.put(url, res.clone())
-    return true
+    if (!res.ok) return 'failed'
+    if (isCancelled()) return 'failed'
+    await cache.put(url, res.clone())
+    return 'fetched'
   } catch {
-    return false
+    return 'failed'
   }
 }
 
@@ -119,51 +124,75 @@ function enumerateVectorTiles(bbox: TileBbox, minZoom: number, maxZoom: number):
  * The device-wide half: the style, its TileJSON, the sprite and the glyphs.
  * Returns the tile URL template, or null when the style could not be read.
  */
-export async function prefetchStyleAssets(styleUrl: string): Promise<string | null> {
+interface StyleAssetsResult {
+  template: string | null
+  complete: boolean
+}
+
+async function prefetchStyleAssetsWithStatus(
+  styleUrl: string,
+  isCancelled: () => boolean = () => false,
+): Promise<StyleAssetsResult> {
   const cache = await openVectorCache()
   const style = await fetchJson<StyleDoc>(styleUrl)
-  if (!style) return null
-  await warm(cache, styleUrl)
+  if (!style) return { template: null, complete: false }
+  let complete = (await warm(cache, styleUrl, isCancelled)) !== 'failed'
 
   if (style.sprite) {
     // Both densities, both parts: a style asks for whichever matches the screen.
-    await Promise.all([
-      warm(cache, `${style.sprite}.json`),
-      warm(cache, `${style.sprite}.png`),
-      warm(cache, `${style.sprite}@2x.json`),
-      warm(cache, `${style.sprite}@2x.png`),
+    const statuses = await Promise.all([
+      warm(cache, `${style.sprite}.json`, isCancelled),
+      warm(cache, `${style.sprite}.png`, isCancelled),
+      warm(cache, `${style.sprite}@2x.json`, isCancelled),
+      warm(cache, `${style.sprite}@2x.png`, isCancelled),
     ])
+    if (statuses.some(status => status === 'failed')) complete = false
   }
 
   if (style.glyphs) {
     const stacks = fontStacks(style)
-    await Promise.all(
+    const statuses = await Promise.all(
       stacks.flatMap(stack =>
         GLYPH_RANGES.map(range =>
-          warm(cache, style.glyphs!.replace('{fontstack}', encodeURIComponent(stack)).replace('{range}', range)),
+          warm(cache, style.glyphs!.replace('{fontstack}', encodeURIComponent(stack)).replace('{range}', range), isCancelled),
         ),
       ),
     )
+    if (statuses.some(status => status === 'failed')) complete = false
   }
 
   // The vector source is a TileJSON reference, and the tile path it hands back
   // carries a planet version. Asking without that segment answers 200 with an
   // empty body, so the template has to come from the TileJSON rather than be
   // guessed.
+  let template: string | null = null
   for (const source of Object.values(style.sources ?? {})) {
-    if (source.tiles?.[0]) return source.tiles[0]
+    if (source.tiles?.[0]) {
+      template ??= source.tiles[0]
+      continue
+    }
     if (source.url) {
-      await warm(cache, source.url)
+      if ((await warm(cache, source.url, isCancelled)) === 'failed') complete = false
       const tileJson = await fetchJson<{ tiles?: string[] }>(source.url)
-      if (tileJson?.tiles?.[0]) return tileJson.tiles[0]
+      if (tileJson?.tiles?.[0]) template ??= tileJson.tiles[0]
+      else complete = false
     }
   }
-  return null
+  return { template, complete: template !== null && complete }
+}
+
+/**
+ * The device-wide half of the vector prefetch. Kept as a template-only API for
+ * callers that only need the resolved TileJSON URL.
+ */
+export async function prefetchStyleAssets(styleUrl: string): Promise<string | null> {
+  return (await prefetchStyleAssetsWithStatus(styleUrl)).template
 }
 
 export interface VectorPrefetchResult {
   tiles: number
   template: string | null
+  complete: boolean
 }
 
 /**
@@ -177,36 +206,49 @@ export async function prefetchVectorForPlaces(
   styleUrl: string,
   isCancelled: () => boolean = () => false,
 ): Promise<VectorPrefetchResult> {
-  if (!navigator.onLine) return { tiles: 0, template: null }
+  if (!navigator.onLine) return { tiles: 0, template: null, complete: false }
 
   const bbox = computeBbox(places)
-  if (!bbox) return { tiles: 0, template: null }
+  if (!bbox) return { tiles: 0, template: null, complete: false }
 
-  const template = await prefetchStyleAssets(styleUrl)
-  if (!template || isCancelled()) return { tiles: 0, template }
+  const assets = await prefetchStyleAssetsWithStatus(styleUrl, isCancelled)
+  if (!assets.template || !assets.complete || isCancelled() || !navigator.onLine) {
+    return { tiles: 0, template: assets.template, complete: false }
+  }
 
   const cache = await openVectorCache()
   const coords = enumerateVectorTiles(bbox, VECTOR_MIN_ZOOM, VECTOR_MAX_ZOOM)
 
   let cursor = 0
   let fetched = 0
+  let failed = false
+  let cancelled = false
 
   async function worker(): Promise<void> {
     while (cursor < coords.length) {
-      if (isCancelled() || !navigator.onLine) return
+      if (isCancelled() || !navigator.onLine) {
+        cancelled = true
+        return
+      }
       const next = coords[cursor++]
       if (!next) return
       const [z, x, y] = next
-      const url = template!
+      const url = assets.template
         .replace('{z}', String(z))
         .replace('{x}', String(x))
         .replace('{y}', String(y))
-      if (await warm(cache, url)) fetched++
+      const status = await warm(cache, url, isCancelled)
+      if (status === 'fetched') fetched++
+      if (status === 'failed') failed = true
     }
   }
 
   await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()))
-  return { tiles: fetched, template }
+  return {
+    tiles: fetched,
+    template: assets.template,
+    complete: !failed && !cancelled && !isCancelled() && navigator.onLine,
+  }
 }
 
 /** Drop the offline vector basemap, alongside the raster cache. */

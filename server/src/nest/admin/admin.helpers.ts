@@ -1,4 +1,5 @@
 import fs from 'fs';
+import semver from 'semver';
 
 /**
  * Pure + module-scoped half of the admin domain, relocated verbatim from
@@ -24,29 +25,14 @@ export function utcSuffix(ts: string | null | undefined): string | null {
 }
 
 export function compareVersions(a: string, b: string): number {
-  const parse = (v: string) => {
-    const [base, pre] = v.split('-pre.');
-    const parts = base.split('.').map(Number);
-    const n = pre !== undefined ? Number.parseInt(pre, 10) : null;
-    const preN = n !== null && Number.isFinite(n) ? n : null;
-    return { parts, preN };
-  };
-  const pa = parse(a),
-    pb = parse(b);
-  for (let i = 0; i < Math.max(pa.parts.length, pb.parts.length); i++) {
-    const na = pa.parts[i] || 0,
-      nb = pb.parts[i] || 0;
-    if (na > nb) return 1;
-    if (na < nb) return -1;
-  }
-  // Equal base: stable > prerelease; higher preN wins among prereleases
-  if (pa.preN === null && pb.preN !== null) return 1;
-  if (pa.preN !== null && pb.preN === null) return -1;
-  if (pa.preN !== null && pb.preN !== null) {
-    if (pa.preN > pb.preN) return 1;
-    if (pa.preN < pb.preN) return -1;
-  }
-  return 0;
+  // Build metadata contributes no precedence under SemVer, so an official
+  // release and a fork build from that release compare as equal. Invalid
+  // values are unknown rather than an implicit old version: fail closed and
+  // avoid a false update banner or notification.
+  const left = semver.valid(a);
+  const right = semver.valid(b);
+  if (left === null || right === null) return 0;
+  return semver.compare(left, right);
 }
 
 /**

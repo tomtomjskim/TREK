@@ -263,7 +263,11 @@ export class AuthService {
     const placesAutocompleteEnabled = placesAutocompleteSetting !== 'false';
     const placesDetailsSetting = this.db.get<{ value: string }>("SELECT value FROM app_settings WHERE key = 'places_details_enabled'")?.value;
     const placesDetailsEnabled = placesDetailsSetting !== 'false';
-    const placesEnrichSetting = this.db.get<{ value: string }>("SELECT value FROM app_settings WHERE key = 'places_enrich_enabled'")?.value;
+    // v3 used places_enrich_enabled; v4 clients/tests also use the expanded
+    // places_enrichment_enabled spelling. Prefer the explicit new row while
+    // retaining the old row as a read/write compatibility alias.
+    const placesEnrichSetting = this.db.get<{ value: string }>("SELECT value FROM app_settings WHERE key = 'places_enrichment_enabled'")?.value
+      ?? this.db.get<{ value: string }>("SELECT value FROM app_settings WHERE key = 'places_enrich_enabled'")?.value;
     const placesEnrichEnabled = placesEnrichSetting !== 'false';
     const setupComplete = userCount > 0 && !this.db.get("SELECT id FROM users WHERE role = 'admin' AND must_change_password = 1 LIMIT 1");
 
@@ -313,6 +317,7 @@ export class AuthService {
       places_autocomplete_enabled: placesAutocompleteEnabled,
       places_details_enabled: placesDetailsEnabled,
       places_enrich_enabled: placesEnrichEnabled,
+      places_enrichment_enabled: placesEnrichEnabled,
       permissions: authenticatedUser ? this.permissions.getAllPermissions() : undefined,
       // Case-sensitive on purpose (legacy parity).
       dev_mode: readEnv().app.nodeEnv === 'development',

@@ -5,6 +5,7 @@ import { Eye, EyeOff, Save, CheckCircle, XCircle, Loader2, Sun, RefreshCw, Alert
 import ToggleSwitch from '../../components/Settings/ToggleSwitch'
 import type { TranslationFn } from '../../types'
 import type { useAdmin } from './useAdmin'
+import GoogleApiUsagePanel from '../../components/Admin/GoogleApiUsagePanel'
 
 interface AdminSettingsTabProps {
   admin: ReturnType<typeof useAdmin>
@@ -37,6 +38,7 @@ export default function AdminSettingsTab({ admin, t }: AdminSettingsTabProps): R
 
   return (
     <div className="space-y-6">
+      <GoogleApiUsagePanel />
       {/* Authentication Methods */}
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100">

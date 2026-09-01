@@ -75,11 +75,15 @@ describe('VacayController (parity with the legacy /api/addons/vacay route)', () 
   });
 
   describe('invites', () => {
-    // The schema requires user_id but still admits falsy values (0, '') — the
-    // bespoke guard stays for those, byte-identical to the legacy route.
-    it('400 when user_id falsy', () => {
+    it('rejects a non-positive user_id with the canonical id contract', () => {
       return thrown(() => makeController({ ...planBase }).invite(user, { user_id: 0 })).then((r) =>
-        expect(r).toEqual({ status: 400, body: { error: 'user_id required' } }));
+        expect(r).toEqual({
+          status: 400,
+          body: {
+            error: 'user_id must be a canonical positive safe integer',
+            code: 'VACAY_INVALID_ID',
+          },
+        }));
     });
 
     it('maps a sendInvite error to its status', () => {
@@ -101,25 +105,28 @@ describe('VacayController (parity with the legacy /api/addons/vacay route)', () 
     });
 
     it('decline / cancel / dissolve return success', () => {
-      const declineInvite = vi.fn(); const cancelInvite = vi.fn(); const dissolvePlan = vi.fn();
+      const declineInvite = vi.fn(); const cancelInvite = vi.fn().mockReturnValue({}); const dissolvePlan = vi.fn();
       expect(makeController({ declineInvite }).declineInvite(user, { plan_id: 5 })).toEqual({ success: true });
       expect(makeController({ ...planBase, cancelInvite }).cancelInvite(user, { user_id: 2 })).toEqual({ success: true });
+      expect(cancelInvite).toHaveBeenCalledWith(user.id, 2);
       expect(makeController({ dissolvePlan }).dissolve(user)).toEqual({ success: true });
     });
   });
 
   describe('years', () => {
-    // Same falsy-but-present rule as user_id: schema admits 0/'', the guard
-    // keeps the legacy 'Year required' body for them.
-    it('400 when year falsy on add', () => {
-      return thrown(() => makeController({ ...planBase }).addYear(user, { year: 0 })).then((r) =>
-        expect(r).toEqual({ status: 400, body: { error: 'Year required' } }));
+    it('rejects a non-integer year before calling the service', () => {
+      return thrown(() => makeController({ ...planBase }).addYear(user, { year: 2026.5 })).then((r) =>
+        expect(r).toEqual({
+          status: 400,
+          body: { error: 'Year must be a safe integer', code: 'VACAY_INVALID_YEAR' },
+        }));
     });
 
     it('adds and deletes years', () => {
-      const addYear = vi.fn().mockReturnValue([2026]); const deleteYear = vi.fn().mockReturnValue([]);
+      const addYear = vi.fn().mockReturnValue([2026]); const deleteActiveYear = vi.fn().mockReturnValue([]);
       expect(makeController({ ...planBase, addYear }).addYear(user, { year: 2026 }, 'sock')).toEqual({ years: [2026] });
-      expect(makeController({ ...planBase, deleteYear }).deleteYear(user, '2026', 'sock')).toEqual({ years: [] });
+      expect(makeController({ deleteActiveYear }).deleteYear(user, '2026', 'sock')).toEqual({ years: [] });
+      expect(deleteActiveYear).toHaveBeenCalledWith(user.id, 2026, 'sock');
     });
   });
 

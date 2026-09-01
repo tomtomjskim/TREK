@@ -76,7 +76,9 @@ const { db } = vi.hoisted(() => {
   tmp.exec(`CREATE TABLE packing_templates (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    created_by INTEGER NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'instance',
+    owner_id INTEGER,
+    created_by INTEGER,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );`);
   tmp.exec(`CREATE TABLE packing_template_categories (

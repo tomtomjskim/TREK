@@ -21,6 +21,14 @@ vi.mock('../components/Map/MapView', () => ({
   },
 }));
 
+const capturedAdaptiveMapControlsProps: { current: Record<string, any> } = { current: {} };
+vi.mock('../components/Map/AdaptiveMapControls', () => ({
+  default: (props: Record<string, any>) => {
+    capturedAdaptiveMapControlsProps.current = props;
+    return React.createElement('div', { 'data-testid': 'adaptive-map-controls' });
+  },
+}));
+
 vi.mock('react-leaflet', () => ({
   MapContainer: ({ children }: { children: React.ReactNode }) =>
     React.createElement('div', { 'data-testid': 'map-container' }, children),
@@ -242,6 +250,7 @@ beforeEach(() => {
   mockPlaceSelectionState.selectedPlaceId = null;
   mockPlaceSelectionState.selectedAssignmentId = null;
   capturedMapViewProps.current = {};
+  capturedAdaptiveMapControlsProps.current = {};
   capturedDayPlanSidebarProps.current = {};
   capturedPlacesSidebarProps.current = {};
   capturedReservationsPanelProps.current = {};
@@ -399,6 +408,26 @@ describe('TripPlannerPage', () => {
 
       await waitFor(() => {
         expect(screen.getByTestId('map-view')).toBeInTheDocument();
+      });
+    });
+
+    it('passes both panel widths and collapse state to the adaptive map controls', async () => {
+      vi.useFakeTimers();
+
+      seedTripStore({ id: 42 });
+      renderPlannerPage(42);
+      act(() => { vi.runAllTimers(); });
+      vi.useRealTimers();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('adaptive-map-controls')).toBeInTheDocument();
+        expect(capturedAdaptiveMapControlsProps.current).toEqual(expect.objectContaining({
+          leftWidth: expect.any(Number),
+          rightWidth: expect.any(Number),
+          leftCollapsed: false,
+          rightCollapsed: false,
+          poiEnabled: expect.any(Boolean),
+        }));
       });
     });
   });

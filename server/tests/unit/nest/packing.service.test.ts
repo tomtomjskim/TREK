@@ -57,7 +57,7 @@ const permissionsStub = { checkPermission } as unknown as PermissionsService;
 const { send } = vi.hoisted(() => ({ send: vi.fn(() => Promise.resolve()) }));
 
 import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
+import { runMigrations } from '../../../src/db/migrationRunner';
 import { resetTestDb } from '../../helpers/test-db';
 import { createUser, createAdmin, createTrip, addTripMember } from '../../helpers/factories';
 import { DatabaseService } from '../../../src/nest/database/database.service';
@@ -570,8 +570,22 @@ describe('three-tier packing sharing (#858)', () => {
     expect(svc.addContributor(trip.id, common.id, owner.id)).toBeNull();
     expect(svc.addContributor(trip.id, personal.id, helper.id)).toBeNull();
 
-    const cleared = svc.removeContributor(trip.id, common.id, helper.id) as any;
+    const cleared = svc.removeContributor(trip.id, common.id, helper.id, helper.id) as any;
     expect(cleared.contributors).toEqual([]);
+  });
+
+  it('PACK-SVC-044a: only the item owner or the contributor can remove a pledge', () => {
+    const { user: owner } = createUser(testDb);
+    const { user: helper } = createUser(testDb);
+    const { user: attacker } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    const common = svc.createItem(trip.id, { name: 'Sunscreen', visibility: 'common' }, owner.id) as any;
+    svc.addContributor(trip.id, common.id, helper.id);
+
+    expect(svc.removeContributor(trip.id, common.id, attacker.id, helper.id)).toEqual({ forbidden: true });
+    expect((svc.listItems(trip.id, owner.id) as any[])[0].contributors).toHaveLength(1);
+
+    expect((svc.removeContributor(trip.id, common.id, owner.id, helper.id) as any).contributors).toEqual([]);
   });
 
   it('PACK-SVC-045: cloneItem copies an item onto the cloner\'s personal list', () => {
@@ -812,6 +826,39 @@ describe('Packing templates', () => {
     svc.createPackingTemplate('Template A', admin.id);
     const templates = svc.listPackingTemplates() as any[];
     expect(templates.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('ADMIN-SVC-033b — listPackingTemplates keeps instance templates after creator deletion', () => {
+    const templateId = Number(testDb
+      .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'instance', NULL, NULL)")
+      .run('Detached template').lastInsertRowid);
+
+    expect(svc.listPackingTemplates()).toContainEqual(expect.objectContaining({
+      id: templateId,
+      scope: 'instance',
+      created_by: null,
+      created_by_name: null,
+    }));
+  });
+
+  it('ADMIN-SVC-033c — admin template reads cannot discover personal templates', () => {
+    const { user: owner } = createUser(testDb);
+    const personalId = Number(testDb
+      .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
+      .run('Private template', owner.id, owner.id).lastInsertRowid);
+    const categoryId = Number(testDb
+      .prepare('INSERT INTO packing_template_categories (template_id, name) VALUES (?, ?)')
+      .run(personalId, 'Private category').lastInsertRowid);
+    const itemId = Number(testDb
+      .prepare('INSERT INTO packing_template_items (category_id, name) VALUES (?, ?)')
+      .run(categoryId, 'Private item').lastInsertRowid);
+
+    expect(svc.listPackingTemplates()).not.toContainEqual(expect.objectContaining({ id: personalId }));
+    expect(svc.getPackingTemplate(String(personalId))).toEqual({ error: 'Template not found', status: 404 });
+    expect(svc.updatePackingTemplate(String(personalId), { name: 'Hacked' })).toEqual({ error: 'Template not found', status: 404 });
+    expect(svc.deletePackingTemplate(String(personalId))).toEqual({ error: 'Template not found', status: 404 });
+    expect(svc.updateTemplateItem(String(personalId), String(itemId), { name: 'Hacked' })).toEqual({ error: 'Item not found', status: 404 });
+    expect(svc.deleteTemplateItem(String(personalId), String(itemId))).toEqual({ error: 'Item not found', status: 404 });
   });
 
   it('ADMIN-SVC-034 — updatePackingTemplate updates name', () => {
@@ -1066,8 +1113,24 @@ describe('packing item object-level authorization', () => {
     expect(svc.deleteItem(trip.id, personal.id, owner.id)).toBeTruthy();
   });
 
-  it('PACK-SVC-108: a template captures only the Common list and the actor\'s own items', () => {
+  it('PACK-SVC-107a: a Shared recipient cannot publish the owner\'s item through updateItem', () => {
+    const { trip, shared, friend } = restrictedTrip();
+
+    expect(svc.updateItem(
+      trip.id,
+      shared.id,
+      { is_private: false },
+      ['is_private'],
+      undefined,
+      friend.id,
+    )).toEqual({ forbidden: true });
+    expect(testDb.prepare('SELECT is_private, owner_id FROM packing_items WHERE id = ?').get(shared.id))
+      .toEqual({ is_private: 1, owner_id: expect.any(Number) });
+  });
+
+  it('PACK-SVC-108: an instance template captures only Common items, never the actor\'s personal rows', () => {
     const { trip, intruder } = restrictedTrip();
+    svc.createItem(trip.id, { name: 'Private passport', visibility: 'personal' }, intruder.id);
     const templateId = (svc.saveAsTemplate(trip.id, intruder.id, 'Snapshot') as { id: number }).id;
     const rows = testDb.prepare(`
       SELECT i.name FROM packing_template_items i
@@ -1075,5 +1138,21 @@ describe('packing item object-level authorization', () => {
       WHERE c.template_id = ?
     `).all(templateId) as { name: string }[];
     expect(rows.map(r => r.name).sort()).toEqual(['Tent']);
+  });
+
+  it('PACK-SVC-109: reorder changes only Common and actor-owned restricted rows', () => {
+    const { user: owner } = createUser(testDb);
+    const { user: actor } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    const common = svc.createItem(trip.id, { name: 'Common', visibility: 'common' }, owner.id) as any;
+    const hidden = svc.createItem(trip.id, { name: 'Owner private', visibility: 'personal' }, owner.id) as any;
+    const personal = svc.createItem(trip.id, { name: 'Actor private', visibility: 'personal' }, actor.id) as any;
+    const hiddenBefore = testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(hidden.id);
+
+    svc.reorderItems(trip.id, [hidden.id, personal.id, common.id], actor.id);
+
+    expect(testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(hidden.id)).toEqual(hiddenBefore);
+    expect(testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(personal.id)).toEqual({ sort_order: 0 });
+    expect(testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(common.id)).toEqual({ sort_order: 1 });
   });
 });

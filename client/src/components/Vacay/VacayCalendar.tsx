@@ -1,7 +1,9 @@
 import { useMemo, useState, useCallback, useEffect } from 'react'
 import { useVacayStore } from '../../store/vacayStore'
 import { useAuthStore } from '../../store/authStore'
+import { useSettingsStore } from '../../store/settingsStore'
 import { useTranslation } from '../../i18n'
+import { normalizeCalendarWeekStart } from '../../utils/calendarWeek'
 import { isWeekend } from './holidays'
 import { inGridWindow, windowMonths } from '../../vacay/yearWindow'
 import { tripsApi } from '../../api/client'
@@ -17,6 +19,7 @@ export default function VacayCalendar() {
   const { t, locale } = useTranslation()
   const { selectedYear, selectedUserId, entries, companyHolidays, toggleEntry, toggleCompanyHoliday, plan, users, holidays, sharedCalendars, yearSettings } = useVacayStore()
   const currentUserId = useAuthStore(s => s.user?.id)
+  const personalWeekStart = useSettingsStore(state => state.settings.calendar_week_start)
   const [mode, setMode] = useState<VacayMode>('vacation')
   // Half-day is a per-person modifier on the vacation action, not a mode: with it
   // on, clicking a day logs (or converts) it as a 0.5 day for the selected person.
@@ -87,6 +90,7 @@ export default function VacayCalendar() {
   const blockWeekends = plan?.block_weekends !== false
   const weekendDays = useMemo<number[]>(() => (plan?.weekend_days ? String(plan.weekend_days).split(',').map(Number) : [0, 6]), [plan?.weekend_days])
   const companyHolidaysEnabled = plan?.company_holidays_enabled !== false
+  const calendarWeekStart = normalizeCalendarWeekStart(personalWeekStart ?? plan?.week_start)
 
   const handleCellClick = useCallback(async (dateStr: string) => {
     if (mode === 'company') {
@@ -155,7 +159,7 @@ export default function VacayCalendar() {
             blockWeekends={blockWeekends}
             weekendDays={weekendDays}
             tripDates={tripDates}
-            weekStart={plan?.week_start ?? 1}
+            weekStart={calendarWeekStart}
           />
         ))}
       </div>

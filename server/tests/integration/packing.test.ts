@@ -45,7 +45,7 @@ vi.mock('../../src/websocket', () => ({ broadcast: vi.fn(), broadcastToUser: vi.
 
 import { buildApp } from '../../src/bootstrap';
 import { createTables } from '../../src/db/schema';
-import { runMigrations } from '../../src/db/migrations';
+import { runMigrations } from '../../src/db/migrationRunner';
 import { resetTestDb, resetRateLimits } from '../helpers/test-db';
 import { createUser, createTrip, createPackingItem, addTripMember } from '../helpers/factories';
 import { authCookie } from '../helpers/auth';
@@ -267,6 +267,26 @@ describe('Three-tier packing sharing (#858)', () => {
     const denied = await request(app).put(`/api/trips/${trip.id}/packing/${shared.body.item.id}/sharing`).set('Cookie', authCookie(member.id)).send({ visibility: 'personal' });
     expect(denied.status).toBe(403);
   });
+
+  it('PACK-3T-005b — a Shared recipient cannot publish the item through the general update route', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: recipient } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, recipient.id);
+    const shared = await request(app)
+      .post(`/api/trips/${trip.id}/packing`)
+      .set('Cookie', authCookie(owner.id))
+      .send({ name: 'Medication', visibility: 'shared', recipient_ids: [recipient.id] });
+
+    const denied = await request(app)
+      .put(`/api/trips/${trip.id}/packing/${shared.body.item.id}`)
+      .set('Cookie', authCookie(recipient.id))
+      .send({ is_private: false });
+
+    expect(denied.status).toBe(403);
+    expect(testDb.prepare('SELECT is_private, owner_id FROM packing_items WHERE id = ?').get(shared.body.item.id))
+      .toEqual({ is_private: 1, owner_id: owner.id });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -381,6 +401,45 @@ describe('Reorder packing items', () => {
       .all(trip.id) as Array<{ id: number; sort_order: number }>;
     expect(rows[0].id).toBe(i2.id);
     expect(rows[1].id).toBe(i1.id);
+  });
+
+  it('PACK-006a — a member cannot reorder another user\'s private item by id', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, member.id);
+    const common = await request(app).post(`/api/trips/${trip.id}/packing`).set('Cookie', authCookie(owner.id)).send({ name: 'Common' });
+    const hidden = await request(app).post(`/api/trips/${trip.id}/packing`).set('Cookie', authCookie(owner.id)).send({ name: 'Owner private', visibility: 'personal' });
+    const own = await request(app).post(`/api/trips/${trip.id}/packing`).set('Cookie', authCookie(member.id)).send({ name: 'Member private', visibility: 'personal' });
+    const hiddenBefore = testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(hidden.body.item.id);
+
+    const res = await request(app)
+      .put(`/api/trips/${trip.id}/packing/reorder`)
+      .set('Cookie', authCookie(member.id))
+      .send({ orderedIds: [hidden.body.item.id, own.body.item.id, common.body.item.id] });
+
+    expect(res.status).toBe(200);
+    expect(testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(hidden.body.item.id)).toEqual(hiddenBefore);
+  });
+});
+
+describe('Packing contributors authorization', () => {
+  it('PACK-PRIV-007 — another member cannot remove somebody else\'s pledge', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: helper } = createUser(testDb);
+    const { user: attacker } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, helper.id);
+    addTripMember(testDb, trip.id, attacker.id);
+    const created = await request(app).post(`/api/trips/${trip.id}/packing`).set('Cookie', authCookie(owner.id)).send({ name: 'Sunscreen', visibility: 'common' });
+    await request(app).post(`/api/trips/${trip.id}/packing/${created.body.item.id}/contributors`).set('Cookie', authCookie(helper.id));
+
+    const denied = await request(app)
+      .delete(`/api/trips/${trip.id}/packing/${created.body.item.id}/contributors/${helper.id}`)
+      .set('Cookie', authCookie(attacker.id));
+
+    expect(denied.status).toBe(403);
+    expect(testDb.prepare('SELECT COUNT(*) AS count FROM packing_item_contributors WHERE item_id = ? AND user_id = ?').get(created.body.item.id, helper.id)).toEqual({ count: 1 });
   });
 });
 

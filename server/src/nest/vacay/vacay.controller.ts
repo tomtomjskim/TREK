@@ -13,7 +13,14 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { User } from '../../types';
-import { VacayService } from './vacay.service';
+import {
+  VacayFusedCompanyHolidaysReadOnlyError,
+  VacayFusedYearDeleteReadOnlyError,
+  VacayInvalidDateError,
+  VacayInvalidYearError,
+  VacayService,
+  VacayYearDeleteReviewRequiredError,
+} from './vacay.service';
 import {
   VacayAddHolidayCalendarDto,
   VacayAddYearDto,
@@ -31,6 +38,58 @@ import {
 } from './vacay.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
+
+function rethrowVacayConflict(error: unknown): never {
+  if (error instanceof VacayInvalidDateError || error instanceof VacayInvalidYearError) {
+    throw new HttpException({ error: error.message, code: error.code }, 400);
+  }
+  if (
+    error instanceof VacayFusedCompanyHolidaysReadOnlyError
+    || error instanceof VacayFusedYearDeleteReadOnlyError
+    || error instanceof VacayYearDeleteReviewRequiredError
+  ) {
+    throw new HttpException({ error: error.message, code: error.code }, 409);
+  }
+  throw error;
+}
+
+function parseCanonicalYear(yearParam: string): number {
+  if (!/^(0|-?[1-9]\d*)$/.test(yearParam)) {
+    throw new HttpException({
+      error: 'Year must be a canonical safe integer',
+      code: 'VACAY_INVALID_YEAR',
+    }, 400);
+  }
+  const year = Number(yearParam);
+  if (!Number.isSafeInteger(year)) {
+    throw new HttpException({
+      error: 'Year must be a canonical safe integer',
+      code: 'VACAY_INVALID_YEAR',
+    }, 400);
+  }
+  return year;
+}
+
+function parseCanonicalPositiveId(value: unknown, field: 'user_id' | 'plan_id'): number {
+  let parsed: number;
+  if (typeof value === 'number') {
+    parsed = value;
+  } else if (typeof value === 'string' && /^[1-9]\d*$/.test(value)) {
+    parsed = Number(value);
+  } else {
+    parsed = Number.NaN;
+  }
+
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new HttpException({
+      error: value === undefined || value === null || value === ''
+        ? `${field} required`
+        : `${field} must be a canonical positive safe integer`,
+      code: 'VACAY_INVALID_ID',
+    }, 400);
+  }
+  return parsed;
+}
 
 /**
  * /api/addons/vacay — shared vacation-day planner.
@@ -61,7 +120,11 @@ export class VacayController {
   @Put('plan')
   async updatePlan(@CurrentUser() user: User, @Body() body: VacayUpdatePlanDto, @Headers('x-socket-id') socketId?: string) {
     const planId = this.vacay.getActivePlanId(user.id);
-    return this.vacay.updatePlan(planId, body, socketId);
+    try {
+      return await this.vacay.updatePlan(planId, body, socketId);
+    } catch (error) {
+      rethrowVacayConflict(error);
+    }
   }
 
   @Post('plan/holiday-calendars')
@@ -120,13 +183,14 @@ export class VacayController {
   @Post('invite')
   @HttpCode(200)
   invite(@CurrentUser() user: User, @Body() body: VacayInviteDto) {
-    if (!body.user_id) {
-      throw new HttpException({ error: 'user_id required' }, 400);
-    }
+    const targetUserId = parseCanonicalPositiveId(body.user_id, 'user_id');
     const plan = this.vacay.getActivePlan(user.id);
-    const result = this.vacay.sendInvite(plan.id, user.id, user.username, user.email, body.user_id as number);
+    const result = this.vacay.sendInvite(plan.id, user.id, user.username, user.email, targetUserId);
     if (result.error) {
-      throw new HttpException({ error: result.error }, result.status!);
+      throw new HttpException({
+        error: result.error,
+        ...(result.code ? { code: result.code } : {}),
+      }, result.status!);
     }
     return { success: true };
   }
@@ -134,9 +198,14 @@ export class VacayController {
   @Post('invite/accept')
   @HttpCode(200)
   acceptInvite(@CurrentUser() user: User, @Body() body: VacayInviteActionDto, @Headers('x-socket-id') socketId?: string) {
-    const result = this.vacay.acceptInvite(user.id, body.plan_id as number, socketId);
+    const planId = parseCanonicalPositiveId(body.plan_id, 'plan_id');
+    const result = this.vacay.acceptInvite(user.id, planId, socketId);
     if (result.error) {
-      throw new HttpException({ error: result.error }, result.status!);
+      throw new HttpException({
+        error: result.error,
+        ...(result.code ? { code: result.code } : {}),
+        ...(result.missing_years ? { missing_years: result.missing_years } : {}),
+      }, result.status!);
     }
     return { success: true };
   }
@@ -144,15 +213,21 @@ export class VacayController {
   @Post('invite/decline')
   @HttpCode(200)
   declineInvite(@CurrentUser() user: User, @Body() body: VacayInviteActionDto, @Headers('x-socket-id') socketId?: string) {
-    this.vacay.declineInvite(user.id, body.plan_id as number, socketId);
+    this.vacay.declineInvite(user.id, parseCanonicalPositiveId(body.plan_id, 'plan_id'), socketId);
     return { success: true };
   }
 
   @Post('invite/cancel')
   @HttpCode(200)
   cancelInvite(@CurrentUser() user: User, @Body() body: VacayInviteDto) {
-    const plan = this.vacay.getActivePlan(user.id);
-    this.vacay.cancelInvite(plan.id, body.user_id as number);
+    const targetUserId = parseCanonicalPositiveId(body.user_id, 'user_id');
+    const result = this.vacay.cancelInvite(user.id, targetUserId);
+    if (result.error) {
+      throw new HttpException({
+        error: result.error,
+        ...(result.code ? { code: result.code } : {}),
+      }, result.status!);
+    }
     return { success: true };
   }
 
@@ -178,18 +253,28 @@ export class VacayController {
   @Post('years')
   @HttpCode(200)
   addYear(@CurrentUser() user: User, @Body() body: VacayAddYearDto, @Headers('x-socket-id') socketId?: string) {
-    if (!body.year) {
-      throw new HttpException({ error: 'Year required' }, 400);
+    if (typeof body.year !== 'number' || !Number.isSafeInteger(body.year)) {
+      throw new HttpException({
+        error: 'Year must be a safe integer',
+        code: 'VACAY_INVALID_YEAR',
+      }, 400);
     }
     const planId = this.vacay.getActivePlanId(user.id);
-    return { years: this.vacay.addYear(planId, body.year as number, socketId) };
+    try {
+      return { years: this.vacay.addYear(planId, body.year, socketId) };
+    } catch (error) {
+      rethrowVacayConflict(error);
+    }
   }
 
   @Delete('years/:year')
   deleteYear(@CurrentUser() user: User, @Param('year') yearParam: string, @Headers('x-socket-id') socketId?: string) {
-    const year = Number.parseInt(yearParam);
-    const planId = this.vacay.getActivePlanId(user.id);
-    return { years: this.vacay.deleteYear(planId, year, socketId) };
+    const year = parseCanonicalYear(yearParam);
+    try {
+      return { years: this.vacay.deleteActiveYear(user.id, year, socketId) };
+    } catch (error) {
+      rethrowVacayConflict(error);
+    }
   }
 
   @Get('year-settings')
@@ -229,7 +314,12 @@ export class VacayController {
       }
       userId = tid;
     }
-    const result = this.vacay.toggleEntry(userId, planId, body.date, body.fraction, body.kind, socketId);
+    let result;
+    try {
+      result = this.vacay.toggleEntry(userId, planId, body.date, body.fraction, body.kind, socketId);
+    } catch (error) {
+      rethrowVacayConflict(error);
+    }
     if (result.error === 'weekend_blocked') {
       throw new HttpException({ error: 'Weekend days are blocked on this plan' }, 400);
     }
@@ -244,7 +334,11 @@ export class VacayController {
     @Headers('x-socket-id') socketId?: string,
   ) {
     const planId = this.vacay.getActivePlanId(user.id);
-    return this.vacay.toggleCompanyHoliday(planId, body.date, body.note, socketId);
+    try {
+      return this.vacay.toggleCompanyHoliday(planId, body.date, body.note, socketId);
+    } catch (error) {
+      rethrowVacayConflict(error);
+    }
   }
 
   @Get('stats/:year')

@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { AuthService } from '../auth/auth.service';
 import { ADDON_IDS } from '../../addons';
 import { noAccess, permissionDenied, adminRequired } from '../../mcp/tools/_shared';
-import { PackingService } from './packing.service';
+import { isPackingUpdateForbidden, PackingService } from './packing.service';
 import {
   packingCreateItemRequestSchema,
   packingSetSharingRequestSchema,
@@ -176,6 +176,7 @@ export class PackingMcp {
     const wasPrivate = !!this.packing.getItemPrivacy(tripId, itemId)?.is_private;
     const item = this.packing.updateItem(tripId, itemId, fields, bodyKeys, undefined, ctx.userId);
     if (!item) return errorResult('Packing item not found.');
+    if (isPackingUpdateForbidden(item)) return errorResult('Only the owner can change sharing.');
     this.broadcastItemUpdate(tripId, itemId, item, wasPrivate);
     return ok({ item });
   }
@@ -246,8 +247,10 @@ export class PackingMcp {
     if (this.auth.isDemoUser(ctx.userId)) return demoDenied();
     if (!this.packing.verifyTripAccess(tripId, ctx.userId)) return noAccess();
     if (!this.guards.hasTripPermission('packing_edit', tripId, ctx.userId)) return permissionDenied();
-    this.packing.reorderItems(tripId, orderedIds);
-    this.guards.safeBroadcast(tripId, 'packing:reordered', { orderedIds });
+    this.packing.reorderItems(tripId, orderedIds, ctx.userId);
+    // The order payload may include the caller's Personal ids. Keep the event
+    // on the actor's sockets instead of exposing those ids to the trip room.
+    this.guards.safeBroadcast(tripId, 'packing:reordered', { orderedIds }, [ctx.userId]);
     return ok({ success: true });
   }
 

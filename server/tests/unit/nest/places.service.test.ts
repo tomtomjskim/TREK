@@ -77,6 +77,7 @@ import { QueryHelpersService } from '../../../src/nest/query-helpers/query-helpe
 import { JourneyDomainService } from '../../../src/nest/journey/journey-domain.service';
 import { TrekPhotosRepository } from '../../../src/nest/photos/trek-photos.repository';
 import { makeStorageFixture } from '../../helpers/storage-fixture';
+import { meteredGoogleApiTransport } from '../../helpers/google-api-transport';
 
 const GPX_FIXTURE = path.join(__dirname, '../../fixtures/test.gpx');
 const KML_FIXTURE = path.join(__dirname, '../../fixtures/test.kml');
@@ -94,7 +95,7 @@ const dbs = new DatabaseService(testDb);
  */
 const placesStorageFx = makeStorageFixture('');
 
-function makePlacesService(maps: MapsService = new MapsService(dbs, photoCacheStub)): PlacesService {
+function makePlacesService(maps: MapsService = new MapsService(dbs, photoCacheStub, meteredGoogleApiTransport(dbs))): PlacesService {
   return new PlacesService(
     dbs,
     new PermissionsService(dbs),

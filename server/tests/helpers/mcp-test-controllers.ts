@@ -78,6 +78,7 @@ import { TripPromptsMcp } from '../../src/nest/trips/trip-prompts.mcp';
 import { PlacePhotoCacheService } from '../../src/nest/place-photos/place-photo-cache.service';
 import { RuntimeEnvService } from '../../src/nest/app-config/runtime-env.service';
 import { makeNotificationsService, makeNotificationPreferencesService } from './notifications';
+import { meteredGoogleApiTransport } from './google-api-transport';
 import { AddonsService } from '../../src/nest/addons/addons.service';
 import { notificationsStub } from './notifications';
 import { EphemeralTokenService } from '../../src/nest/auth/ephemeral-token.service';
@@ -147,7 +148,7 @@ export function createMcpTestRegistry(): McpRegistry {
   // Exactly one instance, shared by maps, places and share: its stampede guard
   // and its on-disk set only work if all three readers see the same maps.
   const placePhotoCache = new PlacePhotoCacheService(dbService, makeStorageFixture('photos/google/').storage);
-  const mapsService = new MapsService(dbService, placePhotoCache);
+  const mapsService = new MapsService(dbService, placePhotoCache, meteredGoogleApiTransport(dbService));
   const journeyDomain = new JourneyDomainService(dbService, realtimeService, new TrekPhotosRepository(dbService));
   // The last three were previously omitted, which left them `undefined` at
   // runtime — silently fine while nothing called them, a TypeError the moment

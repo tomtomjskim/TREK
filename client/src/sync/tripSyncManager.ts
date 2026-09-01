@@ -30,7 +30,7 @@ import {
   enforceBlobBudget,
 } from '../db/offlineDb'
 import { prefetchTilesForTrip } from './tilePrefetcher'
-import { isAuthed } from './authGate'
+import { captureAuthLease, isAuthLeaseValid, type AuthLease } from './authGate'
 import { getOfflinePrefs, isTripOfflineEnabled } from './offlinePrefs'
 import { useSettingsStore } from '../store/settingsStore'
 import type { Trip, Day, Place, PackingItem, TodoItem, BudgetItem, Reservation, TripFile, Accommodation, TripMember } from '../types'
@@ -99,30 +99,39 @@ function isVideo(file: TripFile): boolean {
 // ── Core logic ────────────────────────────────────────────────────────────────
 
 /** Fetch bundle + write all entities for one trip into Dexie. */
-async function syncTrip(tripId: number): Promise<void> {
+async function writeWithLease(lease: AuthLease, write: () => Promise<void>): Promise<boolean> {
+  if (!isAuthLeaseValid(lease)) return false
+  await write()
+  return isAuthLeaseValid(lease)
+}
+
+async function syncTrip(tripId: number, lease: AuthLease): Promise<void> {
   const bundle = await tripsApi.bundle(tripId) as TripBundle
 
-  await upsertTrip(bundle.trip)
-  await upsertDays(bundle.days)
-  await upsertPlaces(bundle.places)
-  await replacePackingItemsForTrip(tripId, bundle.packingItems)
-  await upsertTodoItems(bundle.todoItems)
-  await upsertBudgetItems(bundle.budgetItems)
-  await upsertReservations(bundle.reservations)
-  await upsertTripFiles(bundle.files)
-  await upsertAccommodations(bundle.accommodations || [])
-  await upsertTripMembers(tripId, bundle.members || [])
-  await upsertSyncMeta({
+  // A response can arrive after logout/account switch. Do not let that old
+  // response seed the newly selected (anonymous or other-user) Proxy DB.
+  if (!isAuthLeaseValid(lease)) return
+  if (!await writeWithLease(lease, () => upsertTrip(bundle.trip))) return
+  if (!await writeWithLease(lease, () => upsertDays(bundle.days))) return
+  if (!await writeWithLease(lease, () => upsertPlaces(bundle.places))) return
+  if (!await writeWithLease(lease, () => replacePackingItemsForTrip(tripId, bundle.packingItems))) return
+  if (!await writeWithLease(lease, () => upsertTodoItems(bundle.todoItems))) return
+  if (!await writeWithLease(lease, () => upsertBudgetItems(bundle.budgetItems))) return
+  if (!await writeWithLease(lease, () => upsertReservations(bundle.reservations))) return
+  if (!await writeWithLease(lease, () => upsertTripFiles(bundle.files))) return
+  if (!await writeWithLease(lease, () => upsertAccommodations(bundle.accommodations || []))) return
+  if (!await writeWithLease(lease, () => upsertTripMembers(tripId, bundle.members || []))) return
+  await writeWithLease(lease, () => upsertSyncMeta({
     tripId,
     lastSyncedAt: Date.now(),
     status: 'idle',
     tilesBbox: null,
     filesCachedCount: 0,
-  })
+  }))
 }
 
 /** Cache non-photo file blobs for a trip. Fire-and-forget safe. */
-async function cacheFilesForTrip(tripId: number, files: TripFile[]): Promise<void> {
+async function cacheFilesForTrip(tripId: number, files: TripFile[], lease: AuthLease): Promise<void> {
   const nonPhotos = files.filter(f => f.url && !isPhoto(f) && !isVideo(f))
   // `present` is what syncMeta.filesCachedCount reports (files available
   // offline afterwards); `downloaded` only counts what this run actually wrote.
@@ -132,16 +141,19 @@ async function cacheFilesForTrip(tripId: number, files: TripFile[]): Promise<voi
   for (const file of nonPhotos) {
     // A logout mid-loop repoints offlineDb at the anonymous database, so anything
     // written after it would leave the previous account's documents on the device.
-    if (!isAuthed()) return
+    if (!isAuthLeaseValid(lease)) return
     // Skip if already cached
     const existing = await offlineDb.blobCache.get(file.url!)
+    if (!isAuthLeaseValid(lease)) return
     if (existing) { present++; continue }
 
     try {
       const resp = await fetch(file.url!, { credentials: 'include' })
       if (!resp.ok) continue
       const blob = await resp.blob()
+      if (!isAuthLeaseValid(lease)) return
       await offlineDb.blobCache.put({ url: file.url!, tripId: file.trip_id, blob, bytes: blob.size, mime: file.mime_type, cachedAt: Date.now() })
+      if (!isAuthLeaseValid(lease)) return
       present++
       downloaded++
     } catch {
@@ -150,9 +162,11 @@ async function cacheFilesForTrip(tripId: number, files: TripFile[]): Promise<voi
   }
 
   // Keep the blob cache within its size/count budget after adding new files.
-  if (downloaded > 0) await enforceBlobBudget().catch(() => {})
+  if (downloaded > 0 && isAuthLeaseValid(lease)) await enforceBlobBudget().catch(() => {})
 
+  if (!isAuthLeaseValid(lease)) return
   const meta = await offlineDb.syncMeta.get(tripId)
+  if (!isAuthLeaseValid(lease)) return
   if (meta) await upsertSyncMeta({ ...meta, filesCachedCount: present })
 }
 
@@ -177,14 +191,19 @@ let _syncing = false
  * and the user's per-trip offline choices (#1135 ask 2). Returns the trips to
  * sync; clears Dexie for stale or user-disabled trips as a side effect.
  */
-async function reconcileTrips(trips: Trip[]): Promise<Trip[]> {
+async function reconcileTrips(trips: Trip[], lease: AuthLease): Promise<Trip[]> {
+  if (!isAuthLeaseValid(lease)) return []
   const accessibleIds = new Set(trips.map((trip) => trip.id))
   const cachedTrips = await offlineDb.trips.toArray()
+  if (!isAuthLeaseValid(lease)) return []
   const revoked = cachedTrips.filter((trip) => !accessibleIds.has(trip.id))
   const stale = trips.filter(isStale)
   // Trips the user turned off explicitly are evicted regardless of date.
   const disabled = trips.filter(t => !isTripOfflineEnabled(t.id))
-  await Promise.all([...revoked, ...stale, ...disabled].map(t => clearTripData(t.id).catch(console.error)))
+  for (const trip of [...revoked, ...stale, ...disabled]) {
+    if (!isAuthLeaseValid(lease)) return []
+    await clearTripData(trip.id).catch(console.error)
+  }
   return trips.filter(t => shouldCache(t) && isTripOfflineEnabled(t.id))
 }
 
@@ -195,18 +214,19 @@ export const tripSyncManager = {
    * background. No-ops when offline.
    */
   async syncAll(): Promise<void> {
-    if (_syncing || !navigator.onLine || !isAuthed()) return
+    const lease = captureAuthLease()
+    if (_syncing || !navigator.onLine || !lease) return
     _syncing = true
     try {
       const { trips } = await tripsApi.list() as { trips: Trip[] }
-      const toSync = await reconcileTrips(trips)
+      const toSync = await reconcileTrips(trips, lease)
 
       for (const trip of toSync) {
         // The gate is re-read per trip: a logout halfway through must not keep
         // writing the old account's rows into the (now anonymous) offline DB.
-        if (!isAuthed()) return
+        if (!isAuthLeaseValid(lease)) return
         try {
-          await syncTrip(trip.id)
+          await syncTrip(trip.id, lease)
         } catch (err) {
           console.error(`[tripSync] failed for trip ${trip.id}:`, err)
         }
@@ -215,17 +235,18 @@ export const tripSyncManager = {
       // Cache global user data (tags + categories) — fire-and-forget, so the
       // gate has to be re-read when the response lands, not when it was issued:
       // a logout in between would put these rows in the anonymous database.
-      tagsApi.list().then(d => { if (isAuthed()) upsertTags(d.tags) }).catch(() => {})
-      categoriesApi.list().then(d => { if (isAuthed()) upsertCategories(d.categories) }).catch(() => {})
+      tagsApi.list().then(d => { if (isAuthLeaseValid(lease)) return upsertTags(d.tags) }).catch(() => {})
+      categoriesApi.list().then(d => { if (isAuthLeaseValid(lease)) return upsertCategories(d.categories) }).catch(() => {})
 
       // Cache file blobs + map tiles in background (don't block syncAll)
       const cacheTiles = getOfflinePrefs().cacheTiles
       const tileUrl = useSettingsStore.getState().settings.map_tile_url || undefined
       const cartoKey = useSettingsStore.getState().settings.carto_api_key || undefined
       for (const trip of toSync) {
-        if (!isAuthed()) return
+        if (!isAuthLeaseValid(lease)) return
         const files = await offlineDb.tripFiles.where('trip_id').equals(trip.id).toArray()
-        cacheFilesForTrip(trip.id, files).catch(console.error)
+        if (!isAuthLeaseValid(lease)) return
+        cacheFilesForTrip(trip.id, files, lease).catch(console.error)
       }
 
       // Map tiles last, and only once the browser goes idle. syncAll runs right
@@ -235,9 +256,10 @@ export const tripSyncManager = {
       if (cacheTiles) {
         whenIdle(async () => {
           for (const trip of toSync) {
-            if (!isAuthed() || !navigator.onLine) return
+            if (!isAuthLeaseValid(lease) || !navigator.onLine) return
             const places = await offlineDb.places.where('trip_id').equals(trip.id).toArray()
-            await prefetchTilesForTrip(trip.id, places, tileUrl, undefined, cartoKey).catch(console.error)
+            if (!isAuthLeaseValid(lease)) return
+            await prefetchTilesForTrip(trip.id, places, tileUrl, undefined, cartoKey, lease).catch(console.error)
           }
         })
       }
@@ -256,20 +278,21 @@ export const tripSyncManager = {
    * Returns the number of trips prepared.
    */
   async prepareForOffline(onProgress?: (p: PrepareProgress) => void): Promise<number> {
-    if (_syncing || !navigator.onLine || !isAuthed()) return 0
+    const lease = captureAuthLease()
+    if (_syncing || !navigator.onLine || !lease) return 0
     _syncing = true
     try {
       const { trips } = await tripsApi.list() as { trips: Trip[] }
-      const toSync = await reconcileTrips(trips)
+      const toSync = await reconcileTrips(trips, lease)
       const total = toSync.length
 
       // 1) Trip bundles (structured data).
       let i = 0
       for (const trip of toSync) {
-        if (!isAuthed()) return 0
+        if (!isAuthLeaseValid(lease)) return 0
         onProgress?.({ phase: 'trips', current: ++i, total, label: trip.title })
         try {
-          await syncTrip(trip.id)
+          await syncTrip(trip.id, lease)
         } catch (err) {
           console.error(`[tripSync] prepare failed for trip ${trip.id}:`, err)
         }
@@ -277,17 +300,20 @@ export const tripSyncManager = {
 
       // Global user data (tags + categories) — awaited here.
       await Promise.all([
-        tagsApi.list().then(d => upsertTags(d.tags)).catch(() => {}),
-        categoriesApi.list().then(d => upsertCategories(d.categories)).catch(() => {}),
+        tagsApi.list().then(d => { if (isAuthLeaseValid(lease)) return upsertTags(d.tags) }).catch(() => {}),
+        categoriesApi.list().then(d => { if (isAuthLeaseValid(lease)) return upsertCategories(d.categories) }).catch(() => {}),
       ])
+      if (!isAuthLeaseValid(lease)) return 0
 
       // 2) File blobs — awaited so "prepared" really means downloaded.
       i = 0
       for (const trip of toSync) {
-        if (!isAuthed()) return 0
+        if (!isAuthLeaseValid(lease)) return 0
         onProgress?.({ phase: 'files', current: ++i, total, label: trip.title })
         const files = await offlineDb.tripFiles.where('trip_id').equals(trip.id).toArray()
-        await cacheFilesForTrip(trip.id, files).catch(console.error)
+        if (!isAuthLeaseValid(lease)) return 0
+        await cacheFilesForTrip(trip.id, files, lease).catch(console.error)
+        if (!isAuthLeaseValid(lease)) return 0
       }
 
       // 3) Map tiles — awaited, and only when the user opted to store them.
@@ -296,13 +322,16 @@ export const tripSyncManager = {
         const cartoKey = useSettingsStore.getState().settings.carto_api_key || undefined
         i = 0
         for (const trip of toSync) {
-          if (!isAuthed()) return 0
+          if (!isAuthLeaseValid(lease)) return 0
           onProgress?.({ phase: 'tiles', current: ++i, total, label: trip.title })
           const places = await offlineDb.places.where('trip_id').equals(trip.id).toArray()
-          await prefetchTilesForTrip(trip.id, places, tileUrl, true, cartoKey).catch(console.error)
+          if (!isAuthLeaseValid(lease)) return 0
+          await prefetchTilesForTrip(trip.id, places, tileUrl, true, cartoKey, lease).catch(console.error)
+          if (!isAuthLeaseValid(lease)) return 0
         }
       }
 
+      if (!isAuthLeaseValid(lease)) return 0
       onProgress?.({ phase: 'done', current: total, total })
       return total
     } finally {

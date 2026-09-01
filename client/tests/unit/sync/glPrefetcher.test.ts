@@ -156,19 +156,20 @@ describe('prefetchVectorForPlaces', () => {
 
   it('FE-SYNC-GLPF-008: does nothing offline', async () => {
     Object.defineProperty(navigator, 'onLine', { value: false, writable: true, configurable: true });
-    await expect(prefetchVectorForPlaces(places, STYLE_URL)).resolves.toEqual({ tiles: 0, template: null });
+    await expect(prefetchVectorForPlaces(places, STYLE_URL)).resolves.toEqual({ tiles: 0, template: null, complete: false });
     expect(requested).toHaveLength(0);
   });
 
   it('FE-SYNC-GLPF-009: does nothing when no place has coordinates', async () => {
     const result = await prefetchVectorForPlaces([buildPlace({ lat: null, lng: null })], STYLE_URL);
-    expect(result).toEqual({ tiles: 0, template: null });
+    expect(result).toEqual({ tiles: 0, template: null, complete: false });
   });
 
   it('FE-SYNC-GLPF-010: abandons the queue when cancelled', async () => {
     const result = await prefetchVectorForPlaces(places, STYLE_URL, () => true);
     // The style assets are already paid for at that point; the tiles are not.
     expect(result.tiles).toBe(0);
+    expect(result.complete).toBe(false);
     expect([...cache.store.keys()].some(u => u.endsWith('.pbf') && u.includes('/planet/'))).toBe(false);
   });
 
@@ -179,7 +180,47 @@ describe('prefetchVectorForPlaces', () => {
 
     const again = await prefetchVectorForPlaces(places, STYLE_URL);
     expect(again.tiles).toBe(0);
+    expect(again.complete).toBe(true);
     expect(requested.length).toBeLessThan(first);
+  });
+
+  it('reports incomplete when a required sprite asset fails', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/sprites/')) throw new Error('sprite unavailable');
+      if (url === STYLE_URL) return new Response(JSON.stringify(STYLE_DOC), { status: 200 });
+      if (url === 'https://tiles.openfreemap.org/planet') {
+        return new Response(JSON.stringify({ tiles: [TILE_TEMPLATE] }), { status: 200 });
+      }
+      return new Response('ok', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await prefetchVectorForPlaces(places, STYLE_URL);
+
+    expect(result.complete).toBe(false);
+    expect(result.tiles).toBe(0);
+  });
+
+  it('reports incomplete when a vector tile fetch fails', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('.pbf')) throw new Error('tile unavailable');
+      return new Response(
+        url === STYLE_URL
+          ? JSON.stringify(STYLE_DOC)
+          : url === 'https://tiles.openfreemap.org/planet'
+            ? JSON.stringify({ tiles: [TILE_TEMPLATE] })
+            : 'ok',
+        { status: 200 },
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await prefetchVectorForPlaces(places, STYLE_URL);
+
+    expect(result.complete).toBe(false);
+    expect(result.tiles).toBe(0);
   });
 });
 

@@ -108,7 +108,21 @@ interface MapLibreLabelMap {
   setLayoutProperty: (layerId: string, property: 'text-field', value: unknown) => unknown
 }
 
-const originalLabelExpressions = new WeakMap<object, Map<string, unknown>>()
+interface LabelExpressionState {
+  original: unknown
+  applied: unknown
+}
+
+const originalLabelExpressions = new WeakMap<object, Map<string, LabelExpressionState>>()
+
+function sameExpression(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  try {
+    return JSON.stringify(a) === JSON.stringify(b)
+  } catch {
+    return false
+  }
+}
 
 function containsNameReference(value: unknown): boolean {
   if (typeof value === 'string') {
@@ -128,10 +142,10 @@ function containsNameReference(value: unknown): boolean {
  */
 export function applyMapLibreLabelLanguage(map: MapLibreLabelMap, language: string | null): number {
   const mapKey = map as object
-  let originals = originalLabelExpressions.get(mapKey)
-  if (!originals) {
-    originals = new Map<string, unknown>()
-    originalLabelExpressions.set(mapKey, originals)
+  let expressions = originalLabelExpressions.get(mapKey)
+  if (!expressions) {
+    expressions = new Map<string, LabelExpressionState>()
+    originalLabelExpressions.set(mapKey, expressions)
   }
 
   let changed = 0
@@ -140,13 +154,17 @@ export function applyMapLibreLabelLanguage(map: MapLibreLabelMap, language: stri
     if (layer.type !== 'symbol') continue
     try {
       const current = map.getLayoutProperty(layer.id, 'text-field')
-      const original = originals.get(layer.id) ?? current
+      const previous = expressions.get(layer.id)
+      // MapLibre may reuse a layer id after setStyle(). If the current field no
+      // longer equals the expression we applied, it is the new style's native
+      // expression and must become the new fallback source.
+      const original = previous && sameExpression(current, previous.applied) ? previous.original : current
       if (!containsNameReference(original)) continue
-      if (!originals.has(layer.id)) originals.set(layer.id, original)
       const next = language
         ? ['coalesce', ['get', `name:${language}`], ['get', `name_${language}`], original]
         : original
       map.setLayoutProperty(layer.id, 'text-field', next)
+      expressions.set(layer.id, { original, applied: next })
       changed += 1
     } catch {
       // Provider styles can contain unsupported expressions; leave that layer untouched.

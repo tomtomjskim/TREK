@@ -35,7 +35,7 @@ vi.mock('../../../src/nest/common/crypto/apiKeyCrypto', () => ({
 
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
+import { runMigrations } from '../../../src/db/migrationRunner';
 import { resetTestDb } from '../../helpers/test-db';
 import { createUser, createAdmin } from '../../helpers/factories';
 import fs from 'node:fs';
@@ -44,9 +44,11 @@ import { UserProfileService } from '../../../src/nest/auth/user-profile.service'
 import { makeStorageFixture } from '../../helpers/storage-fixture';
 import { DatabaseService } from '../../../src/nest/database/database.service';
 import { SEARCH_TEXT_FIELD_MASK } from '../../../src/nest/maps/maps.helpers';
+import { meteredGoogleApiTransport } from '../../helpers/google-api-transport';
 
 const avatarsFx = makeStorageFixture('avatars/');
-const profile = new UserProfileService(new DatabaseService(testDb), avatarsFx.storage);
+const profileDb = new DatabaseService(testDb);
+const profile = new UserProfileService(profileDb, avatarsFx.storage, meteredGoogleApiTransport(profileDb));
 
 beforeAll(() => {
   createTables(testDb);

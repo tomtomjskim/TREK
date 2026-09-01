@@ -237,6 +237,20 @@ describe('PackingRpc keeps private items off the room (#858)', () => {
     expect(f.realtime.broadcast).not.toHaveBeenCalled();
   });
 
+  it('PACKING-RPC-016c a recipient cannot publish an owner\'s Shared item', async () => {
+    const f = build({
+      before: { id: 70, is_private: 1, owner_id: 7 },
+      updated: { forbidden: true } as never,
+    });
+    const res = (await f.host('db:write:packing').dispatch(
+      req('packing.update', { tripId: 1, itemId: 70, input: { is_private: false } }),
+      42,
+    )) as RpcError;
+
+    expect(res.error.code).toBe('RESOURCE_FORBIDDEN');
+    expect(f.realtime.broadcast).not.toHaveBeenCalled();
+  });
+
   it('PACKING-RPC-017 a refused write broadcasts nothing at all', async () => {
     const f = build({ canEdit: false });
     await f.host('db:write:packing').dispatch(req('packing.create', { tripId: 1, input: { name: 'x' } }), 42);

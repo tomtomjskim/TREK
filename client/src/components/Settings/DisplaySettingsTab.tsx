@@ -8,11 +8,12 @@ import { SYMBOLS, currenciesWith } from '../Budget/BudgetPanel.constants'
 import Section from './Section'
 import { TRIP_TAB_IDS, TRIP_TAB_LABEL_KEYS } from '../../constants/tripTabs'
 import { DEFAULT_START_PAGE, DEFAULT_START_TRIP_TAB } from '../../utils/startDestination'
-import type { DistanceUnit } from '../../types'
+import { normalizeCalendarWeekStart } from '../../utils/calendarWeek'
+import type { CalendarWeekStart, DistanceUnit } from '../../types'
 
 export default function DisplaySettingsTab(): React.ReactElement {
   const { settings, updateSetting } = useSettingsStore()
-  const { t } = useTranslation()
+  const { t, locale } = useTranslation()
   const toast = useToast()
   const [tempUnit, setTempUnit] = useState<string>(settings.temperature_unit || DEFAULT_SETTINGS.temperature_unit)
   const [distanceUnit, setDistanceUnit] = useState<DistanceUnit>(settings.distance_unit || DEFAULT_SETTINGS.distance_unit)
@@ -38,6 +39,7 @@ export default function DisplaySettingsTab(): React.ReactElement {
 
   const startPage = settings.start_page === 'active_trip' ? 'active_trip' : DEFAULT_START_PAGE
   const startTripTab = settings.start_trip_tab || DEFAULT_START_TRIP_TAB
+  const calendarWeekStart = normalizeCalendarWeekStart(settings.calendar_week_start)
 
   return (
     <>
@@ -284,6 +286,42 @@ export default function DisplaySettingsTab(): React.ReactElement {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Calendar Week Start */}
+      <div>
+        <label className="block text-sm font-medium mb-2 text-content-secondary">{t('settings.calendarWeekStart')}</label>
+        <div className="flex gap-3">
+          {([
+            { value: 1, date: new Date(2024, 0, 1) },
+            { value: 0, date: new Date(2024, 0, 7) },
+          ] as const).map(opt => {
+            const label = opt.date.toLocaleDateString(locale, { weekday: 'long' })
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                aria-pressed={calendarWeekStart === opt.value}
+                onClick={async () => {
+                  try { await updateSetting('calendar_week_start', opt.value as CalendarWeekStart) }
+                  catch (e: unknown) { toast.error(e instanceof Error ? e.message : t('common.error')) }
+                }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '10px 20px', borderRadius: 10, cursor: 'pointer',
+                  fontFamily: 'inherit', fontSize: 'calc(14px * var(--fs-scale-body, 1))', fontWeight: 500,
+                  border: calendarWeekStart === opt.value ? '2px solid var(--text-primary)' : '2px solid var(--border-primary)',
+                  background: calendarWeekStart === opt.value ? 'var(--bg-hover)' : 'var(--bg-card)',
+                  color: 'var(--text-primary)',
+                  transition: 'all 0.15s',
+                }}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+        <p className="text-xs text-content-faint mt-2">{t('settings.calendarWeekStartHint')}</p>
       </div>
       </Section>
 

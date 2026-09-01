@@ -51,6 +51,7 @@ const glMap = vi.hoisted(() => ({
   getBearing: vi.fn(() => 0),
   setTerrain: vi.fn(),
   setConfigProperty: vi.fn(),
+  getLayoutProperty: vi.fn(() => ['get', 'name']),
   queryTerrainElevation: vi.fn((): number | null => null),
 }))
 
@@ -1298,6 +1299,31 @@ describe('MapViewGL', () => {
     // It ships its own 3D, so nothing extra is injected.
     expect(mapboxSetup.addTerrainAndSky).not.toHaveBeenCalled()
     expect(mapboxSetup.addCustom3dBuildings).not.toHaveBeenCalled()
+  })
+
+  it('FE-COMP-MAPVIEWGL-038b: MapLibre styles use the saved label language without assuming a Mapbox config', async () => {
+    loadOnAttach()
+    glMap.getStyle.mockReturnValue({ layers: [{ id: 'place-label', type: 'symbol' }] })
+    glMap.getLayoutProperty.mockReturnValue(['get', 'name'])
+    useSettingsStore.setState({
+      settings: {
+        ...useSettingsStore.getState().settings,
+        map_provider: 'maplibre-gl',
+        maplibre_style: 'https://tiles.openfreemap.org/styles/liberty',
+        map_label_language: 'ko',
+        language: 'en',
+      },
+    } as any)
+
+    render(<MapViewGL places={[]} fitKey={1} glProvider="maplibre-gl" />)
+    await act(async () => {})
+
+    expect(glMap.setLayoutProperty).toHaveBeenCalledWith(
+      'place-label',
+      'text-field',
+      ['coalesce', ['get', 'name:ko'], ['get', 'name_ko'], ['get', 'name']],
+    )
+    expect(glMap.setConfigProperty).not.toHaveBeenCalled()
   })
 
   it('FE-COMP-MAPVIEWGL-039: a fix attaches the blue dot and follow mode eases the camera onto it', async () => {

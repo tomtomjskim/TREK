@@ -14,7 +14,13 @@ import { useTransportRoutes } from '../../hooks/useTransportRoutes'
 import { visibleRouteReservations } from '../../utils/reservationRoutes'
 import { safeHexColor } from '../../utils/safeColor'
 import { escapeHtml } from '@trek/shared'
-import { MAPBOX_DEFAULT_STYLE, styleForActiveProvider, basemapLanguage, type GlMapProvider } from './glProviders'
+import {
+  MAPBOX_DEFAULT_STYLE,
+  styleForActiveProvider,
+  resolveMapLabelLanguage,
+  applyMapLibreLabelLanguage,
+  type GlMapProvider,
+} from './glProviders'
 import LocationButton from './LocationButton'
 import { useGeolocation } from '../../hooks/useGeolocation'
 import type { Day, Place, Reservation, RouteVia } from '../../types'
@@ -446,6 +452,7 @@ export function MapViewGL({
   const mapboxQuality = useSettingsStore(s => s.settings.mapbox_quality_mode === true)
   const showEndpointLabels = useSettingsStore(s => s.settings.map_booking_labels) === true
   const mapLang = useSettingsStore(s => s.settings.language)
+  const mapLabelLanguage = useSettingsStore(s => s.settings.map_label_language || 'auto')
   const isMapLibre = glProvider === 'maplibre-gl'
   const glStyle = styleForActiveProvider(glProvider, rawMapboxStyle, rawMaplibreStyle)
   const enableMapbox3d = !isMapLibre && mapbox3d
@@ -1030,15 +1037,21 @@ export function MapViewGL({
     }
   }, [glProvider, glStyle, mapboxToken, enableMapbox3d, mapboxQuality]) // rebuild on provider/style changes only
 
-  // Pin the basemap label language to the UI language so labels don't fall back to the
+  // Pin the basemap label language to the saved preference so labels don't fall back to the
   // browser/OS locale and stack multiple scripts per place (e.g. "India/भारत/India", #1299).
-  // Mapbox Standard exposes this via a basemap config property; classic and MapLibre styles
-  // are left as-is. Runs on load (mapReady) and whenever the UI language changes.
+  // Mapbox Standard exposes this via a basemap config property; classic Mapbox styles and
+  // MapLibre styles expose name-bearing symbol layers instead. The helper retains provider
+  // expressions so switching language never nests fallbacks or loses native mode.
   useEffect(() => {
     const map = mapRef.current
-    if (!map || !mapReady || isMapLibre || !isStandardFamily(glStyle)) return
-    try { map.setConfigProperty('basemap', 'language', basemapLanguage(mapLang)) } catch { /* style/SDK may not support the basemap language property */ }
-  }, [mapLang, mapReady, isMapLibre, glStyle])
+    if (!map || !mapReady) return
+    const language = resolveMapLabelLanguage(mapLabelLanguage, mapLang)
+    if (isMapLibre || !isStandardFamily(glStyle)) {
+      try { applyMapLibreLabelLanguage(map, language) } catch { /* style/SDK may not expose layout expressions */ }
+      return
+    }
+    try { map.setConfigProperty('basemap', 'language', language) } catch { /* style/SDK may not support the basemap language property */ }
+  }, [mapLang, mapLabelLanguage, mapReady, isMapLibre, glStyle])
 
   // Photo loading — mirrors the Leaflet MapView. Updates via RAF to batch
   // simultaneous thumb arrivals into one re-render.

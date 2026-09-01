@@ -3,7 +3,11 @@ import { PluginGuards } from '../plugins/host/plugin-guards.service';
 import { BadParams, ForbiddenResource } from '../plugins/host/rpc-errors';
 import type { PluginRpcContext } from '../plugins/host/rpc-kit/types';
 import { ADDON_IDS } from '../../addons';
-import { VacayService } from './vacay.service';
+import {
+  VacayFusedCompanyHolidaysReadOnlyError,
+  VacayInvalidDateError,
+  VacayService,
+} from './vacay.service';
 
 /**
  * The vacay surface a plugin may reach (#plugins).
@@ -31,7 +35,12 @@ export class VacayRpc {
     const userId = this.requireVacayUser(ctx, 'writes');
     const date = this.dateStr(params.date);
     this.requireVacayAddon();
-    return this.vacay.toggleEntry(userId, this.vacay.getActivePlanId(userId), date, 1, 'vacation', undefined);
+    try {
+      return this.vacay.toggleEntry(userId, this.vacay.getActivePlanId(userId), date, 1, 'vacation', undefined);
+    } catch (error) {
+      if (error instanceof VacayInvalidDateError) throw new BadParams(error.message);
+      throw error;
+    }
   }
 
   @PluginMethod('vacay.toggleCompanyHoliday', { permission: 'db:write:vacay' })
@@ -40,7 +49,15 @@ export class VacayRpc {
     const date = this.dateStr(params.date);
     const note = typeof params.note === 'string' ? params.note.slice(0, 256) : undefined;
     this.requireVacayAddon();
-    return this.vacay.toggleCompanyHoliday(this.vacay.getActivePlanId(userId), date, note, undefined);
+    try {
+      return this.vacay.toggleCompanyHoliday(this.vacay.getActivePlanId(userId), date, note, undefined);
+    } catch (error) {
+      if (error instanceof VacayInvalidDateError) throw new BadParams(error.message);
+      if (error instanceof VacayFusedCompanyHolidaysReadOnlyError) {
+        throw new ForbiddenResource(error.message);
+      }
+      throw error;
+    }
   }
 
   private requireVacayUser(ctx: PluginRpcContext, kind: 'reads' | 'writes'): number {

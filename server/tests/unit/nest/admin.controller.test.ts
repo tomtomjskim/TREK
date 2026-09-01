@@ -14,6 +14,7 @@ import type { AdminService } from '../../../src/nest/admin/admin.service';
 import type { PluginRuntimeService } from '../../../src/nest/plugins/plugin-runtime.service';
 import type { AuditService } from '../../../src/nest/audit/audit.service';
 import type { NotificationsService } from '../../../src/nest/notifications/notifications.service';
+import type { GoogleApiUsageService } from '../../../src/nest/google-api-usage/google-api-usage.service';
 import type { User } from '../../../src/types';
 
 const user = { id: 1, role: 'admin', email: 'admin@example.test' } as User;
@@ -31,6 +32,7 @@ const audit = { writeAudit } as unknown as AuditService;
 // (same behavior as the old services/notificationService path mock).
 const sendNotification = vi.fn().mockResolvedValue(undefined);
 const notifications = { send: sendNotification } as unknown as NotificationsService;
+const googleUsage = { snapshot: vi.fn(() => []) } as unknown as GoogleApiUsageService;
 /** The flags live on AddonsService now; the toggle routes reach it directly. */
 const addonsStub = () => ({
   getBagTracking: vi.fn(() => ({ enabled: false })),
@@ -51,7 +53,7 @@ const addonsStub = () => ({
 // The MCP-token routes read TokenService now, not AdminService. Stubbed via a
 // fourth, optional argument so every existing call site stays as it was.
 const adminCtl = (s: AdminService, rt?: PluginRuntimeService, addons: AddonsService = addonsStub(), tokens: Partial<TokenService> = {}, invites: Partial<RegistrationInvitesService> = {}, oauth: Partial<OauthService> = {}) =>
-  new AdminController(s, addons, rt as unknown as PluginRuntimeService, audit, notifications, tokens as TokenService, invites as RegistrationInvitesService, oauth as OauthService);
+  new AdminController(s, addons, rt as unknown as PluginRuntimeService, audit, notifications, tokens as TokenService, invites as RegistrationInvitesService, oauth as OauthService, googleUsage);
 function thrown(fn: () => unknown): { status: number; body: unknown } {
   try { fn(); } catch (err) {
     if (err instanceof NotFoundException) return { status: 404, body: err.getResponse() };

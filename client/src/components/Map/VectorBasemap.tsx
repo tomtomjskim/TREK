@@ -3,6 +3,8 @@ import { useMap } from 'react-leaflet'
 import type * as L from 'leaflet'
 import type { MaplibreGL } from '@maplibre/maplibre-gl-leaflet'
 import { attributionForTile } from '../../constants/mapDefaults'
+import { useSettingsStore } from '../../store/settingsStore'
+import { applyMapLibreLabelLanguage, resolveMapLabelLanguage } from './glProviders'
 
 /** The Leaflet layer maplibre-gl-leaflet hands back. */
 export type GlLeafletLayer = InstanceType<typeof MaplibreGL>
@@ -33,6 +35,24 @@ function creditBasemap(map: L.Map, style: string): void {
   map.attributionControl?.addAttribution(attributionForTile(style))
 }
 
+function labelLanguage(): string | null {
+  const settings = useSettingsStore.getState().settings
+  return resolveMapLabelLanguage(settings.map_label_language, settings.language)
+}
+
+/** Keep translated names in sync with style reloads and live setting changes. */
+type LabelLanguageSource = string | null | (() => string | null)
+
+function bindLabelLanguage(layer: GlLeafletLayer, language: LabelLanguageSource): void {
+  const gl = layer.getMaplibreMap()
+  if (!gl || typeof gl.getLayoutProperty !== 'function' || typeof gl.setLayoutProperty !== 'function') return
+  const apply = () => {
+    applyMapLibreLabelLanguage(gl, typeof language === 'function' ? language() : language)
+  }
+  gl.on('style.load', apply)
+  if (gl.isStyleLoaded()) apply()
+}
+
 /**
  * A MapLibre vector style as the basemap of a Leaflet map.
  *
@@ -47,6 +67,8 @@ function creditBasemap(map: L.Map, style: string): void {
 export function VectorBasemap({ style }: { style: string }): null {
   const map = useMap()
   const layerRef = useRef<GlLeafletLayer | null>(null)
+  const mapLanguage = useSettingsStore(s => s.settings.language)
+  const mapLabelLanguage = useSettingsStore(s => s.settings.map_label_language)
   const styleRef = useRef(style)
   styleRef.current = style
 
@@ -67,6 +89,7 @@ export function VectorBasemap({ style }: { style: string }): null {
       layerRef.current = layer
       layer.addTo(map)
       creditBasemap(map, styleRef.current)
+      bindLabelLanguage(layer, labelLanguage)
     })()
 
     return () => {
@@ -81,6 +104,12 @@ export function VectorBasemap({ style }: { style: string }): null {
   useEffect(() => {
     layerRef.current?.getMaplibreMap()?.setStyle(style)
   }, [style])
+
+  useEffect(() => {
+    const gl = layerRef.current?.getMaplibreMap()
+    if (!gl || typeof gl.getLayoutProperty !== 'function' || typeof gl.setLayoutProperty !== 'function') return
+    applyMapLibreLabelLanguage(gl, resolveMapLabelLanguage(mapLabelLanguage, mapLanguage))
+  }, [mapLanguage, mapLabelLanguage])
 
   return null
 }
@@ -100,7 +129,7 @@ export async function attachVectorBasemap(
   style: string,
   ref: { current: GlLeafletLayer | null },
   cancelled: () => boolean,
-  opts: { hideLabels?: boolean } = {},
+  opts: { hideLabels?: boolean; labelLanguage?: string | null } = {},
 ): Promise<void> {
   const maplibreGL = await loadLayerFactory()
   if (cancelled()) return
@@ -111,6 +140,7 @@ export async function attachVectorBasemap(
   // The raster layer this replaces carried the credit, and OpenFreeMap asks for
   // one of its own.
   creditBasemap(map, style)
+  bindLabelLanguage(layer, opts.labelLanguage === undefined ? labelLanguage : opts.labelLanguage)
   if (opts.hideLabels) hideLabelLayers(layer)
 }
 

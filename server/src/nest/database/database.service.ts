@@ -43,6 +43,15 @@ export class DatabaseService {
     return this.conn.transaction(() => fn(this.conn))();
   }
 
+  /**
+   * Acquire SQLite's write reservation before a read-check-write mutation.
+   * This prevents another connection from changing the checked topology before
+   * the first write upgrades a deferred transaction.
+   */
+  transactionImmediate<T>(fn: (conn: Database.Database) => T): T {
+    return this.conn.transaction(() => fn(this.conn)).immediate();
+  }
+
   // Trip-access helpers delegate to the db/database exports (not this.conn):
   // tests vi.mock that module and stub the helpers themselves, so the stubs
   // must keep flowing through here.

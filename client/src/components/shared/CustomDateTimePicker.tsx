@@ -4,12 +4,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from '../../i18n';
 import { useRemeasureSignal } from '../../hooks/useAnchoredPosition';
+import { useSettingsStore } from '../../store/settingsStore';
+import { getCalendarMonthStartOffset, getCalendarWeekdayIndices } from '../../utils/calendarWeek';
 
 function daysInMonth(year: number, month: number): number {
   return new Date(year, month + 1, 0).getDate();
-}
-function getWeekday(year: number, month: number, day: number): number {
-  return new Date(year, month, day).getDay();
 }
 const YEAR_PAGE_SIZE = 12;
 type CalendarView = 'days' | 'months' | 'years';
@@ -38,6 +37,7 @@ export function CustomDatePicker({
   max,
 }: CustomDatePickerProps) {
   const { locale, t } = useTranslation();
+  const calendarWeekStart = useSettingsStore((state) => state.settings.calendar_week_start);
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<CalendarView>('days');
   const [yearPageStart, setYearPageStart] = useState(0);
@@ -137,9 +137,9 @@ export function CustomDatePicker({
   };
 
   const days = daysInMonth(viewYear, viewMonth);
-  const startDay = (getWeekday(viewYear, viewMonth, 1) + 6) % 7;
-  const weekdays = Array.from({ length: 7 }, (_, i) =>
-    new Date(2024, 0, i + 1).toLocaleDateString(locale, { weekday: 'narrow' })
+  const startDay = getCalendarMonthStartOffset(viewYear, viewMonth, calendarWeekStart);
+  const weekdays = getCalendarWeekdayIndices(calendarWeekStart).map((weekdayIndex) =>
+    new Date(2024, 0, weekdayIndex === 0 ? 7 : weekdayIndex).toLocaleDateString(locale, { weekday: 'narrow' })
   );
 
   const monthNames = Array.from({ length: 12 }, (_, i) =>
@@ -477,7 +477,7 @@ export function CustomDatePicker({
             {/* ── Days view ── */}
             {view === 'days' && (
               <>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 4 }}>
+                <div data-testid="custom-date-picker-weekdays" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2, marginBottom: 4 }}>
                   {weekdays.map((d, i) => (
                     <div
                       key={i}
@@ -493,7 +493,7 @@ export function CustomDatePicker({
                     </div>
                   ))}
                 </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
+                <div data-testid="custom-date-picker-days" style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
                   {Array.from({ length: startDay }, (_, i) => (
                     <div key={`e-${i}`} />
                   ))}

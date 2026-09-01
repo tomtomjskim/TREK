@@ -188,11 +188,14 @@ export class AddonsService {
    * "off" while the feature runs, which is worse than either default.
    */
   getPlacesEnrich() {
-    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = 'places_enrich_enabled'").get() as
-      | { value: string }
-      | undefined;
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE key IN ('places_enrichment_enabled', 'places_enrich_enabled') ORDER BY CASE key WHEN 'places_enrichment_enabled' THEN 0 ELSE 1 END LIMIT 1").get() as
+      | { value: string } | undefined;
     return { enabled: row?.value !== 'false' };
   }
 
-  updatePlacesEnrich(enabled: boolean) { return this.writeFlag('places_enrich_enabled', enabled); }
+  updatePlacesEnrich(enabled: boolean) {
+    this.writeFlag('places_enrichment_enabled', enabled);
+    const result = this.writeFlag('places_enrich_enabled', enabled);
+    return result;
+  }
 }

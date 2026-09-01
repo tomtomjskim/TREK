@@ -14,6 +14,10 @@ import { CollabRpc } from '../../../src/nest/collab/collab.rpc';
 import { AtlasRpc } from '../../../src/nest/atlas/atlas.rpc';
 import { BucketItemExistsError } from '../../../src/nest/atlas/atlas.service';
 import { VacayRpc } from '../../../src/nest/vacay/vacay.rpc';
+import {
+  VacayFusedCompanyHolidaysReadOnlyError,
+  VacayInvalidDateError,
+} from '../../../src/nest/vacay/vacay.service';
 import { JournalRpc } from '../../../src/nest/journey/journal.rpc';
 import { CollectionsRpc } from '../../../src/nest/collections/collections.rpc';
 import type { DatabaseService } from '../../../src/nest/database/database.service';
@@ -151,6 +155,34 @@ describe('addon-gated domains validate their input', () => {
     const host = build();
     expect(err(await host.dispatch(req('vacay.toggleEntry', { date: '01.01.2027' }), 42)).message).toBe('date must be YYYY-MM-DD');
     expect(err(await host.dispatch(req('vacay.toggleCompanyHoliday', { date: 42 }), 42)).message).toBe('date must be YYYY-MM-DD');
+  });
+
+  it('ADDONERR-005b vacay maps calendar and fused-policy service errors onto RPC errors', async () => {
+    const invalidDateHost = build({
+      vacay: { toggleEntry: vi.fn(() => { throw new VacayInvalidDateError(); }) },
+    });
+    expect(err(await invalidDateHost.dispatch(
+      req('vacay.toggleEntry', { date: '2027-02-30' }),
+      42,
+    ))).toMatchObject({
+      code: 'BAD_PARAMS',
+      message: 'Date must be a valid YYYY-MM-DD calendar date',
+    });
+
+    const fusedHost = build({
+      vacay: {
+        toggleCompanyHoliday: vi.fn(() => {
+          throw new VacayFusedCompanyHolidaysReadOnlyError();
+        }),
+      },
+    });
+    expect(err(await fusedHost.dispatch(
+      req('vacay.toggleCompanyHoliday', { date: '2027-01-01' }),
+      42,
+    ))).toMatchObject({
+      code: 'RESOURCE_FORBIDDEN',
+      message: 'Company holidays are read-only while Vacay plans are fused',
+    });
   });
 
   it('ADDONERR-006 journal needs an entry_date and a journal title', async () => {

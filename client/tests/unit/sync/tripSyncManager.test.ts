@@ -44,6 +44,12 @@ function makeBundle(tripId: number) {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(res => { resolve = res; });
+  return { promise, resolve };
+}
+
 beforeEach(async () => {
   await clearAll();
   tripSyncManager._resetSyncing();
@@ -381,6 +387,55 @@ describe('tripSyncManager.syncAll — local calendar dates', () => {
 // ── logout mid-sync ────────────────────────────────────────────────────────────
 
 describe('tripSyncManager.syncAll — logout while syncing', () => {
+  it('does not write a bundle that arrives after logout', async () => {
+    const tripId = 502;
+    const trip = buildTrip({ id: tripId, end_date: dateOffset(5) });
+    const response = deferred<ReturnType<typeof makeBundle>>();
+    let bundleRequested!: () => void;
+    const requested = new Promise<void>(resolve => { bundleRequested = resolve; });
+
+    server.use(
+      http.get('/api/trips', () => HttpResponse.json({ trips: [trip] })),
+      http.get(`/api/trips/${tripId}/bundle`, async () => {
+        bundleRequested();
+        return HttpResponse.json(await response.promise);
+      }),
+    );
+
+    const syncing = tripSyncManager.syncAll();
+    await requested;
+    setAuthed(false);
+    response.resolve({ ...makeBundle(tripId), trip });
+    await syncing;
+
+    expect(await offlineDb.trips.get(tripId)).toBeUndefined();
+  });
+
+  it('does not write an old bundle after logout and account switch', async () => {
+    const tripId = 503;
+    const trip = buildTrip({ id: tripId, end_date: dateOffset(5) });
+    const response = deferred<ReturnType<typeof makeBundle>>();
+    let bundleRequested!: () => void;
+    const requested = new Promise<void>(resolve => { bundleRequested = resolve; });
+
+    server.use(
+      http.get('/api/trips', () => HttpResponse.json({ trips: [trip] })),
+      http.get(`/api/trips/${tripId}/bundle`, async () => {
+        bundleRequested();
+        return HttpResponse.json(await response.promise);
+      }),
+    );
+
+    const syncing = tripSyncManager.syncAll();
+    await requested;
+    setAuthed(false);
+    setAuthed(true);
+    response.resolve({ ...makeBundle(tripId), trip });
+    await syncing;
+
+    expect(await offlineDb.trips.get(tripId)).toBeUndefined();
+  });
+
   it('stops writing trips once the gate closes mid-loop', async () => {
     const firstId = 500;
     const secondId = 501;

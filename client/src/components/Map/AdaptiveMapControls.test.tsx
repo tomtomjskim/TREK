@@ -49,6 +49,15 @@ describe('AdaptiveMapControls', () => {
     expect(screen.getByRole('button', { name: 'Reset north' })).toHaveStyle({ width: '44px', height: '44px' });
   });
 
+  it('opens the compact Explore control with the category choices', () => {
+    render(<AdaptiveMapControls {...panels} poiEnabled poi={poi} map={map} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Explore places on the map' }));
+
+    expect(screen.getByRole('dialog', { name: 'Explore places on the map' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Restaurants' })).toBeInTheDocument();
+  });
+
   it('keeps the existing wide category row when the free corridor can hold it', () => {
     setViewport(1280);
     render(<AdaptiveMapControls {...panels} poiEnabled poi={poi} map={map} />);

@@ -5,7 +5,7 @@ import { BadParams, ForbiddenResource } from '../plugins/host/rpc-errors';
 import { asPayload, num, schemaMessage } from '../plugins/host/rpc-params';
 import type { PluginRpcContext } from '../plugins/host/rpc-kit/types';
 import { RealtimeService } from '../realtime/realtime.service';
-import { PackingService } from './packing.service';
+import { isPackingUpdateForbidden, PackingService } from './packing.service';
 import { isUpdateConflict } from '../common/conflictResult';
 
 /** Packing rides on the app's own 'packing_edit' permission, exactly like the REST path. */
@@ -65,6 +65,7 @@ export class PackingRpc {
     const input = parsed.data as Record<string, unknown>;
     const updated = this.packing.updateItem(String(tripId), String(itemId), input as never, Object.keys(input), undefined, actor);
     if (!updated) throw new ForbiddenResource(`no packing item ${itemId} on trip ${tripId}`);
+    if (isPackingUpdateForbidden(updated)) throw new ForbiddenResource('only the owner can change packing item sharing');
     if (isUpdateConflict(updated)) throw new BadParams('packing item was modified concurrently');
     this.packing.broadcastUpdate(String(tripId), itemId, updated as PrivacyItem, !!before?.is_private, undefined);
     return updated;

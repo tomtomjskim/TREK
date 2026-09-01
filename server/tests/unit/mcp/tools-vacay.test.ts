@@ -263,6 +263,70 @@ describe('Tool: set_vacay_color', () => {
   });
 });
 
+describe('Vacay invite safety tools', () => {
+  it('accept_vacay_invite returns the missing destination years without accepting', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: invitee } = createUser(testDb);
+    const year = 2035;
+
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+    });
+    await withHarness(invitee.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+      await h.client.callTool({ name: 'add_vacay_year', arguments: { year } });
+    });
+    const ownerPlan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?')
+      .get(owner.id) as { id: number };
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'pending')
+    `).run(ownerPlan.id, invitee.id);
+
+    await withHarness(invitee.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'accept_vacay_invite',
+        arguments: { planId: ownerPlan.id },
+      });
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({
+        code: 'VACAY_INVITE_YEAR_REVIEW_REQUIRED',
+        missing_years: [year],
+      });
+    });
+    expect(testDb.prepare(`
+      SELECT status FROM vacay_plan_members WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlan.id, invitee.id)).toEqual({ status: 'pending' });
+  });
+
+  it('cancel_vacay_invite rejects an accepted member and leaves the owner invite pending', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const { user: target } = createUser(testDb);
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+    });
+    const ownerPlan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?')
+      .get(owner.id) as { id: number };
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'accepted'), (?, ?, 'pending')
+    `).run(ownerPlan.id, member.id, ownerPlan.id, target.id);
+
+    await withHarness(member.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'cancel_vacay_invite',
+        arguments: { targetUserId: target.id },
+      });
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({ code: 'VACAY_INVITE_OWNER_REQUIRED' });
+    });
+    expect(testDb.prepare(`
+      SELECT status FROM vacay_plan_members WHERE plan_id = ? AND user_id = ?
+    `).get(ownerPlan.id, target.id)).toEqual({ status: 'pending' });
+  });
+});
+
 // ---------------------------------------------------------------------------
 // list_vacay_years
 // ---------------------------------------------------------------------------
@@ -327,6 +391,31 @@ describe('Tool: delete_vacay_year', () => {
       const result = await h.client.callTool({ name: 'delete_vacay_year', arguments: { year: 2025 } });
       expect(result.isError).toBe(true);
     });
+  });
+
+  it('returns the stable fused code without deleting the year', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    const year = 2033;
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+      await h.client.callTool({ name: 'add_vacay_year', arguments: { year } });
+    });
+    const plan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?')
+      .get(owner.id) as { id: number };
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'accepted')
+    `).run(plan.id, member.id);
+
+    await withHarness(owner.id, async (h) => {
+      const result = await h.client.callTool({ name: 'delete_vacay_year', arguments: { year } });
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({ code: 'VACAY_FUSED_YEAR_DELETE_READ_ONLY' });
+    });
+    expect(testDb.prepare(
+      'SELECT id FROM vacay_years WHERE plan_id = ? AND year = ?',
+    ).get(plan.id, year)).toBeDefined();
   });
 });
 
@@ -459,6 +548,18 @@ describe('Tool: toggle_vacay_entry', () => {
       expect(result.isError).toBe(true);
     });
   });
+
+  it('returns a stable error for an invalid calendar date', async () => {
+    const { user } = createUser(testDb);
+    await withHarness(user.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'toggle_vacay_entry',
+        arguments: { date: '2026-02-30' },
+      });
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({ code: 'VACAY_INVALID_DATE' });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -485,6 +586,34 @@ describe('Tool: toggle_company_holiday', () => {
       const result = await h.client.callTool({ name: 'toggle_company_holiday', arguments: { date: '2025-12-25' } });
       expect(result.isError).toBe(true);
     });
+  });
+
+  it('returns a stable error and preserves rows for a fused plan', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: member } = createUser(testDb);
+    await withHarness(owner.id, async (h) => {
+      await h.client.callTool({ name: 'get_vacay_plan', arguments: {} });
+    });
+    const plan = testDb.prepare('SELECT id FROM vacay_plans WHERE owner_id = ?')
+      .get(owner.id) as { id: number };
+    testDb.prepare(`
+      INSERT INTO vacay_plan_members (plan_id, user_id, status)
+      VALUES (?, ?, 'accepted')
+    `).run(plan.id, member.id);
+
+    await withHarness(owner.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'toggle_company_holiday',
+        arguments: { date: '2025-12-25' },
+      });
+      expect(result.isError).toBe(true);
+      expect(parseToolResult(result)).toMatchObject({
+        code: 'VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY',
+      });
+    });
+    expect(testDb.prepare(`
+      SELECT id FROM vacay_company_holidays WHERE plan_id = ? AND date = ?
+    `).get(plan.id, '2025-12-25')).toBeUndefined();
   });
 });
 

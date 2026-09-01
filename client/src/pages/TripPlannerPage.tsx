@@ -5,6 +5,7 @@ import { useTripStore } from '../store/tripStore'
 import { useCanDo } from '../store/permissionsStore'
 import { useSettingsStore } from '../store/settingsStore'
 import { MapViewAuto as MapView } from '../components/Map/MapViewAuto'
+import AdaptiveMapControls from '../components/Map/AdaptiveMapControls'
 import { MapCompassPill, type CompassMap } from '../components/Map/MapCompassPill'
 import { getCached, fetchPhoto } from '../services/photoService'
 import DayPlanSidebar from '../components/Planner/DayPlanSidebar'
@@ -397,14 +398,15 @@ function TripPlannerPageDesktop(): React.ReactElement | null {
               onMapReady={setGlMap}
             />
 
-            {(poiPillEnabled || glMap) && (
-              <div className="hidden md:flex" style={{ position: 'absolute', top: 14, left: '50%', transform: 'translateX(-50%)', zIndex: 25, pointerEvents: 'none', alignItems: 'flex-start', gap: 8 }}>
-                {poiPillEnabled && (
-                  <PoiCategoryPill active={poi.active} onToggle={poi.toggle} loadingKeys={poi.loadingKeys} errorKeys={poi.errorKeys} moved={poi.moved} onSearchArea={poi.searchArea} />
-                )}
-                {glMap && <MapCompassPill map={glMap} />}
-              </div>
-            )}
+            <AdaptiveMapControls
+              leftWidth={leftWidth}
+              rightWidth={rightWidth}
+              leftCollapsed={leftCollapsed}
+              rightCollapsed={rightCollapsed}
+              poiEnabled={poiPillEnabled}
+              poi={{ active: poi.active, onToggle: poi.toggle, loadingKeys: poi.loadingKeys, errorKeys: poi.errorKeys, moved: poi.moved, onSearchArea: poi.searchArea }}
+              map={glMap}
+            />
 
             {/* Mobile: the compass/reset-orientation control lives centre-top on its own
                 (the desktop cluster above is hidden below md), between the edge Plan/Places tabs. */}

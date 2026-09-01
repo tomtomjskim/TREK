@@ -24,6 +24,7 @@ import { StorageService } from '../storage/storage.service';
 import { buildStorageUploadOptions } from '../storage/storage-upload.factory';
 import { AVATAR_FILE_FILTER, MAX_AVATAR_SIZE } from './auth.controller';
 import { AllowedFileTypesModule } from '../files/allowed-file-types.module';
+import { GoogleApiUsageModule } from '../google-api-usage/google-api-usage.module';
 
 /**
  * Auth module — public flows (login/register/reset/mfa-verify/logout) and the
@@ -62,7 +63,7 @@ import { AllowedFileTypesModule } from '../files/allowed-file-types.module';
     }),
     StorageModule,
     AllowedFileTypesModule,
-    EphemeralTokenModule, RateLimitModule, AuditModule, PermissionsModule, TripMembershipModule, MailerModule, AppConfigModule, TokensModule, BudgetModule],
+    EphemeralTokenModule, RateLimitModule, AuditModule, PermissionsModule, TripMembershipModule, MailerModule, AppConfigModule, TokensModule, BudgetModule, GoogleApiUsageModule],
   controllers: [AuthPublicController, AuthController, PasskeyController],
   providers: [AuthService, UserProfileService, RegistrationInvitesService, PasskeyService, UserCleanupService, WebauthnConfigService, AuthMcp],
   exports: [AuthService, RegistrationInvitesService, PasskeyService, UserCleanupService],

@@ -36,6 +36,7 @@ import { DatabaseService } from '../../../src/nest/database/database.service';
 import { VacayService } from '../../../src/nest/vacay/vacay.service';
 import { RealtimeService } from '../../../src/nest/realtime/realtime.service';
 import { notificationsStub } from '../../helpers/notifications';
+import { broadcastToUser } from '../../../src/websocket';
 
 // VACAY-SVC-001 through VACAY-SVC-066 moved 1:1 from the legacy
 // tests/unit/services/vacayService.test.ts (the named-function imports became
@@ -54,6 +55,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetTestDb(testDb);
+  vi.mocked(broadcastToUser).mockClear();
   // Stub fetch with empty holiday list by default so updatePlan / applyHolidayCalendars
   // never makes real network calls.
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
@@ -303,6 +305,52 @@ describe('updatePlan', () => {
       .prepare('SELECT carried_over FROM vacay_user_years WHERE user_id = ? AND plan_id = ? AND year = ?')
       .get(user.id, plan.id, yr) as { carried_over: number };
     expect(row.carried_over).toBe(0);
+  });
+
+  it('VACAY-04: emits no settings event for an empty or same-value update', async () => {
+    const { plan } = setupUserWithPlan();
+
+    await svc.updatePlan(plan.id, {}, undefined);
+    await svc.updatePlan(plan.id, { block_weekends: true }, undefined);
+
+    expect(broadcastToUser).not.toHaveBeenCalled();
+  });
+
+  it('VACAY-04: rechecks the fused company-holiday guard inside the immediate transaction', async () => {
+    const { user: owner, plan } = setupUserWithPlan();
+    const { user: member } = createUser(testDb);
+    const database = new DatabaseService(testDb);
+    const realImmediate = database.transactionImmediate.bind(database);
+    vi.spyOn(database, 'transactionImmediate').mockImplementation((fn) => {
+      insertMember(plan.id, member.id, 'accepted');
+      return realImmediate(fn);
+    });
+    const guarded = new VacayService(database, new RealtimeService(), notificationsStub());
+
+    await expect(guarded.updatePlan(plan.id, {
+      block_weekends: false,
+      company_holidays_enabled: false,
+    }, undefined)).rejects.toMatchObject({ code: 'VACAY_FUSED_COMPANY_HOLIDAYS_READ_ONLY' });
+
+    expect(testDb.prepare('SELECT block_weekends FROM vacay_plans WHERE id = ?').get(plan.id)).toEqual({ block_weekends: 1 });
+    expect(owner.id).toBe(plan.owner_id);
+  });
+
+  it('VACAY-04: rolls back plan settings when legacy holiday-calendar seeding fails', async () => {
+    const { plan } = setupUserWithPlan();
+    testDb.prepare("UPDATE vacay_plans SET holidays_enabled = 1, holidays_region = 'DE' WHERE id = ?").run(plan.id);
+    const database = new DatabaseService(testDb);
+    const realRun = database.run.bind(database);
+    vi.spyOn(database, 'run').mockImplementation((sql: string, ...params: unknown[]) => {
+      if (sql.includes('INSERT INTO vacay_holiday_calendars')) throw new Error('seed failed');
+      return realRun(sql, ...params);
+    });
+    const guarded = new VacayService(database, new RealtimeService(), notificationsStub());
+
+    await expect(guarded.updatePlan(plan.id, { block_weekends: false }, undefined)).rejects.toThrow('seed failed');
+
+    expect(testDb.prepare('SELECT block_weekends FROM vacay_plans WHERE id = ?').get(plan.id)).toEqual({ block_weekends: 1 });
+    expect(broadcastToUser).not.toHaveBeenCalled();
   });
 });
 
@@ -668,19 +716,23 @@ describe('toggleCompanyHoliday', () => {
     expect(row).toBeUndefined();
   });
 
-  it('VACAY-SVC-036: adding a company holiday removes any existing vacay_entry on that date', () => {
+  it('VACAY-SVC-036: adding a company holiday preserves an existing vacay_entry on that date', () => {
     const { user, plan } = setupUserWithPlan();
 
     // First add a personal entry on that date
     svc.toggleEntry(user.id, plan.id, '2025-05-01', undefined);
 
-    // Now declare it a company holiday — the personal entry should be wiped
+    const before = testDb
+      .prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?')
+      .get(plan.id, '2025-05-01');
+
+    // A company holiday is an overlay; the authored personal entry remains.
     svc.toggleCompanyHoliday(plan.id, '2025-05-01', 'Labour Day', undefined);
 
     const personalEntry = testDb
       .prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?')
       .get(plan.id, '2025-05-01');
-    expect(personalEntry).toBeUndefined();
+    expect(personalEntry).toEqual(before);
   });
 });
 
@@ -745,7 +797,7 @@ describe('cancelInvite', () => {
     const { user: target } = createUser(testDb);
     insertMember(ownerPlan.id, target.id, 'pending');
 
-    svc.cancelInvite(ownerPlan.id, target.id);
+    svc.cancelInvite(owner.id, target.id);
 
     const row = testDb
       .prepare('SELECT * FROM vacay_plan_members WHERE plan_id = ? AND user_id = ?')
@@ -1207,7 +1259,7 @@ describe('applyHolidayCalendars', () => {
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
-  it('VACAY-SVC-047: deletes matching vacay_entries for a global holiday date returned by the API', async () => {
+  it('VACAY-SVC-047: preserves matching vacay_entries when the provider overlay refreshes', async () => {
     const { user, plan } = setupUserWithPlan();
     const yr = new Date().getFullYear();
 
@@ -1232,7 +1284,7 @@ describe('applyHolidayCalendars', () => {
     const remaining = testDb
       .prepare('SELECT * FROM vacay_entries WHERE plan_id = ? AND date = ?')
       .all(plan.id, holidayDate);
-    expect(remaining).toHaveLength(0);
+    expect(remaining).toHaveLength(1);
   });
 });
 

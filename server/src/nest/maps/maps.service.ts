@@ -7,13 +7,15 @@ import type {
   MapsReverseResult,
   MapsResolveUrlResult,
 } from '@trek/shared';
-import { readEnv, getAppUrl } from '../../app-config';
+import { readEnv } from '../../app-config';
 import { safeFetchFollow, SsrfBlockedError } from '../../utils/ssrfGuard';
 import { discardBody, exceedsDeclaredLength, readCappedText } from '../../utils/cappedFetch';
 import { resolveApiKey, type ApiKeySource } from '../settings/instance-api-keys';
 // ── Photo cache (disk-backed) ────────────────────────────────────────────────
 import { PlacePhotoCacheService } from '../place-photos/place-photo-cache.service';
 import { DatabaseService } from '../database/database.service';
+import { GoogleApiTransportService } from '../google-api-usage/google-api-transport.service';
+import type { GoogleApiSku } from '../google-api-usage/google-api-usage.service';
 import { nominatimFetch, type GeoLane } from '../geo/nominatim.client';
 import {
   UA,
@@ -39,31 +41,6 @@ import {
 
 // ── Google API call counter ───────────────────────────────────────────────────
 
-let googleApiCallCount = 0;
-
-/** The upstream every Places call is written against. */
-const PLACES_UPSTREAM = 'https://places.googleapis.com';
-
-/**
- * Sends the call somewhere else when PLACES_API_BASE is set.
- *
- * The nine Places endpoints below all spell out the upstream host, so an install
- * that wants these calls to leave through something of its own — an egress proxy,
- * a cache, a gateway holding the key — has no way to say so today. One variable,
- * substituted at the one place every call funnels through.
- *
- * Path and query are untouched, so the replacement has to speak the same API.
- * Unset, which is every install today, the string is returned as it came in.
- */
-function placesEndpoint(endpoint: string): string {
-  const base = readEnv().maps.placesApiBase;
-  if (!base || !endpoint.startsWith(PLACES_UPSTREAM)) return endpoint;
-  // The character before the run is matched and written straight back. A bare
-  // /\/+$/ restarts at every slash of a base that does not end in one, reading
-  // the rest of the run again from each of them.
-  return base.replace(/([^/]|^)\/+$/, '$1') + endpoint.slice(PLACES_UPSTREAM.length);
-}
-
 /**
  * Says which of the three credentials Google rejected, never which value.
  *
@@ -74,17 +51,6 @@ function placesEndpoint(endpoint: string): string {
  */
 function logKeyFailure(label: string, status: number, userId: number, source: ApiKeySource | null): void {
   console.error(`[Maps] ${label} failed with ${status} userId=${userId} keySource=${source}`);
-}
-
-function googleFetch(rawEndpoint: string, label: string, init?: RequestInit): Promise<Response> {
-  const endpoint = placesEndpoint(rawEndpoint);
-  googleApiCallCount++;
-  console.debug(`[Google API] #${googleApiCallCount} ${label} → ${endpoint}`);
-  const referer = readEnv().app.appUrl ? getAppUrl() : undefined;
-  return fetch(endpoint, {
-    ...init,
-    headers: { ...(referer ? { Referer: referer } : {}), ...((init?.headers as Record<string, string>) ?? {}) },
-  });
 }
 
 // ── Interfaces ───────────────────────────────────────────────────────────────
@@ -521,7 +487,12 @@ export class MapsService {
   constructor(
     private readonly database: DatabaseService,
     private readonly photoCache: PlacePhotoCacheService,
+    private readonly googleTransport: GoogleApiTransportService,
   ) {}
+
+  private googleRequest(url: string, label: string, sku: GoogleApiSku, init?: RequestInit): Promise<Response> {
+    return this.googleTransport.fetch({ url, label, sku, init });
+  }
 
   private isSettingDisabled(key: string): boolean {
     const row = this.database.get<{ value: string }>(
@@ -1390,9 +1361,10 @@ export class MapsService {
   ): Promise<{ name: string; attribution: string | null }[]> {
     if (!isGooglePlaceId(placeId) || cap < 1) return [];
     try {
-      const res = await googleFetch(
+      const res = await this.googleRequest(
         `https://places.googleapis.com/v1/places/${placeId}`,
         `fetchGooglePhotoRefs(${placeId})`,
+        'place_details_ids_only',
         { headers: { 'X-Goog-Api-Key': apiKey, 'X-Goog-FieldMask': 'photos' } },
       );
       if (!res.ok) return [];
@@ -1409,9 +1381,10 @@ export class MapsService {
   /** Image bytes for one photo reference. Null on any miss; the caller skips it. */
   async fetchGooglePhotoBytes(photoName: string, apiKey: string, maxHeightPx = 400): Promise<Buffer | null> {
     try {
-      const res = await googleFetch(
+      const res = await this.googleRequest(
         `https://places.googleapis.com/v1/${photoName}/media?maxHeightPx=${maxHeightPx}`,
         `fetchGooglePhotoBytes(${photoName})`,
+        'place_photos',
         { headers: { 'X-Goog-Api-Key': apiKey } },
       );
       if (!res.ok) return null;
@@ -1432,9 +1405,10 @@ export class MapsService {
   async fetchEditorialSummary(placeId: string, apiKey: string, lang?: string): Promise<string | null> {
     if (!isGooglePlaceId(placeId)) return null;
     try {
-      const res = await googleFetch(
+      const res = await this.googleRequest(
         `https://places.googleapis.com/v1/places/${placeId}?languageCode=${toApiLang(lang)}`,
         `fetchEditorialSummary(${placeId})`,
+        'place_details_atmosphere',
         { headers: { 'X-Goog-Api-Key': apiKey, 'X-Goog-FieldMask': 'editorialSummary' } },
       );
       if (!res.ok) return null;
@@ -1472,7 +1446,7 @@ export class MapsService {
       };
     }
 
-    const response = await googleFetch('https://places.googleapis.com/v1/places:searchText', 'searchText', {
+    const response = await this.googleRequest('https://places.googleapis.com/v1/places:searchText', 'searchText', 'text_search_enterprise', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1547,7 +1521,7 @@ export class MapsService {
       };
     }
 
-    const response = await googleFetch('https://places.googleapis.com/v1/places:autocomplete', 'autocomplete', {
+    const response = await this.googleRequest('https://places.googleapis.com/v1/places:autocomplete', 'autocomplete', 'autocomplete', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1672,9 +1646,10 @@ export class MapsService {
     // here, which is billing-neutral: an unclosed session is charged as a plain
     // autocomplete session.
     const sessionParam = sessionToken ? `&sessionToken=${encodeURIComponent(sessionToken)}` : '';
-    const response = await googleFetch(
+    const response = await this.googleRequest(
       `https://places.googleapis.com/v1/places/${placeId}?languageCode=${langKey}${sessionParam}`,
       `getPlaceDetails(${placeId})`,
+      'place_details_enterprise',
       {
         method: 'GET',
         headers: {
@@ -1764,9 +1739,10 @@ export class MapsService {
       if (cached) return { place: JSON.parse(cached.payload_json) };
     }
 
-    const response = await googleFetch(
+    const response = await this.googleRequest(
       `https://places.googleapis.com/v1/places/${placeId}?languageCode=${langKey}`,
       `getPlaceDetailsExpanded(${placeId})`,
+      'place_details_atmosphere',
       {
         method: 'GET',
         headers: {
@@ -1903,9 +1879,10 @@ export class MapsService {
           if (!apiKey) return null;
 
           // Fetch details to get the photo name
-          const detailsRes = await googleFetch(
+          const detailsRes = await this.googleRequest(
             `https://places.googleapis.com/v1/places/${placeId}`,
             `getPlacePhoto/details(${placeId})`,
+            'place_details_ids_only',
             {
               headers: {
                 'X-Goog-Api-Key': apiKey,
@@ -1933,9 +1910,10 @@ export class MapsService {
           const attribution = photo.authorAttributions?.[0]?.displayName || null;
 
           // Fetch actual image bytes
-          const mediaRes = await googleFetch(
+          const mediaRes = await this.googleRequest(
             `https://places.googleapis.com/v1/${photoName}/media?maxHeightPx=400`,
             `getPlacePhoto/media(${placeId})`,
+            'place_photos',
             { headers: { 'X-Goog-Api-Key': apiKey } },
           );
           // The place does have a photo — only the download for it went wrong.

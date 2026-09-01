@@ -136,6 +136,20 @@ describe('PackingController (parity with the legacy /api/trips/:tripId/packing r
       });
     });
 
+    it('403s and does not broadcast when a visible non-owner tries to change sharing', () => {
+      const broadcastUpdate = vi.fn();
+      const svc = makeService({
+        getItemPrivacy: vi.fn().mockReturnValue({ is_private: 1, owner_id: 2 }),
+        updateItem: vi.fn().mockReturnValue({ forbidden: true }),
+        broadcastUpdate,
+      } as Partial<PackingService>);
+
+      expect(thrown(() => new PackingController(svc).update(user, '5', '9', { is_private: false }))).toEqual({
+        status: 403, body: { error: 'Only the owner can change sharing' },
+      });
+      expect(broadcastUpdate).not.toHaveBeenCalled();
+    });
+
     it('updates, forwards changed keys + acting user, and broadcasts (stays public)', () => {
       const updateItem = vi.fn().mockReturnValue({ id: 9, name: 'X' });
       const broadcast = vi.fn();
@@ -201,7 +215,7 @@ describe('PackingController (parity with the legacy /api/trips/:tripId/packing r
       const reorderItems = vi.fn();
       const svc = makeService({ reorderItems } as Partial<PackingService>);
       expect(new PackingController(svc).reorder(user, '5', { orderedIds: [3, 1, 2] })).toEqual({ success: true });
-      expect(reorderItems).toHaveBeenCalledWith('5', [3, 1, 2]);
+      expect(reorderItems).toHaveBeenCalledWith('5', [3, 1, 2], user.id);
     });
 
   });
@@ -281,8 +295,16 @@ describe('PackingController (parity with the legacy /api/trips/:tripId/packing r
       const broadcast = vi.fn();
       const svc = makeService({ removeContributor, broadcast } as Partial<PackingService>);
       new PackingController(svc).removeContributor(user, '5', '9', '2', 'sock');
-      expect(removeContributor).toHaveBeenCalledWith('5', '9', 2);
+      expect(removeContributor).toHaveBeenCalledWith('5', '9', user.id, 2);
       expect(broadcast).toHaveBeenCalledWith('5', 'packing:updated', { item }, 'sock');
+    });
+
+    it('DELETE /:id/contributors/:userId returns 403 when the actor cannot remove that pledge', () => {
+      const svc = makeService({ removeContributor: vi.fn().mockReturnValue({ forbidden: true }) } as Partial<PackingService>);
+      expect(thrown(() => new PackingController(svc).removeContributor(user, '5', '9', '2'))).toEqual({
+        status: 403,
+        body: { error: 'Only the item owner or contributor can remove this pledge' },
+      });
     });
   });
 

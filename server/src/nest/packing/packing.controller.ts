@@ -13,7 +13,7 @@ import {
 } from '@nestjs/common';
 import type { TrekWsPayload, TrekWsTripEventName } from '@trek/shared';
 import type { User } from '../../types';
-import { PackingService } from './packing.service';
+import { isPackingUpdateForbidden, PackingService } from './packing.service';
 import { isUpdateConflict } from '../common/conflictResult';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -110,7 +110,7 @@ export class PackingController {
     @Body() body: PackingReorderDto,
     @Headers('x-socket-id') _socketId?: string,
   ) {
-    this.packing.reorderItems(tripId, body.orderedIds);
+    this.packing.reorderItems(tripId, body.orderedIds, user.id);
     return { success: true };
   }
 
@@ -134,6 +134,9 @@ export class PackingController {
     const updated = this.packing.updateItem(tripId, id, { name, checked: checked === undefined ? undefined : checked ? 1 : 0, category, weight_grams, bag_id, quantity, is_private }, Object.keys(body), ifMatch, user.id);
     if (!updated) {
       throw new HttpException({ error: 'Item not found' }, 404);
+    }
+    if (isPackingUpdateForbidden(updated)) {
+      throw new HttpException({ error: 'Only the owner can change sharing' }, 403);
     }
     // Stale offline overwrite — surface the conflict for client-side resolution (#1135).
     if (isUpdateConflict(updated)) {
@@ -229,9 +232,12 @@ export class PackingController {
   ) {
     // You can drop your own pledge; the owner can remove anyone's.
     const target = Number.parseInt(userId);
-    const item = this.packing.removeContributor(tripId, id, target);
+    const item = this.packing.removeContributor(tripId, id, user.id, target);
     if (!item) {
       throw new HttpException({ error: 'Item not found' }, 404);
+    }
+    if ('forbidden' in item) {
+      throw new HttpException({ error: 'Only the item owner or contributor can remove this pledge' }, 403);
     }
     this.packing.broadcast(tripId, 'packing:updated', { item }, socketId);
     return { item };

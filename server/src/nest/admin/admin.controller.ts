@@ -30,6 +30,7 @@ import { AuditService } from '../audit/audit.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import type { User } from '../../types';
 import { ManagedForbidden } from '../common/managed';
+import { GoogleApiUsageService } from '../google-api-usage/google-api-usage.service';
 
 /** Throw the legacy {error,status} envelope when a service call reports failure. */
 function ok<T>(result: T): Exclude<T, { error: string }> {
@@ -68,6 +69,7 @@ export class AdminController {
     private readonly tokens: TokenService,
     private readonly invites: RegistrationInvitesService,
     private readonly oauth: OauthService,
+    private readonly googleUsage: GoogleApiUsageService,
   ) {}
 
   // ── Users ──
@@ -221,15 +223,18 @@ export class AdminController {
     return result;
   }
 
-  @Get('places-enrich')
+  @Get(['places-enrich', 'places-enrichment'])
   getPlacesEnrich() { return this.addons.getPlacesEnrich(); }
 
-  @Put('places-enrich')
+  @Put(['places-enrich', 'places-enrichment'])
   updatePlacesEnrich(@CurrentUser() user: User, @Body() body: AdminFeatureToggleDto, @Req() req: Request) {
     const result = this.addons.updatePlacesEnrich(body.enabled);
     this.audit.writeAudit({ userId: user.id, action: 'admin.places_enrich', ip: getClientIp(req), details: { enabled: result.enabled } });
     return result;
   }
+
+  @Get('google-api-usage')
+  getGoogleApiUsage() { return { usage: this.googleUsage.snapshot() }; }
 
   @Get('collab-features')
   getCollabFeatures() { return this.addons.getCollabFeatures(); }

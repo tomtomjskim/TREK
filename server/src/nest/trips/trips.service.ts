@@ -407,9 +407,6 @@ export class TripsService {
       WHERE id=?
     `).run(newTitle, newDesc, newStart || null, newEnd || null, newCurrency, newArchived, newCover, newReminder, tripId);
 
-    if (trip.start_date && trip.end_date && newStart && newStart !== trip.start_date)
-      this.vacay.shiftOwnerEntriesForTripWindow(trip.user_id, trip.start_date, trip.end_date, newStart);
-
     const dayCount = data.day_count ? Math.min(Math.max(Number(data.day_count) || 7, 1), MAX_TRIP_DAYS) : undefined;
     if (newStart !== trip.start_date || newEnd !== trip.end_date || dayCount) {
       this.db.transaction(() => {
@@ -695,8 +692,10 @@ export class TripsService {
       // This used to take every row and re-insert it without is_private/owner_id,
       // so both fell back to the column defaults and another member's Personal or
       // Shared item reappeared in the copy as a Common item visible to everyone.
-      // A restricted item stays restricted, and it stays owned by the copier —
-      // recipient rows are not carried over, and the copy has its own roster.
+      // Restricted items stay restricted and recipient rows are not carried over,
+      // because the copy has its own roster. Every copied row is owned by the
+      // copier, including Common rows: owner_id also identifies the responsible
+      // bringer and prevents a later member from claiming an unowned item.
       const oldPacking = this.db.prepare(
         'SELECT * FROM packing_items WHERE trip_id = ? AND (is_private = 0 OR owner_id = ?)'
       ).all(sourceTripId, newOwnerId) as any[];
@@ -708,7 +707,7 @@ export class TripsService {
         const isPrivate = p.is_private ? 1 : 0;
         insertPacking.run(newTripId, p.name, p.category, p.sort_order, p.weight_grams,
           p.bag_id ? (bagMap.get(p.bag_id) ?? null) : null,
-          isPrivate, isPrivate ? newOwnerId : null);
+          isPrivate, newOwnerId);
       }
 
       const oldNotes = this.db.prepare('SELECT * FROM day_notes WHERE trip_id = ?').all(sourceTripId) as any[];

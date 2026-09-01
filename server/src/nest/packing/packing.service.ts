@@ -15,6 +15,17 @@ type Trip = TripAccess;
 
 export type PackingVisibility = 'common' | 'personal' | 'shared';
 
+export interface PackingUpdateForbidden {
+  forbidden: true;
+}
+
+export function isPackingUpdateForbidden(result: unknown): result is PackingUpdateForbidden {
+  return typeof result === 'object'
+    && result !== null
+    && 'forbidden' in result
+    && (result as PackingUpdateForbidden).forbidden === true;
+}
+
 interface ImportItem {
   name?: string;
   checked?: boolean;
@@ -247,7 +258,7 @@ export class PackingService {
     bodyKeys: string[],
     ifMatch?: string,
     actingUserId?: number,
-  ): unknown | UpdateConflict | null {
+  ): unknown | UpdateConflict | PackingUpdateForbidden | null {
     // Was a trip-scoped lookup, which let any member with packing_edit write to
     // another member's restricted item (and read it back off the response).
     const item = this.getItemInTrip(tripId, id, actingUserId);
@@ -259,9 +270,18 @@ export class PackingService {
       return { conflict: true, server: this.db.get('SELECT * FROM packing_items WHERE id = ?', id) };
     }
 
+    // Recipients may edit ordinary fields on a Shared item, but visibility is
+    // controlled by its owner. Otherwise a recipient could publish the owner's
+    // restricted row through the general update route and trigger a room-wide
+    // broadcast. Legacy Common rows without an owner remain claimable.
+    const changesPrivacy = bodyKeys.includes('is_private');
+    if (changesPrivacy && item.owner_id != null && item.owner_id !== actingUserId) {
+      return { forbidden: true };
+    }
+
     // Privatizing an unowned (legacy) item stamps the acting user as its owner so
     // the visibility filter still has someone to match (#858).
-    const claimOwner = bodyKeys.includes('is_private') && !!data.is_private && item.owner_id == null && actingUserId != null;
+    const claimOwner = changesPrivacy && !!data.is_private && item.owner_id == null && actingUserId != null;
 
     this.db.run(`
     UPDATE packing_items SET
@@ -286,7 +306,7 @@ export class PackingService {
       data.bag_id ?? null,
       bodyKeys.includes('quantity') ? 1 : 0,
       Math.max(1, Math.min(999, Number(data.quantity) || 1)),
-      bodyKeys.includes('is_private') ? 1 : 0,
+      changesPrivacy ? 1 : 0,
       data.is_private ? 1 : 0,
       claimOwner ? 1 : 0,
       actingUserId ?? null,
@@ -369,10 +389,20 @@ export class PackingService {
     return this.enrichItems([this.db.get('SELECT * FROM packing_items WHERE id = ?', id)])[0];
   }
 
-  removeContributor(tripId: string | number, id: string | number, userId: number) {
-    const item = this.getItemInTrip(tripId, id, userId);
+  removeContributor(
+    tripId: string | number,
+    id: string | number,
+    actingUserId: number,
+    targetUserId: number,
+  ) {
+    const item = this.getItemInTrip(tripId, id, actingUserId);
     if (!item) return null;
-    this.db.run('DELETE FROM packing_item_contributors WHERE item_id = ? AND user_id = ?', id, userId);
+    // A contributor may withdraw their own pledge. Only the item's owner may
+    // remove somebody else's pledge; unrelated trip members must fail closed.
+    if (actingUserId !== targetUserId && item.owner_id !== actingUserId) {
+      return { forbidden: true as const };
+    }
+    this.db.run('DELETE FROM packing_item_contributors WHERE item_id = ? AND user_id = ?', id, targetUserId);
     return this.enrichItems([this.db.get('SELECT * FROM packing_items WHERE id = ?', id)])[0];
   }
 
@@ -567,6 +597,7 @@ export class PackingService {
     SELECT pt.id, pt.name,
       (SELECT COUNT(*) FROM packing_template_items ti JOIN packing_template_categories tc ON ti.category_id = tc.id WHERE tc.template_id = pt.id) as item_count
     FROM packing_templates pt
+    WHERE pt.scope = 'instance'
     ORDER BY pt.created_at DESC
   `);
   }
@@ -583,7 +614,8 @@ export class PackingService {
     SELECT ti.name, tc.name as category
     FROM packing_template_items ti
     JOIN packing_template_categories tc ON ti.category_id = tc.id
-    WHERE tc.template_id = ?
+    JOIN packing_templates pt ON pt.id = tc.template_id
+    WHERE tc.template_id = ? AND pt.scope = 'instance'
     ORDER BY tc.sort_order, ti.sort_order
   `, templateId);
 
@@ -610,12 +642,11 @@ export class PackingService {
   // ── Save as Template ──────────────────────────────────────────────────────
 
   saveAsTemplate(tripId: string | number, userId: number, templateName: string) {
-    // A template is a durable, shareable artifact, so it may only capture what is
-    // the actor's to publish: the Common list plus their own items. It used to
-    // take every row in the trip, restricted ones included.
+    // An instance template is globally reusable, so its snapshot is Common-only.
+    // Personal/shared rows remain trip-scoped even when the acting admin owns them.
     const items = this.db.all<{ name: string; category: string }>(
-      'SELECT name, category FROM packing_items WHERE trip_id = ? AND (is_private = 0 OR owner_id = ?) ORDER BY sort_order ASC',
-      tripId, userId,
+      'SELECT name, category FROM packing_items WHERE trip_id = ? AND is_private = 0 ORDER BY sort_order ASC',
+      tripId,
     );
 
     if (items.length === 0) return null;
@@ -688,12 +719,18 @@ export class PackingService {
 
   // ── Reorder ────────────────────────────────────────────────────────────────
 
-  reorderItems(tripId: string | number, orderedIds: number[]): void {
-    const update = this.db.prepare('UPDATE packing_items SET sort_order = ? WHERE id = ? AND trip_id = ?');
+  reorderItems(tripId: string | number, orderedIds: number[], actingUserId: number): void {
+    const update = this.db.prepare(`
+      UPDATE packing_items
+      SET sort_order = ?
+      WHERE id = ? AND trip_id = ? AND (is_private = 0 OR owner_id = ?)
+    `);
     this.db.transaction(() => {
-      orderedIds.forEach((id, index) => {
-        update.run(index, id, tripId);
-      });
+      let visibleIndex = 0;
+      for (const id of orderedIds) {
+        const result = update.run(visibleIndex, id, tripId, actingUserId);
+        if (result.changes === 1) visibleIndex += 1;
+      }
     });
   }
 
@@ -718,7 +755,8 @@ export class PackingService {
     return this.db.get(`
     SELECT ti.* FROM packing_template_items ti
     JOIN packing_template_categories tc ON ti.category_id = tc.id
-    WHERE ti.id = ? AND tc.template_id = ?
+    JOIN packing_templates pt ON pt.id = tc.template_id
+    WHERE ti.id = ? AND tc.template_id = ? AND pt.scope = 'instance'
   `, itemId, templateId);
   }
 
@@ -728,13 +766,14 @@ export class PackingService {
       (SELECT COUNT(*) FROM packing_template_items ti JOIN packing_template_categories tc ON ti.category_id = tc.id WHERE tc.template_id = pt.id) as item_count,
       (SELECT COUNT(*) FROM packing_template_categories WHERE template_id = pt.id) as category_count
     FROM packing_templates pt
-    JOIN users u ON pt.created_by = u.id
+    LEFT JOIN users u ON pt.created_by = u.id
+    WHERE pt.scope = 'instance'
     ORDER BY pt.created_at DESC
   `);
   }
 
   getPackingTemplate(id: string) {
-    const template = this.db.get('SELECT * FROM packing_templates WHERE id = ?', id);
+    const template = this.db.get("SELECT * FROM packing_templates WHERE id = ? AND scope = 'instance'", id);
     if (!template) return { error: 'Template not found', status: 404 };
     const categories = this.db.all('SELECT * FROM packing_template_categories WHERE template_id = ? ORDER BY sort_order, id', id);
     const items = this.db.all(`
@@ -753,14 +792,14 @@ export class PackingService {
   }
 
   updatePackingTemplate(id: string, data: { name?: string }) {
-    const template = this.db.get('SELECT * FROM packing_templates WHERE id = ?', id);
+    const template = this.db.get("SELECT * FROM packing_templates WHERE id = ? AND scope = 'instance'", id);
     if (!template) return { error: 'Template not found', status: 404 };
     if (data.name?.trim()) this.db.run('UPDATE packing_templates SET name = ? WHERE id = ?', data.name.trim(), id);
     return { template: this.db.get('SELECT * FROM packing_templates WHERE id = ?', id) };
   }
 
   deletePackingTemplate(id: string) {
-    const template = this.db.get<{ name?: string }>('SELECT * FROM packing_templates WHERE id = ?', id);
+    const template = this.db.get<{ name?: string }>("SELECT * FROM packing_templates WHERE id = ? AND scope = 'instance'", id);
     if (!template) return { error: 'Template not found', status: 404 };
     this.db.run('DELETE FROM packing_templates WHERE id = ?', id);
     return { name: template.name };
@@ -770,7 +809,7 @@ export class PackingService {
 
   createTemplateCategory(templateId: string, name: string) {
     if (!name?.trim()) return { error: 'Category name is required', status: 400 };
-    const template = this.db.get('SELECT * FROM packing_templates WHERE id = ?', templateId);
+    const template = this.db.get("SELECT * FROM packing_templates WHERE id = ? AND scope = 'instance'", templateId);
     if (!template) return { error: 'Template not found', status: 404 };
     const maxOrder = this.db.get<{ max: number | null }>('SELECT MAX(sort_order) as max FROM packing_template_categories WHERE template_id = ?', templateId)!;
     const result = this.db.run('INSERT INTO packing_template_categories (template_id, name, sort_order) VALUES (?, ?, ?)', templateId, name.trim(), (maxOrder.max ?? -1) + 1);
@@ -778,7 +817,11 @@ export class PackingService {
   }
 
   updateTemplateCategory(templateId: string, catId: string, data: { name?: string }) {
-    const cat = this.db.get('SELECT * FROM packing_template_categories WHERE id = ? AND template_id = ?', catId, templateId);
+    const cat = this.db.get(`
+      SELECT tc.* FROM packing_template_categories tc
+      JOIN packing_templates pt ON pt.id = tc.template_id
+      WHERE tc.id = ? AND tc.template_id = ? AND pt.scope = 'instance'
+    `, catId, templateId);
     if (!cat) return { error: 'Category not found', status: 404 };
     if (data.name?.trim())
       this.db.run('UPDATE packing_template_categories SET name = ? WHERE id = ?', data.name.trim(), catId);
@@ -786,7 +829,11 @@ export class PackingService {
   }
 
   deleteTemplateCategory(templateId: string, catId: string) {
-    const cat = this.db.get('SELECT * FROM packing_template_categories WHERE id = ? AND template_id = ?', catId, templateId);
+    const cat = this.db.get(`
+      SELECT tc.* FROM packing_template_categories tc
+      JOIN packing_templates pt ON pt.id = tc.template_id
+      WHERE tc.id = ? AND tc.template_id = ? AND pt.scope = 'instance'
+    `, catId, templateId);
     if (!cat) return { error: 'Category not found', status: 404 };
     this.db.run('DELETE FROM packing_template_categories WHERE id = ?', catId);
     return {};
@@ -796,7 +843,11 @@ export class PackingService {
 
   createTemplateItem(templateId: string, catId: string, name: string) {
     if (!name?.trim()) return { error: 'Item name is required', status: 400 };
-    const cat = this.db.get('SELECT * FROM packing_template_categories WHERE id = ? AND template_id = ?', catId, templateId);
+    const cat = this.db.get(`
+      SELECT tc.* FROM packing_template_categories tc
+      JOIN packing_templates pt ON pt.id = tc.template_id
+      WHERE tc.id = ? AND tc.template_id = ? AND pt.scope = 'instance'
+    `, catId, templateId);
     if (!cat) return { error: 'Category not found', status: 404 };
     const maxOrder = this.db.get<{ max: number | null }>('SELECT MAX(sort_order) as max FROM packing_template_items WHERE category_id = ?', catId)!;
     const result = this.db.run('INSERT INTO packing_template_items (category_id, name, sort_order) VALUES (?, ?, ?)', catId, name.trim(), (maxOrder.max ?? -1) + 1);

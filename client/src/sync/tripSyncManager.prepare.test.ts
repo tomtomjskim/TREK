@@ -19,6 +19,12 @@ vi.mock('./tilePrefetcher', () => ({
 
 const prefetchMock = vi.mocked(prefetchTilesForTrip)
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(res => { resolve = res })
+  return { promise, resolve }
+}
+
 function dateOffset(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() + days)
@@ -142,6 +148,24 @@ describe('tripSyncManager.prepareForOffline — full run', () => {
     expect(tripId).toBe(603)
     expect(places).toHaveLength(1)
     expect(force).toBe(true)
+  })
+
+  it('FE-SYNC-PREP-022: does not report done when the final tile await loses its auth lease', async () => {
+    const trip = buildTrip({ id: 621, end_date: dateOffset(4) })
+    serveTrips([trip], { 621: bundleFor(trip) })
+    const tileDone = deferred<void>()
+    prefetchMock.mockReturnValueOnce(tileDone.promise)
+    const progress: PrepareProgress[] = []
+
+    const preparing = tripSyncManager.prepareForOffline(p => progress.push(p))
+    await vi.waitFor(() => expect(prefetchMock).toHaveBeenCalled())
+    expect(prefetchMock.mock.calls[0][0]).toBe(621)
+    expect(prefetchMock.mock.calls[0][3]).toBe(true)
+    setAuthed(false)
+    tileDone.resolve(undefined)
+
+    expect(await preparing).toBe(0)
+    expect(progress[progress.length - 1]?.phase).not.toBe('done')
   })
 
   it('FE-SYNC-PREP-007: skips the tile phase when the user turned map tiles off', async () => {

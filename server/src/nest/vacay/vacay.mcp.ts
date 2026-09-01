@@ -14,7 +14,13 @@ import {
 import type { VacayUpdatePlanRequest } from '@trek/shared';
 import { AuthService } from '../auth/auth.service';
 import { ADDON_IDS } from '../../addons';
-import { VacayService } from './vacay.service';
+import {
+  VacayFusedCompanyHolidaysReadOnlyError,
+  VacayFusedYearDeleteReadOnlyError,
+  VacayInvalidDateError,
+  VacayService,
+  VacayYearDeleteReviewRequiredError,
+} from './vacay.service';
 import { addonGate } from '../addons/addon-gate';
 import { AddonsService } from '../addons/addons.service';
 
@@ -55,6 +61,10 @@ function calendarRegionCodes(country: string, data: unknown): { region: string; 
     ...flattenRegionCodes(payload.groups).map(code => ({ region: `${upper}|group:${code}`, kind: 'group' as const })),
     ...flattenRegionCodes(payload.subdivisions).map(code => ({ region: code, kind: 'subdivision' as const })),
   ];
+}
+
+function codedError(error: { message: string; code: string }) {
+  return errorResult(JSON.stringify({ error: error.message, code: error.code }));
 }
 
 /**
@@ -131,11 +141,18 @@ export class VacayMcp {
     const planId = this.vacay.getActivePlanId(ctx.userId);
     // updatePlan already returns the fully-hydrated { plan }; surface it so the
     // AI consumer sees the updated plan, matching get_vacay_plan.
-    const result = await this.vacay.updatePlan(planId, {
-      block_weekends, holidays_enabled, holidays_region, school_holidays_enabled,
-      company_holidays_enabled, carry_over_enabled, weekend_days, week_start,
-    }, undefined);
-    return ok(result);
+    try {
+      const result = await this.vacay.updatePlan(planId, {
+        block_weekends, holidays_enabled, holidays_region, school_holidays_enabled,
+        company_holidays_enabled, carry_over_enabled, weekend_days, week_start,
+      }, undefined);
+      return ok(result);
+    } catch (error) {
+      if (error instanceof VacayFusedCompanyHolidaysReadOnlyError) {
+        return codedError(error);
+      }
+      throw error;
+    }
   }
 
   @Tool({
@@ -186,7 +203,11 @@ export class VacayMcp {
     const me = this.auth.getCurrentUser(ctx.userId);
     if (!me) return errorResult('User not found.');
     const result = this.vacay.sendInvite(planId, ctx.userId, me.username, me.email, targetUserId);
-    if (result.error) return errorResult(result.error);
+    if (result.error) {
+      return errorResult(result.code
+        ? JSON.stringify({ error: result.error, code: result.code })
+        : result.error);
+    }
     return ok({ success: true });
   }
 
@@ -203,7 +224,15 @@ export class VacayMcp {
   async acceptVacayInvite({ planId }: { planId: number }, ctx: McpContext) {
     if (this.auth.isDemoUser(ctx.userId)) return demoDenied();
     const result = this.vacay.acceptInvite(ctx.userId, planId, undefined);
-    if (result.error) return errorResult(result.error);
+    if (result.error) {
+      return errorResult(result.code
+        ? JSON.stringify({
+            error: result.error,
+            code: result.code,
+            ...(result.missing_years ? { missing_years: result.missing_years } : {}),
+          })
+        : result.error);
+    }
     return ok({ success: true });
   }
 
@@ -235,8 +264,13 @@ export class VacayMcp {
   })
   async cancelVacayInvite({ targetUserId }: { targetUserId: number }, ctx: McpContext) {
     if (this.auth.isDemoUser(ctx.userId)) return demoDenied();
-    const planId = this.vacay.getActivePlanId(ctx.userId);
-    this.vacay.cancelInvite(planId, targetUserId);
+    const result = this.vacay.cancelInvite(ctx.userId, targetUserId);
+    if (result.error) {
+      return errorResult(JSON.stringify({
+        error: result.error,
+        ...(result.code ? { code: result.code } : {}),
+      }));
+    }
     return ok({ success: true });
   }
 
@@ -289,7 +323,7 @@ export class VacayMcp {
     name: 'delete_vacay_year',
     description: 'Remove a calendar year from the vacation plan.',
     inputSchema: {
-      year: z.number().int(),
+      year: z.number().int().safe(),
     },
     annotations: TOOL_ANNOTATIONS_DELETE,
     when: vacayAddonOn,
@@ -297,9 +331,18 @@ export class VacayMcp {
   })
   async deleteVacayYear({ year }: { year: number }, ctx: McpContext) {
     if (this.auth.isDemoUser(ctx.userId)) return demoDenied();
-    const planId = this.vacay.getActivePlanId(ctx.userId);
-    const years = this.vacay.deleteYear(planId, year, undefined);
-    return ok({ years });
+    try {
+      const years = this.vacay.deleteActiveYear(ctx.userId, year, undefined);
+      return ok({ years });
+    } catch (error) {
+      if (
+        error instanceof VacayFusedYearDeleteReadOnlyError
+        || error instanceof VacayYearDeleteReviewRequiredError
+      ) {
+        return codedError(error);
+      }
+      throw error;
+    }
   }
 
   @Tool({
@@ -346,7 +389,13 @@ export class VacayMcp {
       }
       userId = targetUserId;
     }
-    const result = this.vacay.toggleEntry(userId, planId, date, fraction, kind, undefined);
+    let result;
+    try {
+      result = this.vacay.toggleEntry(userId, planId, date, fraction, kind, undefined);
+    } catch (error) {
+      if (error instanceof VacayInvalidDateError) return codedError(error);
+      throw error;
+    }
     if (result.error) return errorResult(result.error);
     return ok(result);
   }
@@ -365,8 +414,18 @@ export class VacayMcp {
   async toggleCompanyHoliday({ date, note }: { date: string; note?: string }, ctx: McpContext) {
     if (this.auth.isDemoUser(ctx.userId)) return demoDenied();
     const planId = this.vacay.getActivePlanId(ctx.userId);
-    const result = this.vacay.toggleCompanyHoliday(planId, date, note, undefined);
-    return ok(result);
+    try {
+      const result = this.vacay.toggleCompanyHoliday(planId, date, note, undefined);
+      return ok(result);
+    } catch (error) {
+      if (
+        error instanceof VacayInvalidDateError
+        || error instanceof VacayFusedCompanyHolidaysReadOnlyError
+      ) {
+        return codedError(error);
+      }
+      throw error;
+    }
   }
 
   @Tool({

@@ -22,9 +22,10 @@ import { PackingModule } from '../packing/packing.module';
 // not @Global, so the import must be explicit.
 import { PermissionsModule } from '../permissions/permissions.module';
 import { AppConfigModule } from '../app-config/app-config.module';
+import { GoogleApiUsageModule } from '../google-api-usage/google-api-usage.module';
 
 @Module({
-  imports: [AppConfigModule, PluginsRuntimeModule, SettingsModule, AuditModule, AddonsModule, AuthModule, NotificationsModule, PackingModule, PermissionsModule, TokensModule, OauthModule, SchedulingModule],
+  imports: [AppConfigModule, PluginsRuntimeModule, SettingsModule, AuditModule, AddonsModule, AuthModule, NotificationsModule, PackingModule, PermissionsModule, TokensModule, OauthModule, SchedulingModule, GoogleApiUsageModule],
   controllers: [AdminController],
   providers: [AdminService, VersionCheckJob, DemoResetJob],
 })

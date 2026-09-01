@@ -77,7 +77,7 @@ import { AdminService } from '../../../src/nest/admin/admin.service';
 import { VersionCheckJob } from '../../../src/nest/admin/version-check.job';
 import type { CronRegistrarService } from '../../../src/nest/scheduling/cron-registrar.service';
 import type { RuntimeEnvService } from '../../../src/nest/app-config/runtime-env.service';
-import { __clearVersionCacheForTests } from '../../../src/nest/admin/admin.helpers';
+import { __clearVersionCacheForTests, compareVersions } from '../../../src/nest/admin/admin.helpers';
 import { makeNotificationsService, makeNotificationPreferencesService } from '../../helpers/notifications';
 import { EphemeralTokenService } from '../../../src/nest/auth/ephemeral-token.service';
 import { AllowedFileTypesService } from '../../../src/nest/files/allowed-file-types.service';
@@ -459,6 +459,24 @@ describe('checkVersion', () => {
     await checkVersion();
     await checkVersion();
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('compareVersions — SemVer precedence', () => {
+  it('ADMIN-SVC-087 — ignores build metadata for an otherwise equal release', () => {
+    expect(compareVersions('3.4.1', '3.4.1+jsnetworkcorp.testrev')).toBe(0);
+    expect(compareVersions('3.4.1+official', '3.4.1+jsnetworkcorp.testrev')).toBe(0);
+  });
+
+  it('ADMIN-SVC-088 — preserves patch and prerelease ordering', () => {
+    expect(compareVersions('3.4.2', '3.4.1+jsnetworkcorp.testrev')).toBeGreaterThan(0);
+    expect(compareVersions('3.4.1-rc.2+jsnetworkcorp.testrev', '3.4.1-rc.1')).toBeGreaterThan(0);
+    expect(compareVersions('3.4.1-rc.1', '3.4.1')).toBeLessThan(0);
+  });
+
+  it('ADMIN-SVC-089 — treats invalid versions as unknown and fails closed', () => {
+    expect(compareVersions('dev', '3.4.1')).toBe(0);
+    expect(compareVersions('3.4.1', 'not-semver')).toBe(0);
   });
 });
 

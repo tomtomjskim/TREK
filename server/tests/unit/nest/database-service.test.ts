@@ -2,7 +2,7 @@
  * DatabaseService — the shared better-sqlite3 provider (F3). Exercises every
  * helper against the real connection so the typed query surface is covered.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { db } from '../../../src/db/database';
 import { DatabaseService } from '../../../src/nest/database/database.service';
 
@@ -33,6 +33,17 @@ describe('DatabaseService (typed query helpers)', () => {
     expect(total.s).toBe(42);
 
     svc.run('DROP TABLE _dbsvc_test');
+  });
+
+  it('uses better-sqlite3 immediate mode for read-check-write transactions', () => {
+    const immediate = vi.fn(() => 42);
+    const deferred = Object.assign(vi.fn(), { immediate });
+    const connection = { transaction: vi.fn(() => deferred) };
+    const isolated = new DatabaseService(connection as never);
+
+    expect(isolated.transactionImmediate(() => 42)).toBe(42);
+    expect(immediate).toHaveBeenCalledOnce();
+    expect(deferred).not.toHaveBeenCalled();
   });
 });
 

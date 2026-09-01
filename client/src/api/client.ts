@@ -845,6 +845,9 @@ export const adminApi = {
   updatePlacesDetails: (enabled: boolean) => apiClient.put('/admin/places-details', { enabled }).then((r) => r.data),
   getPlacesEnrich: () => apiClient.get('/admin/places-enrich').then((r) => r.data),
   updatePlacesEnrich: (enabled: boolean) => apiClient.put('/admin/places-enrich', { enabled }).then((r) => r.data),
+  // v4 spelling; the server keeps both paths live for older clients.
+  getPlacesEnrichment: () => apiClient.get('/admin/places-enrichment').then((r) => r.data),
+  updatePlacesEnrichment: (enabled: boolean) => apiClient.put('/admin/places-enrichment', { enabled }).then((r) => r.data),
   getGoogleApiUsage: (): Promise<{ usage: GoogleApiUsage[] }> =>
     apiClient.get('/admin/google-api-usage').then((r) => r.data),
   getCollabFeatures: () => apiClient.get('/admin/collab-features').then((r) => r.data),

@@ -20,7 +20,7 @@
 
 import type { Place } from '../types'
 import { offlineDb, upsertSyncMeta } from '../db/offlineDb'
-import { isAuthed } from './authGate'
+import { captureAuthLease, isAuthLeaseValid, type AuthLease } from './authGate'
 import { isVectorStyle, normalizeTileUrl, resolveTileUrl, withTileApiKey } from '../utils/tileUrl'
 import { OFM_POSITRON } from '../constants/mapDefaults'
 import { clearVectorCache, prefetchVectorForPlaces } from './glPrefetcher'
@@ -51,6 +51,10 @@ export const TILE_CONCURRENCY = 6
 
 /** Name of the Workbox runtime cache holding map tiles (see vite.config.js). */
 const TILE_CACHE = 'map-tiles'
+
+// Incremented as soon as clearTileCache starts, before any async cache work.
+// Prefetches capture the value and fail closed when a clear supersedes them.
+let _clearGeneration = 0
 
 const DEFAULT_TILE_URL = OFM_POSITRON
 
@@ -225,39 +229,78 @@ async function openTileCache(): Promise<Cache | null> {
  * Returns the number of tiles actually fetched — tiles already in the cache are
  * skipped without touching the network.
  */
-export async function prefetchTiles(
+interface TilePrefetchResult {
+  fetched: number
+  complete: boolean
+}
+
+async function prefetchTilesWithStatus(
   bbox: TileBbox,
   tileUrlTemplate: string,
   minZoom = 10,
   maxZoom = 16,
   cartoKey?: string,
-): Promise<number> {
-  if (!navigator.onLine) return 0
-  if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return 0
+  lease?: AuthLease,
+  clearGeneration?: number,
+): Promise<TilePrefetchResult> {
+  const activeLease = lease ?? captureAuthLease()
+  const activeClearGeneration = clearGeneration ?? _clearGeneration
+  const isRunCurrent = () => activeClearGeneration === _clearGeneration
+  if (!activeLease || !isAuthLeaseValid(activeLease) || !isRunCurrent()) return { fetched: 0, complete: false }
+  if (!navigator.onLine) return { fetched: 0, complete: false }
+  if (!('serviceWorker' in navigator) || !navigator.serviceWorker.controller) return { fetched: 0, complete: false }
 
   const coords = enumerateTiles(bbox, minZoom, maxZoom)
-  if (coords.length === 0) return 0
+  if (coords.length === 0) return { fetched: 0, complete: true }
 
   // Checking Cache Storage from here is far cheaper than letting the request
   // reach the SW's CacheFirst handler, so a resumed or repeated prefetch over a
   // warm cache costs almost nothing.
   const cache = await openTileCache()
+  if (!isAuthLeaseValid(activeLease) || !isRunCurrent()) return { fetched: 0, complete: false }
 
   let cursor = 0
   let fetched = 0
+  let failed = false
+  let cancelled = false
 
   async function worker(): Promise<void> {
     while (cursor < coords.length) {
       // Going offline or logging out mid-run abandons the rest of the queue.
-      if (!navigator.onLine || !isAuthed()) return
+      if (!navigator.onLine || !isAuthLeaseValid(activeLease) || !isRunCurrent()) {
+        cancelled = true
+        return
+      }
 
       const [z, x, y] = coords[cursor++]
       const url = buildTileUrl(tileUrlTemplate, z, x, y, cartoKey)
 
-      if (cache && (await cache.match(url))) continue
+      if (cache) {
+        const cached = await cache.match(url)
+        if (!isAuthLeaseValid(activeLease) || !isRunCurrent()) {
+          cancelled = true
+          return
+        }
+        if (cached) continue
+      }
 
       // The SW CacheFirst handler stores the response.
-      await fetch(url, { mode: 'no-cors' }).catch(() => {})
+      try {
+        const response = await fetch(url, { mode: 'no-cors' })
+        // no-cors raster requests resolve to opaque responses (status 0, so
+        // `ok` is false) even though the Service Worker can cache them.
+        if (!response.ok && response.type !== 'opaque') {
+          failed = true
+          continue
+        }
+      } catch {
+        failed = true
+        continue
+      }
+      if (!isAuthLeaseValid(activeLease) || !isRunCurrent()) {
+        cancelled = true
+        return
+      }
       fetched++
     }
   }
@@ -266,7 +309,28 @@ export async function prefetchTiles(
     Array.from({ length: Math.min(TILE_CONCURRENCY, coords.length) }, worker),
   )
 
-  return fetched
+  return { fetched, complete: !failed && !cancelled && isAuthLeaseValid(activeLease) && isRunCurrent() }
+}
+
+export async function prefetchTiles(
+  bbox: TileBbox,
+  tileUrlTemplate: string,
+  minZoom = 10,
+  maxZoom = 16,
+  cartoKey?: string,
+  lease?: AuthLease,
+  clearGeneration?: number,
+): Promise<number> {
+  const result = await prefetchTilesWithStatus(
+    bbox,
+    tileUrlTemplate,
+    minZoom,
+    maxZoom,
+    cartoKey,
+    lease,
+    clearGeneration,
+  )
+  return result.fetched
 }
 
 /**
@@ -275,6 +339,12 @@ export async function prefetchTiles(
  * "whole world map" concern — is reclaimed immediately.
  */
 export async function clearTileCache(): Promise<void> {
+  _clearGeneration += 1
+  // Bind both handles before any cache await. The exported DB is a Proxy that
+  // can switch connections during logout/account change; using either handle
+  // after that switch could otherwise reset the newly selected account.
+  const syncMetaTable = offlineDb.syncMeta
+  const resetTransaction = offlineDb.transaction
   try {
     if (typeof caches !== 'undefined') await caches.delete(TILE_CACHE)
   } catch {
@@ -288,12 +358,13 @@ export async function clearTileCache(): Promise<void> {
   // Drop the recorded bboxes too, otherwise prefetchTilesForTrip would consider
   // these trips done and never refill the cache we just emptied.
   try {
-    const metas = await offlineDb.syncMeta.toArray()
-    await Promise.all(
-      metas
-        .filter(m => m.tilesBbox !== null)
-        .map(m => upsertSyncMeta({ ...m, tilesBbox: null })),
-    )
+    // If auth/account state changes while this transaction is open, all reads
+    // and writes stay bound to the DB that was current when reset began.
+    await resetTransaction('rw', syncMetaTable, async () => {
+      const metas = await syncMetaTable.toArray()
+      const changed = metas.filter(m => m.tilesBbox !== null).map(m => ({ ...m, tilesBbox: null }))
+      if (changed.length > 0) await syncMetaTable.bulkPut(changed)
+    })
   } catch (err) {
     console.error('[tilePrefetch] failed to reset tile bboxes:', err)
   }
@@ -323,7 +394,14 @@ export async function prefetchTilesForTrip(
   tileUrlTemplate?: string,
   force = false,
   cartoKey?: string,
+  lease?: AuthLease,
+  clearGeneration?: number,
 ): Promise<void> {
+  const activeLease = lease ?? captureAuthLease()
+  const activeClearGeneration = clearGeneration ?? _clearGeneration
+  const isRunCurrent = () => activeClearGeneration === _clearGeneration
+  if (!activeLease || !isAuthLeaseValid(activeLease) || !isRunCurrent()) return
+
   // Resolved rather than taken raw, so a keyless CARTO template pre-downloads the
   // basemap the map will actually draw instead of a few thousand watermarks.
   const template = resolveTileUrl(tileUrlTemplate, DEFAULT_TILE_URL, cartoKey)
@@ -334,21 +412,24 @@ export async function prefetchTilesForTrip(
   // routine login from re-walking thousands of tile URLs just to find them all
   // cached.
   const existing = await offlineDb.syncMeta.get(tripId)
+  if (!isAuthLeaseValid(activeLease) || !isRunCurrent()) return
   if (!force && existing?.tilesBbox && sameBbox(existing.tilesBbox, bbox)) return
 
   // The default basemap is a vector style, and walking a {z}/{x}/{y} template
   // over one would fetch nothing the map ever asks for. A user who configured
   // their own raster template keeps the path below unchanged.
   if (isVectorStyle(template)) {
-    const { tiles } = await prefetchVectorForPlaces(places, template, () => !navigator.onLine || !isAuthed())
+    const result = await prefetchVectorForPlaces(places, template, () => !navigator.onLine || !isAuthLeaseValid(activeLease) || !isRunCurrent())
+    if (!isAuthLeaseValid(activeLease) || !isRunCurrent()) return
+    if (!result.complete) return
     const meta = await offlineDb.syncMeta.get(tripId)
-    if (meta) {
+    if (isAuthLeaseValid(activeLease) && isRunCurrent() && meta) {
       await upsertSyncMeta({
         ...meta,
         tilesBbox: [bbox.minLng, bbox.minLat, bbox.maxLng, bbox.maxLat],
       })
     }
-    if (tiles > 0) console.info(`[tilePrefetch] trip ${tripId}: cached ${tiles} vector tiles`)
+    if (result.tiles > 0) console.info(`[tilePrefetch] trip ${tripId}: cached ${result.tiles} vector tiles`)
     return
   }
 
@@ -362,11 +443,13 @@ export async function prefetchTilesForTrip(
   // tile providers that don't send CORS headers. To stop the browser evicting
   // these tiles under the inflated quota, we request persistent storage at app
   // init instead (sync/persistentStorage.ts).
-  const fetched = await prefetchTiles(bbox, template, 10, 16, cartoKey)
+  const result = await prefetchTilesWithStatus(bbox, template, 10, 16, cartoKey, activeLease, activeClearGeneration)
+  if (!result.complete || !isAuthLeaseValid(activeLease) || !isRunCurrent()) return
+  const { fetched } = result
 
   // Update syncMeta with bbox and tile count
   const meta = await offlineDb.syncMeta.get(tripId)
-  if (meta) {
+  if (isAuthLeaseValid(activeLease) && isRunCurrent() && meta) {
     await upsertSyncMeta({
       ...meta,
       tilesBbox: [bbox.minLng, bbox.minLat, bbox.maxLng, bbox.maxLat],
