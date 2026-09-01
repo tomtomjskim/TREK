@@ -2,6 +2,7 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 import { visualizer } from 'rollup-plugin-visualizer';
+import { pwaManifest, pwaNavigateFallbackDenylist } from './pwa-manifest.js';
 
 // `npm run build:analyze` writes dist/stats.html — a treemap of what actually ended
 // up in each chunk. The plain build only reports chunk sizes, which tells you a chunk
@@ -53,14 +54,7 @@ export default defineConfig(({ mode }) => ({
         // precache manifest if someone ships that build by accident.
         globIgnores: ['**/stats.html'],
         navigateFallback: 'index.html',
-        navigateFallbackDenylist: [
-          /^\/api/,
-          /^\/uploads/,
-          /^\/mcp/,
-          /^\/oauth\//,
-          /^\/.well-known\//,
-          /^\/plugin-frame\//,
-        ],
+        navigateFallbackDenylist: pwaNavigateFallbackDenylist,
         runtimeCaching: [
           {
             // Carto map tiles (default provider)
@@ -182,24 +176,7 @@ export default defineConfig(({ mode }) => ({
           },
         ],
       },
-      manifest: {
-        name: 'TREK \u2014 Travel Planner',
-        short_name: 'TREK',
-        description: 'Travel Resource & Exploration Kit',
-        theme_color: '#111827',
-        background_color: '#0f172a',
-        display: 'standalone',
-        scope: '/',
-        start_url: '/',
-        categories: ['travel', 'navigation'],
-        icons: [
-          { src: 'icons/apple-touch-icon-180x180.png', sizes: '180x180', type: 'image/png' },
-          { src: 'icons/icon-192x192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'icons/icon-512x512.png', sizes: '512x512', type: 'image/png' },
-          { src: 'icons/icon-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
-          { src: 'icons/icon.svg', sizes: 'any', type: 'image/svg+xml' },
-        ],
-      },
+      manifest: pwaManifest,
     }),
   ].filter(Boolean),
   build: {

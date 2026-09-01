@@ -8,6 +8,7 @@ import type { ConfigType } from '@nestjs/config';
 import { AppModule } from './nest/app.module';
 import { httpConfig } from './nest/app-config';
 import { applyGlobalMiddleware } from './middleware/globalMiddleware';
+import { applyAndroidReleaseRoutes } from './nest/platform/android-release.routes';
 import { applyPlatformUploads, applyPlatformStatic } from './nest/platform/platform.routes';
 import { apiDocsEnabled } from './nest/common/api-docs.kill-switch';
 import { setupApiDocs } from './nest/platform/api-docs';
@@ -89,6 +90,9 @@ export async function buildApp(): Promise<INestApplication> {
   // instance is resolvable before init, and the handlers only *register* here —
   // per-request resolution runs after app.init() completed the registry load.
   applyPlatformUploads(instance, app.get(StorageService));
+  // Fixed Android association/download paths must precede both the generic
+  // /.well-known middleware and Nest's terminal SPA/error handling.
+  applyAndroidReleaseRoutes(instance);
   // The SDK discovery router (+ its addon gate). Container-built so its deps
   // are injected (same pre-init consumption bridge as httpConfig above), but
   // applied here as a PATHLESS app.use: the SDK router matches absolute
