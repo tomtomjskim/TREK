@@ -2,6 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
+> 실행 결과: local integrated tree에서 완료. Exact DTO/API `0842e229`, client/i18n/E2E
+> `c3b8e18f`; server 74/74, affected client 170/170, shared i18n 4/4, public Playwright
+> 4/4, 23-locale semantic review와 independent final review PASS. 전체 v4.1.1 release는
+> restore quiesce/crash-recovery 및 release rehearsal 미완료로 별도 NO-GO.
+
 **Goal:** Show trip-shared `places.notes` in public map details and plan rows while keeping every other note field separate and preserving anonymous-share privacy boundaries.
 
 **Architecture:** Replace every wildcard row projection in the v4 Nest anonymous payload with a typed,

@@ -1,20 +1,20 @@
 # Public Shared Place Notes Evidence
 
 > 작성일: 2026-09-01
-> 상태: root cause and plan verified; implementation not started
-> target baseline: future integrated v4.1.1 fork
+> 상태: implemented + locally verified
+> target baseline: `SHARE-01` local integrated v4.1.1 fork tree; API `0842e229`, client/i18n/E2E `c3b8e18f`
 > preservation ID: `SHARE-01`
 
 ## Confirmed root cause
 
 | Surface            | v4.1.1 evidence                                         | Finding                                      |
-| ------------------ | ------------------------------------------------------- | -------------------------------------------- | --- | ---------------------- |
+| ------------------ | ------------------------------------------------------- | -------------------------------------------- |
 | server query       | `server/src/nest/share/share.service.ts` around 178–190 | reads `p.notes AS place_notes`               |
 | nested projection  | same file around 195–208                                | drops `notes` from `assignment.place`        |
 | trip-wide pool     | same file around 221–225                                | `SELECT p.*` already includes `places.notes` |
 | selected-day input | `client/src/pages/SharedTripPage.tsx` around 159–179    | uses nested assignment places                |
 | map output         | same file around 518–522                                | renders only name Tooltip                    |
-| plan output        | same file around 796–850                                | renders name and `address                    |     | description`, not note |
+| plan output        | same file around 796–850                                | renders name and `address`, `description`, but not the place note |
 
 The same two omissions exist on current fork main in legacy `server/src/services/shareService.ts` and
 the older shared page. Fixing main first would require a second port after v4 integration, so it is
@@ -83,41 +83,48 @@ loader is never invoked. Release notes must identify this anonymous API minimiza
 | --------------------------------------- | ------------------ | -------------------------------------------------------------- |
 | current fork server share-related tests | 2 files, 32 passed | assert assignment note/name/coordinates, not nested place note |
 | current fork `SharedTripPage.test.tsx`  | 21 passed          | asserts names/address/description, not note detail             |
-| v4.1.1 integrated tests                 | not run            | integration tree does not exist yet                            |
+| pre-implementation integrated RED      | failing assertions captured; exact count not retained | nested DTO, Popup/plan note and copy assertions exposed the defect |
 
 Pre-existing server migration logs include non-fatal duplicate-column warnings. They are not evidence
 for or against this defect.
 
 ## RED/GREEN ledger
 
-| Contract                                                                             | RED | Implementation | GREEN | State   |
-| ------------------------------------------------------------------------------------ | --- | -------------- | ----- | ------- |
-| both public projections carry same place note                                        | —   | —              | —     | PENDING |
-| internal assignment note absent from the full response                               | —   | —              | —     | PENDING |
-| `share_map=false` serialized sentinel absence                                        | —   | —              | —     | PENDING |
-| exact anonymous keys for every root/nested section                                   | —   | —              | —     | PENDING |
-| disabled-flag no-query/empty shape and internal/provider/sync/audit sentinel absence | —   | —              | —     | PENDING |
-| revoked payload/photo + different-token reissue                                      | —   | —              | —     | PENDING |
-| trip-wide marker Popup                                                               | —   | —              | —     | PENDING |
-| selected-day nested marker Popup                                                     | —   | —              | —     | PENDING |
-| plan address/description + separate note                                             | —   | —              | —     | PENDING |
-| null/empty/long/Markdown/raw HTML safety                                             | —   | —              | —     | PENDING |
-| all locale copy means shared place note                                              | —   | —              | —     | PENDING |
-| public link disclosure                                                               | —   | —              | —     | PENDING |
-| Marker accessible name/focus/current-opener return policy                            | —   | —              | —     | PENDING |
+| Contract | RED | Implementation | GREEN / final evidence | State |
+| --- | --- | --- | --- | --- |
+| API exact DTO, both projections carry same place note; assignment note excluded | `failing assertion captured` (exact RED count not retained) | `server/src/nest/share/share.service.ts`, `public-share.types.ts` | `server/tests/unit/nest/share.service.test.ts` + `server/tests/integration/share.test.ts`: 74 passed across 2 files | VERIFIED |
+| `share_map=false` empty shape, no section queries, internal/provider/sync/audit sentinels absent | `failing assertion captured` (exact RED count not retained) | flag-gated query/DTO contract | same 74 server tests; disabled flags and corrupt metadata fail closed | VERIFIED |
+| revoked payload/photo and different-token reissue | `failing assertion captured` (exact RED count not retained) | token/revocation contract retained | same 74 server tests | VERIFIED |
+| trip-wide and selected-day marker Popup; plan address/description plus separate note | `failing assertion captured` (exact RED count not retained) | `SharedTripPage.tsx` map/plan renderers | 170 passed across 4 affected client files | VERIFIED |
+| null/empty/long/Markdown/raw HTML safety and keyboard focus/return policy | `failing assertion captured` (exact RED count not retained) | safe Markdown + focus/keyboard behavior | 170 passed across 4 affected client files; Playwright public 4/4 | VERIFIED |
+| all locale copy means shared place note; public link disclosure | `failing assertion captured` (exact RED count not retained) | 23 locale `places`/`share` entries and disclosure copy | shared i18n test: 4 passed; independent semantic re-review: all 23 locales PASS; `TripMembersModal`: 58/58 fresh evidence | VERIFIED |
+
+### Final command evidence
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| server DTO/query/lifecycle | `ENCRYPTION_KEY=<synthetic-64-hex> npm run test --workspace=server -- --run tests/unit/nest/share.service.test.ts tests/integration/share.test.ts` | 2 files, 74/74 passed |
+| affected client unit | `npm run test --workspace=client -- --run src/App.test.tsx src/components/Trips/TripMembersModal.test.tsx src/components/shared/markdownLink.test.tsx src/pages/SharedTripPage.test.tsx` | 4 files, 170/170 passed |
+| disclosure focused | `npm run test --workspace=client -- --run src/components/Trips/TripMembersModal.test.tsx` | 58/58 passed |
+| locale semantics | `npm run test --workspace=shared -- --run src/i18n/i18n-place-notes.spec.ts` | 1 file, 4/4 passed |
+| locale key parity | `npm run i18n:parity:strict --workspace=shared` | file/key parity OK |
+| source typing | `npm run typecheck --workspace=client`; `npm run typecheck --workspace=shared`; `npm run typecheck --workspace=server` | all exit 0 |
+| browser | `TREK_E2E_BACKEND_PORT=33101 ENCRYPTION_KEY=<synthetic-64-hex> LOG_LEVEL=error npx playwright test e2e/shared-trip-place-notes.public.spec.ts --project=public --reporter=line` from `client/` | 4/4 passed; 1 focused negative-state rerun also passed |
 
 ## Browser evidence
 
-| View/state                                                                                | Screenshot/artifact | Console/network | State   |
-| ----------------------------------------------------------------------------------------- | ------------------- | --------------- | ------- |
-| 1440 all-days Popup                                                                       | —                   | —               | PENDING |
-| 1440 selected-day Popup and plan                                                          | —                   | —               | PENDING |
-| 390 tap/close/wrapping                                                                    | —                   | —               | PENDING |
-| keyboard name/focus/Enter/close-button/Escape return, pointer no-jump, second-marker/link | —                   | —               | PENDING |
-| no-map/invalid/expired/revoked                                                            | —                   | —               | PENDING |
+| View/state | Screenshot/artifact | Console/network | State |
+| --- | --- | --- | --- |
+| 1440 all-days Popup | `docs/screenshots/share-place-notes-1440-all-days.png` | Playwright assertion: no console/page errors | VERIFIED |
+| 1440 selected-day Popup and plan | `docs/screenshots/share-place-notes-1440-selected-day.png` | Playwright assertion: no console/page errors | VERIFIED |
+| 390 tap/close/wrapping | `docs/screenshots/share-place-notes-390-selected-day.png` | Playwright assertion: no console/page errors | VERIFIED |
+| keyboard name/focus/Enter/close-button/Escape return, pointer no-jump, second-marker/link | `client/e2e/shared-trip-place-notes.public.spec.ts` | cookie-free `public` project; no console/page errors asserted | VERIFIED |
+| no-map/invalid/expired/revoked | same Playwright spec; all-flags-off asserts no Leaflet/map container | no-map has no console/page errors; negative links allow only their expected `/api/shared/:token` 404 resource messages and reject other console/page errors or 404s | VERIFIED |
 
-All browser rows must come from `client/e2e/shared-trip-place-notes.public.spec.ts` under Playwright's
-cookie-free `public` project. An authenticated `app`-project screenshot does not satisfy this gate.
+All rows come from `client/e2e/shared-trip-place-notes.public.spec.ts` under Playwright's cookie-free
+`public` project, final result 4/4 passed. The evidence covers Popup note rendering, separate plan
+address/note, long-note wrapping, keyboard interaction, no-map state, and invalid/expired/revoked
+states. An authenticated `app`-project screenshot does not satisfy this gate.
 
 ## Locale semantic review ledger
 
@@ -126,32 +133,34 @@ Key parity alone is never a semantic PASS.
 
 | Locale | Proposed text/reference | Reviewer | Verdict |
 | ------ | ----------------------- | -------- | ------- |
-| ar     | —                       | —        | PENDING |
-| br     | —                       | —        | PENDING |
-| ca     | —                       | —        | PENDING |
-| cs     | —                       | —        | PENDING |
-| de     | —                       | —        | PENDING |
-| en     | —                       | —        | PENDING |
-| es     | —                       | —        | PENDING |
-| fr     | —                       | —        | PENDING |
-| gr     | —                       | —        | PENDING |
-| hu     | —                       | —        | PENDING |
-| id     | —                       | —        | PENDING |
-| it     | —                       | —        | PENDING |
-| ja     | —                       | —        | PENDING |
-| ko     | —                       | —        | PENDING |
-| nl     | —                       | —        | PENDING |
-| pl     | —                       | —        | PENDING |
-| ru     | —                       | —        | PENDING |
-| sv     | —                       | —        | PENDING |
-| tr     | —                       | —        | PENDING |
-| uk     | —                       | —        | PENDING |
-| vi     | —                       | —        | PENDING |
-| zh-TW  | —                       | —        | PENDING |
-| zh     | —                       | —        | PENDING |
+| ar     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| br     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| ca     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| cs     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| de     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| en     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| es     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| fr     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| gr     | corrected translation, then semantic re-review | independent semantic reviewer | PASS |
+| hu     | corrected translation, then semantic re-review | independent semantic reviewer | PASS |
+| id     | corrected translation, then semantic re-review | independent semantic reviewer | PASS |
+| it     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| ja     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| ko     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| nl     | corrected translation, then semantic re-review | independent semantic reviewer | PASS |
+| pl     | corrected translation, then semantic re-review | independent semantic reviewer | PASS |
+| ru     | corrected translation, then semantic re-review | independent semantic reviewer | PASS |
+| sv     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| tr     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| uk     | corrected translation, then semantic re-review | independent semantic reviewer | PASS |
+| vi     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| zh-TW  | shared place note + public-link disclosure | independent semantic reviewer | PASS |
+| zh     | shared place note + public-link disclosure | independent semantic reviewer | PASS |
 
-`TripMembersModal.test.tsx` must separately prove that the reviewed `share.linkHint` is visible where
-the owner configures a public link.
+`TripMembersModal.test.tsx` separately proves the reviewed `share.linkHint` is visible where the owner
+configures a public link; the fresh evidence is 58/58 passed. The independent semantic re-review
+covered all 23 locales and marked them PASS after the initial `gr`, `id`, `hu`, `uk`, `nl`, `pl`, and
+`ru` wording corrections.
 
 ## Adversarial review status
 
@@ -160,9 +169,20 @@ the owner configures a public link.
 | UX/accessibility      | FAIL             | target-tag phase, public project, marker focus policy and locale ledger corrected                                     | PASS — final re-review 2026-09-01 |
 | security/architecture | FAIL             | all-section exact DTO, unused CARTO credential/assignment-note removal, flag/query sentinels and revocation corrected | PASS — final re-review 2026-09-01 |
 
+The independent final share re-review found and then closed two MED findings: persisted-auth side
+effects on `/shared/*`, and the all-flags-off path potentially rendering a blank Plan map. The final
+decision is `blockers 0 / proceed` for this local SHARE-01 integrated tree.
+
+Final API evidence explicitly covers the exact DTO allowlist, flags-off no-query/empty-shape behavior,
+never transmitting the CARTO credential, excluding internal assignment notes, and failing closed on
+corrupt reservation metadata.
+
 ## Completion rule
 
-Do not mark this feature complete until the final integrated SHA has fresh server unit/integration,
-client unit, shared i18n and Playwright evidence; positive and negative API sentinels; locale semantic
-review; no console/page errors; and independent specification/security review. Current state is plan
-remediation only, not an implemented or visually verified feature.
+SHARE-01 is `VERIFIED` in the local integrated tree: server share unit/integration (74/74 across 2
+files), affected client tests (170/170 across 4 files), shared i18n (4/4), client typecheck, public
+Playwright (4/4), locale semantic review (23/23 PASS), disclosure (58/58), positive/negative API
+sentinels, no unexpected console/page errors, and independent final review are recorded above. This
+is local feature evidence only; the overall v4.1.1 release remains separate `NO-GO` until the restore
+quiesce/crash-recovery and release rehearsal gates are resolved. No production or deployment claim is
+made here.

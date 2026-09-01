@@ -35,7 +35,8 @@ truth다.
 - [v4.1.1 integration design](plans/2026-09-01-upstream-v4.1.1-integration-design.md) ·
   [implementation plan](plans/2026-09-01-upstream-v4.1.1-integration.md) ·
   [evidence](plans/2026-09-01-upstream-v4.1.1-integration-evidence.md): unsigned exact tag,
-  159개 conflict, schema 175→200과 포크 변경 보존을 조건부 GO로 관리하는 격리 통합 계약
+  159개 conflict, schema 175→200과 포크 변경 보존을 조건부 GO로 관리하는 격리 통합 계약.
+  Process-wide restore quiesce/crash recovery와 sanitized rehearsal 전 main/deploy는 NO-GO
 - [v4.1.1 fork preservation matrix](plans/2026-09-01-upstream-v4.1.1-preservation-matrix.md):
   DB, packing privacy, Google 비용, Vacay 데이터 안전, 지도/Fold/calendar, Android와
   공개 공유 동작을 새 v4 owner module의 RED/GREEN 증거에 연결하는 누락 방지 원장
@@ -43,7 +44,7 @@ truth다.
   [implementation plan](plans/2026-09-01-public-share-place-notes.md) ·
   [evidence](plans/2026-09-01-public-share-place-notes-evidence.md): 공개 지도·계획의
   `places.notes` projection/표시, 전체 anonymous DTO exact allowlist, 개인 메모 오표기와
-  `share_map=false` 비노출 계약
+  `share_map=false` 비노출 계약. `0842e229` + `c3b8e18f` local VERIFIED
 - [Vacay correctness extraction dossiers](upstream/vacay-correctness-extraction.md):
   최신 공식 Nest 경로에 다시 구현할 데이터 보존 후보와 공식 contract와 충돌하는
   포크 정책 변경을 제출 단위별로 분리한 자료
