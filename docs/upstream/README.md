@@ -12,14 +12,14 @@
 
 ## Repository roles
 
-| 이름 | 저장소/기준 | 역할 |
-| --- | --- | --- |
-| `origin` | `tomtomjskim/TREK` | TOM이 사용하는 배포 포크 |
-| `upstream/main` | `liketrek/TREK` | 공식 release와 tag 기준 |
-| `upstream/dev` | `liketrek/TREK` | 공식 pull request 대상 |
-| `main` | `origin/main` | 검증·배포 가능한 포크 이력 |
-| `feat/upstream-vX.Y-integration` | 로컬/포크 | 공식 tag를 통합하고 회귀 검증하는 임시 브랜치 |
-| `upstream-contrib/<topic>` | `upstream/dev`에서 분기 | 공식 PR 한 건만 담는 깨끗한 기여 브랜치 |
+| 이름                                                       | 저장소/기준             | 역할                                          |
+| ---------------------------------------------------------- | ----------------------- | --------------------------------------------- |
+| `origin`                                                   | `tomtomjskim/TREK`      | TOM이 사용하는 배포 포크                      |
+| `upstream/main`                                            | `liketrek/TREK`         | 공식 release와 tag 기준                       |
+| `upstream/dev`                                             | `liketrek/TREK`         | 공식 pull request 대상                        |
+| `main`                                                     | `origin/main`           | 검증·배포 가능한 포크 이력                    |
+| `sync/upstream-vX.Y` 또는 `feat/upstream-vX.Y-integration` | 로컬/포크               | 공식 tag를 통합하고 회귀 검증하는 임시 브랜치 |
+| `upstream-contrib/<topic>`                                 | `upstream/dev`에서 분기 | 공식 PR 한 건만 담는 깨끗한 기여 브랜치       |
 
 `origin`과 `upstream`의 역할을 바꾸지 않는다. 공식 tag는 배포 `main`에 바로
 fast-forward하지 않고 격리 브랜치에서 merge한다. 이미 공개된 포크 `main`은
@@ -36,6 +36,31 @@ rebase하지 않는다.
 `upstream-contrib` 후보로 분류할 수 있지만 현재 구현 branch는 `origin/main`
 기반의 포크 검증 branch다. 향후 공식 기여를 재개하면 해당 branch를 직접 PR로
 보내지 않고 최신 `upstream/dev`에서 일반화된 최소 변경을 새로 추출한다.
+
+## v4.1.1 integration audit
+
+2026-09-01 기준 공식 `v4.1.1`은 통합·배포된 runtime이 아니라 격리 통합
+대상이다. unsigned annotated tag의 peeled target
+`33a33e7b1d113f0742ac609305cc549a4806d31b`를 고정했다.
+
+- fork `6048db13`과의 dry merge는 159개 conflict record(content 128,
+  modify/delete 28, add/add 2, file-location 1)를 만든다.
+- upstream 796 commits/3,440 files와 fork 64 commits가 v3.4.1 이후 갈라졌으며,
+  patch-id가 완전히 같은 fork patch는 없다.
+- exact source의 official migration 배열은 v3.4.1 175, v4.0.0 198,
+  v4.1.1 200이다. release 설명의 schema 수치보다 tag source와 DB rehearsal을
+  우선한다.
+- v4의 Nest ownership과 auth/privacy 강화를 baseline으로 삼고, 삭제된 legacy
+  service를 부활시키지 않은 채 fork contract를 새 module에 재구성한다.
+- 따라서 격리 `sync/upstream-v4.1.1` 작업은 조건부 GO지만, fork `main` 직접
+  merge/push와 운영 배포는 NO-GO다.
+
+설계·실행·증거는
+[integration design](../plans/2026-09-01-upstream-v4.1.1-integration-design.md),
+[preservation matrix](../plans/2026-09-01-upstream-v4.1.1-preservation-matrix.md),
+[implementation plan](../plans/2026-09-01-upstream-v4.1.1-integration.md),
+[evidence ledger](../plans/2026-09-01-upstream-v4.1.1-integration-evidence.md)를 따른다.
+이 문서 변경은 현재 v3.4.1 runtime/version을 바꾸지 않는다.
 
 ## Official contribution gate
 
@@ -66,12 +91,12 @@ ID/signing, 운영 Compose override, secret 위치, 포크 전용 migration 이�
 
 포크 변경은 네 lane으로 관리한다.
 
-| lane | 선택 기준 | 배포/제거 기준 |
-| --- | --- | --- |
-| upstream contribution | 모든 설치에 유효하고 기존 contract를 깨지 않음 | 공식 release에 포함되면 포크 patch 제거 |
-| plugin | SDK capability와 plugin-owned DB/UI로 격리 가능 | core 수정 없이 설치/비활성화 가능해야 함 |
-| fork core | 현재 SDK가 부족하거나 운영 중인 보안 경계를 즉시 유지해야 함 | patch inventory, 테스트, retirement 조건 필수 |
-| instance-only | 특정 도메인·브랜드·서명·인프라에만 유효 | 공식 PR 금지, 배포 runbook에서 관리 |
+| lane                  | 선택 기준                                                    | 배포/제거 기준                                |
+| --------------------- | ------------------------------------------------------------ | --------------------------------------------- |
+| upstream contribution | 모든 설치에 유효하고 기존 contract를 깨지 않음               | 공식 release에 포함되면 포크 patch 제거       |
+| plugin                | SDK capability와 plugin-owned DB/UI로 격리 가능              | core 수정 없이 설치/비활성화 가능해야 함      |
+| fork core             | 현재 SDK가 부족하거나 운영 중인 보안 경계를 즉시 유지해야 함 | patch inventory, 테스트, retirement 조건 필수 |
+| instance-only         | 특정 도메인·브랜드·서명·인프라에만 유효                      | 공식 PR 금지, 배포 runbook에서 관리           |
 
 Plugin은 자체 DB migration을 소유할 수 있지만 TREK core schema를 직접 변경하지
 않는다. core table, auth/permission, WebSocket privacy 또는 공통 지도 레이아웃을
@@ -103,15 +128,15 @@ fork-core patch로 분류한다.
 v3.4의 실제 SDK/host 계약을 기준으로 한 판단이다. 다음 release에서는 capability가
 변할 수 있으므로 재검증한다.
 
-| 기능 surface | v3.4에서 plugin으로 가능한 부분 | 현재 SDK gap / 결론 |
-| --- | --- | --- |
-| Google place enrichment | `http:outbound:<host>`, `db:own` usage ledger/migration, user/instance settings, settings action, authenticated route, `ctx.places.update`, `ctx.meta` external ID | native import modal과 admin usage panel에 provider UI를 주입하는 전용 hook이 없다. provider/ledger를 먼저 plugin service로 추출하고 native UI adapter는 얇은 fork-core로 남기는 hybrid가 현실적이다. |
-| Google hard cap | plugin-owned DB의 선예약과 외부 호출 wrapper | 앱 core의 다른 Google 호출까지 한 plugin이 강제할 수 없다. 모든 provider call이 plugin을 통과하기 전에는 core guard를 유지한다. |
-| packing personal templates/privacy | 별도 plugin DB와 독립 page는 가능 | core packing table, native list/template UI, REST/MCP/plugin write 권한을 일관되게 바꾸는 hook이 없다. 보안 contract를 포함한 단독 upstream PR 또는 최소 fork-core가 맞다. |
-| Vacay employment/period/balance | 별도 plugin page와 plugin-owned journal prototype은 가능 | core Vacay entry·공유·MCP와 이중 source가 되고 별도 SQLite라 원자적 transaction이 불가능하다. generic core는 upstream contribution, 한국 규칙은 core contract 뒤 policy provider가 맞다. |
-| 지도 label locale | plugin frame 안의 별도 지도만 가능 | 공통 MapLibre/Mapbox style expression과 Settings를 바꾸므로 단독 upstream PR 후보다. |
-| Fold adaptive controls | table contributor로 대체 불가 | planner의 공통 responsive layout이므로 단독 upstream PR 후보다. |
-| Android/Cloudflare/Compose | 해당 없음 | package identity, signing, domain, reverse proxy는 instance-only로 유지한다. |
+| 기능 surface                       | v3.4에서 plugin으로 가능한 부분                                                                                                                                    | 현재 SDK gap / 결론                                                                                                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Google place enrichment            | `http:outbound:<host>`, `db:own` usage ledger/migration, user/instance settings, settings action, authenticated route, `ctx.places.update`, `ctx.meta` external ID | native import modal과 admin usage panel에 provider UI를 주입하는 전용 hook이 없다. provider/ledger를 먼저 plugin service로 추출하고 native UI adapter는 얇은 fork-core로 남기는 hybrid가 현실적이다. |
+| Google hard cap                    | plugin-owned DB의 선예약과 외부 호출 wrapper                                                                                                                       | 앱 core의 다른 Google 호출까지 한 plugin이 강제할 수 없다. 모든 provider call이 plugin을 통과하기 전에는 core guard를 유지한다.                                                                      |
+| packing personal templates/privacy | 별도 plugin DB와 독립 page는 가능                                                                                                                                  | core packing table, native list/template UI, REST/MCP/plugin write 권한을 일관되게 바꾸는 hook이 없다. 보안 contract를 포함한 단독 upstream PR 또는 최소 fork-core가 맞다.                           |
+| Vacay employment/period/balance    | 별도 plugin page와 plugin-owned journal prototype은 가능                                                                                                           | core Vacay entry·공유·MCP와 이중 source가 되고 별도 SQLite라 원자적 transaction이 불가능하다. generic core는 upstream contribution, 한국 규칙은 core contract 뒤 policy provider가 맞다.             |
+| 지도 label locale                  | plugin frame 안의 별도 지도만 가능                                                                                                                                 | 공통 MapLibre/Mapbox style expression과 Settings를 바꾸므로 단독 upstream PR 후보다.                                                                                                                 |
+| Fold adaptive controls             | table contributor로 대체 불가                                                                                                                                      | planner의 공통 responsive layout이므로 단독 upstream PR 후보다.                                                                                                                                      |
+| Android/Cloudflare/Compose         | 해당 없음                                                                                                                                                          | package identity, signing, domain, reverse proxy는 instance-only로 유지한다.                                                                                                                         |
 
 Google plugin 추출은 한 번에 UI까지 옮기지 않는다. 권장 순서는 provider client와 usage
 ledger를 interface 뒤로 격리하고, plugin-owned DB/route로 옮길 수 있는지 contract test를
@@ -155,33 +180,34 @@ v3.4 통합부터 다음 계약을 사용한다.
 
 ## Patch inventory
 
-| 변경 | 현재 lane | 공식 기여 가능성 | 분리/retirement 조건 |
-| --- | --- | --- | --- |
-| 지도 label locale 선택 | upstream contribution 후보 | 높음 | 기본값·fallback을 일반화하고 `upstream/dev` 승인 후 단독 PR |
-| Fold/태블릿 adaptive map controls | upstream contribution 후보 | 높음 | JSNetworkCorp 표현 없이 responsive regression만 단독 PR |
-| 전역 calendar week-start 선택 | upstream contribution 후보 | 중간, 제품 방향 승인 필요 | [scope diagnostic](../plans/2026-08-03-calendar-week-start-scope-diagnostic.md)의 사용자 설정·공용 picker·Journey·Vacay fallback만 단독 PR; 공식 #1078의 Monday-first 결정과 구분 |
-| PlaceInspector nullable selection Hook 순서 | fork core | 높음 | 공식 release가 같은 mount의 null↔place 회귀를 통과하고 Hook 규칙 위반을 제거하면 구현 방식과 무관하게 local patch 제거 |
-| Bulk place delete nullable assignment guard | fork core | 높음 | 공식 release가 선택된 assignment만 제거하고 unrelated/orphan assignment를 보존하며 unsafe optional-chain lint 위반을 없애면 local patch 제거 |
-| Client zero-debt correctness lint guardrails | fork core maintenance | 높음 | 공식 release가 Admin scope·day expansion·mobile route-distance 왕복 동작을 보존하고 `no-unused-expressions` 위반을 없애면 local syntax patch 제거 |
-| Client redundant-assignment lint guardrail | fork core maintenance | 높음 | 공식 release가 Costs desktop/mobile currency fallback과 Tooltip 네 placement를 보존하고 `no-useless-assignment` 위반을 없애면 local syntax patch 제거 |
-| Client observer test-mock alias lint guardrail | fork core maintenance | 높음 | 공식 release가 PlaceAvatar intersection callback의 photo fetch·disconnect 계약을 보존하고 `no-this-alias` 위반을 없애면 local test patch 제거 |
-| Custom `APP_VERSION` SemVer comparison | fork core | 높음 | 공식 release가 build metadata를 update precedence에서 제외하고 same-release API·notification 회귀를 통과하면 local patch 제거 |
-| Packing template admin submission/race guard | fork core | 높음 | 공식 release가 create exact-request-count, IME/repeat, Enter+blur rename, 역순 상세 응답, CRUD count와 390px nested editor 회귀를 통과하면 local patch 제거 |
-| Vacay stats read purity | upstream contribution 후보 | 높음, read correctness | fresh carry projection의 무상태 read contract만 최신 Nest 경로에 단독 추출 |
-| Vacay holiday entry 보존 | upstream contribution 후보 | 높음, data safety | 회사/public holiday overlay와 개인 entry 보존만 단독 추출 |
-| Vacay fusion 해산 user-year 보존 | upstream contribution 후보 | 높음, data safety | [extraction dossier](vacay-correctness-extraction.md)의 dissolution 항목만 최신 Nest 경로에 재구성하고 수용 release의 동등성 회귀 뒤 제거 |
-| 출처 없는 trip/Vacay 자동 이동 중단 | fork core / upstream product discussion | 낮음, 공식 contract 충돌 | 공식 #983이 반대 동작을 의도적으로 도입했으므로 직접 PR 금지; provenance 또는 확인 UX에 maintainer 합의 후 별도 설계 |
-| Vacay fused company-holiday mutation guard | fork core pilot / upstream contribution 후보 | 높음, legacy ownership safety | 공식 구현이 fused 수동 회사 휴일 write를 모든 surface에서 거부하고 solo 동작·기존 row를 보존하면 local guard 제거; employment v2 활성화 시 guard를 self-owned 권한으로 대체 |
-| Vacay actor-aware whole-year deletion guard | fork core pilot / upstream contribution 후보 | 높음, destructive data safety | 공식 구현이 fused/pending·ambiguous membership을 fail-closed하고 solo 삭제·연쇄 carry를 한 transaction으로 처리하며 REST/MCP/UI negative contract를 통과하면 local guard 제거; invite-accept year union은 별도 추출 |
-| Vacay invite migration year reconciliation | fork core pilot / upstream contribution 후보 | 높음, historical data safety | 공식 구현이 entry·user-year의 연도 합집합을 대상 plan과 원자적으로 대조하고 누락 시 pending/data를 보존하며 owner 보완 후 재시도를 허용하면 local guard 제거 |
-| Vacay invite membership topology guard | fork core pilot / upstream contribution 후보 | 높음, auth/data isolation | 공식 구현이 send/accept에서 owner orphan·self/dangling/unknown·다중 accepted topology를 실패-폐쇄하고 canonical ID·no-op event silence 계약을 REST/MCP에서 보장하면 local guard 제거; DB partial unique index는 legacy audit 뒤 별도 migration으로 검토 |
-| Vacay employment/period/balance v2 | upstream contribution 후보 | 중간, 제품 방향 승인 필요 | [generic design](../plans/2026-07-28-vacay-employment-balance-design.md)과 [correctness proposal](../plans/2026-07-28-vacay-upstream-correctness-proposal.md)을 기준으로 core와 한국 policy provider를 분리 |
-| packing Personal/Shared privacy | upstream contribution 후보 | 높음, security fix | 공식 privacy contract와 negative tests가 수용된 release 후 local patch 제거 |
-| packing template scope R1 | fork core / upstream discussion | 중간 | 개인 템플릿 제품 방향 승인 전 writer는 비활성, migration은 fork namespace 유지 |
-| Google place enrichment와 app hard cap | fork core, plugin 추출 검토 | 중간 | provider 호출·usage ledger를 plugin-owned DB/action으로 옮길 SDK gap 분석 필요 |
-| Google 사용량 admin UI | plugin 또는 upstream generic 후보 | 중간 | Google 전용 표현과 instance 정책을 분리해야 함 |
-| Android TWA/APK | instance-only | 없음 | package identity, assetlinks, signing을 포크에서만 관리 |
-| Cloudflare/nginx/Compose 운영 설정 | instance-only | 없음 | repository secret 금지, 외부 deployment runbook에서 관리 |
+| 변경                                           | 현재 lane                                    | 공식 기여 가능성                  | 분리/retirement 조건                                                                                                                                                                                                                                    |
+| ---------------------------------------------- | -------------------------------------------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 지도 label locale 선택                         | upstream contribution 후보                   | 높음                              | 기본값·fallback을 일반화하고 `upstream/dev` 승인 후 단독 PR                                                                                                                                                                                             |
+| Fold/태블릿 adaptive map controls              | upstream contribution 후보                   | 높음                              | JSNetworkCorp 표현 없이 responsive regression만 단독 PR                                                                                                                                                                                                 |
+| 전역 calendar week-start 선택                  | upstream contribution 후보                   | 중간, 제품 방향 승인 필요         | [scope diagnostic](../plans/2026-08-03-calendar-week-start-scope-diagnostic.md)의 사용자 설정·공용 picker·Journey·Vacay fallback만 단독 PR; 공식 #1078의 Monday-first 결정과 구분                                                                       |
+| PlaceInspector nullable selection Hook 순서    | fork core                                    | 높음                              | 공식 release가 같은 mount의 null↔place 회귀를 통과하고 Hook 규칙 위반을 제거하면 구현 방식과 무관하게 local patch 제거                                                                                                                                  |
+| Bulk place delete nullable assignment guard    | fork core                                    | 높음                              | 공식 release가 선택된 assignment만 제거하고 unrelated/orphan assignment를 보존하며 unsafe optional-chain lint 위반을 없애면 local patch 제거                                                                                                            |
+| Client zero-debt correctness lint guardrails   | fork core maintenance                        | 높음                              | 공식 release가 Admin scope·day expansion·mobile route-distance 왕복 동작을 보존하고 `no-unused-expressions` 위반을 없애면 local syntax patch 제거                                                                                                       |
+| Client redundant-assignment lint guardrail     | fork core maintenance                        | 높음                              | 공식 release가 Costs desktop/mobile currency fallback과 Tooltip 네 placement를 보존하고 `no-useless-assignment` 위반을 없애면 local syntax patch 제거                                                                                                   |
+| Client observer test-mock alias lint guardrail | fork core maintenance                        | 높음                              | 공식 release가 PlaceAvatar intersection callback의 photo fetch·disconnect 계약을 보존하고 `no-this-alias` 위반을 없애면 local test patch 제거                                                                                                           |
+| Custom `APP_VERSION` SemVer comparison         | fork core                                    | 높음                              | 공식 release가 build metadata를 update precedence에서 제외하고 same-release API·notification 회귀를 통과하면 local patch 제거                                                                                                                           |
+| Packing template admin submission/race guard   | fork core                                    | 높음                              | 공식 release가 create exact-request-count, IME/repeat, Enter+blur rename, 역순 상세 응답, CRUD count와 390px nested editor 회귀를 통과하면 local patch 제거                                                                                             |
+| Vacay stats read purity                        | upstream contribution 후보                   | 높음, read correctness            | fresh carry projection의 무상태 read contract만 최신 Nest 경로에 단독 추출                                                                                                                                                                              |
+| Vacay holiday entry 보존                       | upstream contribution 후보                   | 높음, data safety                 | 회사/public holiday overlay와 개인 entry 보존만 단독 추출                                                                                                                                                                                               |
+| Vacay fusion 해산 user-year 보존               | upstream contribution 후보                   | 높음, data safety                 | [extraction dossier](vacay-correctness-extraction.md)의 dissolution 항목만 최신 Nest 경로에 재구성하고 수용 release의 동등성 회귀 뒤 제거                                                                                                               |
+| 출처 없는 trip/Vacay 자동 이동 중단            | fork core / upstream product discussion      | 낮음, 공식 contract 충돌          | 공식 #983이 반대 동작을 의도적으로 도입했으므로 직접 PR 금지; provenance 또는 확인 UX에 maintainer 합의 후 별도 설계                                                                                                                                    |
+| Vacay fused company-holiday mutation guard     | fork core pilot / upstream contribution 후보 | 높음, legacy ownership safety     | 공식 구현이 fused 수동 회사 휴일 write를 모든 surface에서 거부하고 solo 동작·기존 row를 보존하면 local guard 제거; employment v2 활성화 시 guard를 self-owned 권한으로 대체                                                                             |
+| Vacay actor-aware whole-year deletion guard    | fork core pilot / upstream contribution 후보 | 높음, destructive data safety     | 공식 구현이 fused/pending·ambiguous membership을 fail-closed하고 solo 삭제·연쇄 carry를 한 transaction으로 처리하며 REST/MCP/UI negative contract를 통과하면 local guard 제거; invite-accept year union은 별도 추출                                     |
+| Vacay invite migration year reconciliation     | fork core pilot / upstream contribution 후보 | 높음, historical data safety      | 공식 구현이 entry·user-year의 연도 합집합을 대상 plan과 원자적으로 대조하고 누락 시 pending/data를 보존하며 owner 보완 후 재시도를 허용하면 local guard 제거                                                                                            |
+| Vacay invite membership topology guard         | fork core pilot / upstream contribution 후보 | 높음, auth/data isolation         | 공식 구현이 send/accept에서 owner orphan·self/dangling/unknown·다중 accepted topology를 실패-폐쇄하고 canonical ID·no-op event silence 계약을 REST/MCP에서 보장하면 local guard 제거; DB partial unique index는 legacy audit 뒤 별도 migration으로 검토 |
+| Vacay employment/period/balance v2             | upstream contribution 후보                   | 중간, 제품 방향 승인 필요         | [generic design](../plans/2026-07-28-vacay-employment-balance-design.md)과 [correctness proposal](../plans/2026-07-28-vacay-upstream-correctness-proposal.md)을 기준으로 core와 한국 policy provider를 분리                                             |
+| packing Personal/Shared privacy                | upstream contribution 후보                   | 높음, security fix                | 공식 privacy contract와 negative tests가 수용된 release 후 local patch 제거                                                                                                                                                                             |
+| packing template scope R1                      | fork core / upstream discussion              | 중간                              | 개인 템플릿 제품 방향 승인 전 writer는 비활성, migration은 fork namespace 유지                                                                                                                                                                          |
+| Google place enrichment와 app hard cap         | fork core, plugin 추출 검토                  | 중간                              | provider 호출·usage ledger를 plugin-owned DB/action으로 옮길 SDK gap 분석 필요                                                                                                                                                                          |
+| Google 사용량 admin UI                         | plugin 또는 upstream generic 후보            | 중간                              | Google 전용 표현과 instance 정책을 분리해야 함                                                                                                                                                                                                          |
+| Android TWA/APK                                | instance-only                                | 없음                              | package identity, assetlinks, signing을 포크에서만 관리                                                                                                                                                                                                 |
+| 공개 지도·계획의 공유 장소 메모                | upstream contribution 후보 / 현재 fork-first | 높음, 일반 public projection 결함 | v4.1.1 통합 후 `places.notes`의 top-level/nested 동등성, 모든 anonymous section의 exact allowlist·disabled-flag no-query, Popup·계획 표시, `share_map=false` sentinel 비노출과 개인 메모 오표기 수정이 공식 release에서 모두 통과하면 local patch 제거  |
+| Cloudflare/nginx/Compose 운영 설정             | instance-only                                | 없음                              | repository secret 금지, 외부 deployment runbook에서 관리                                                                                                                                                                                                |
 
 ## Release synchronization procedure
 
@@ -198,6 +224,13 @@ git merge --no-ff --no-commit <verified-upstream-tag>
 5. shared/server/client test와 typecheck/build, SQLite 사본 migration dry run을 통과한다.
 6. 운영 전에는 immutable local image를 만들고 기존 image와 DB backup으로 rollback을 연습한다.
 7. TOM의 배포 승인 전에는 `main` merge, remote push, Compose 교체를 하지 않는다.
+
+v4.1.1처럼 server ownership이 바뀐 major release에서는 conflict 파일을 과거
+implementation으로 복원하지 않는다. official Nest module을 baseline으로 두고
+[`2026-09-01 preservation matrix`](../plans/2026-09-01-upstream-v4.1.1-preservation-matrix.md)의
+behavior test를 새 public entry point로 이식한다. DB/auth/privacy/provider/UI 순서를
+지키며, 모든 HIGH 행과 schema 200 backup/restore rehearsal 전에는 release candidate로
+분류하지 않는다.
 
 v3.4.0에서 확인된 conflict hotspot은 `server/src/db/migrations.ts`, maps/settings,
 packing row/service/tests, Google maps/admin services, locale settings 파일이다. 공식 root
