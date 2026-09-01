@@ -20,6 +20,15 @@ const fsMock = vi.hoisted(() => ({
   copyFileSync: vi.fn(),
   renameSync: vi.fn(),
   cpSync: vi.fn(),
+  readFileSync: vi.fn((_path: string): string | Buffer => Buffer.from('fixture-bytes')),
+  openSync: vi.fn(() => 42),
+  readSync: vi.fn((_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
+    if (position > 0) return 0;
+    const bytes = Buffer.from('fixture-bytes');
+    bytes.copy(buffer);
+    return bytes.length;
+  }),
+  closeSync: vi.fn(),
   // Identity by default: when uploadsDir is a plain directory, realpathSync
   // returns it unchanged. Tests that exercise the symlink case override this.
   realpathSync: vi.fn((p: string) => p),
@@ -30,6 +39,7 @@ const archiverInstanceMock = vi.hoisted(() => ({
   file: vi.fn(),
   directory: vi.fn(),
   glob: vi.fn(),
+  append: vi.fn(),
   finalize: vi.fn(),
   on: vi.fn(),
 }));
@@ -41,6 +51,13 @@ const unzipperMock = vi.hoisted(() => ({
   // Central-directory reader used for the pre-extract zip-bomb size check.
   // Default to an empty archive so existing restore tests proceed to Extract.
   Open: { file: vi.fn().mockResolvedValue({ files: [] }) },
+}));
+
+const pluginBackupMock = vi.hoisted(() => ({
+  stageExtractedPluginTrees: vi.fn(() => false),
+  applyStagedRestoreNow: vi.fn(async () => true),
+  applyStagedRestoreNowStrict: vi.fn(async () => null),
+  discardStagedPluginTrees: vi.fn(),
 }));
 
 const dbMock = vi.hoisted(() => ({
@@ -64,6 +81,7 @@ vi.mock('../../../src/config', () => ({
 vi.mock('fs', () => ({ default: fsMock, ...fsMock }));
 vi.mock('archiver', () => ({ default: archiverMock }));
 vi.mock('unzipper', () => ({ default: unzipperMock }));
+vi.mock('../../../src/nest/plugins/plugin-backup', () => pluginBackupMock);
 import {
   formatSize,
   parseIntField,
@@ -78,6 +96,7 @@ import {
   backupFileExists,
   listBackups,
   sendBackupToResponse,
+  validateBackupManifest,
 } from '../../../src/nest/backup/backup.impl';
 import type { StorageService } from '../../../src/nest/storage/storage.service';
 
@@ -387,9 +406,9 @@ describe('BACKUP-036 createBackup', () => {
 
     expect(storage.getLocalPathOrNull).toHaveBeenCalledWith('files', 'a.pdf');
     expect(storage.getLocalPathOrNull).toHaveBeenCalledWith('journey', 'thumbs/x.jpg');
-    expect(archiverInstanceMock.file).toHaveBeenCalledWith('/stub/local/path', { name: 'uploads/files/a.pdf' });
-    expect(archiverInstanceMock.file).toHaveBeenCalledWith('/stub/local/path', { name: 'uploads/journey/thumbs/x.jpg' });
-    // The local fast path never touches getStream — this is the zero-copy default-install branch.
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), { name: 'uploads/files/a.pdf' });
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), { name: 'uploads/journey/thumbs/x.jpg' });
+    // Local objects are copied into the private spool to close hash/archive TOCTOU.
     expect(storage.getStream).not.toHaveBeenCalled();
   });
 
@@ -478,9 +497,15 @@ describe('BACKUP-036 createBackup', () => {
     fsMock.existsSync.mockImplementation((p: string) => String(p).includes('plugins'));
     // Two plugin code dirs: 'notes' is real, 'devlink' resolves outside the root.
     // The plugin-data snapshot reads with { withFileTypes: true }; hand it Dirent-likes there.
-    const dirent = (name: string) => ({ name, isDirectory: () => true });
-    fsMock.readdirSync.mockImplementation((_p: string, opts?: { withFileTypes?: boolean }) =>
-      (opts?.withFileTypes ? [dirent('notes'), dirent('devlink')] : ['notes', 'devlink']) as never);
+    const dirent = (name: string, directory = true) => ({ name, isDirectory: () => directory, isFile: () => !directory });
+    fsMock.readdirSync.mockImplementation((p: string, opts?: { withFileTypes?: boolean }) => {
+      const value = String(p);
+      const entries = value.includes('plugins-snap')
+        ? value.endsWith('notes') ? [dirent('plugin.db', false)] : [dirent('notes')]
+        : value.endsWith('/plugins') ? [dirent('notes'), dirent('devlink')]
+        : value.endsWith('/plugins/notes') ? [dirent('index.js', false)] : [];
+      return (opts?.withFileTypes ? entries : entries.map((entry) => entry.name)) as never;
+    });
     fsMock.realpathSync.mockImplementation((p: string) => (String(p).endsWith('devlink') ? '/somewhere/else/devlink' : p));
     fsMock.statSync.mockReturnValue({ isDirectory: () => true } as never);
     setupArchiveSuccess();
@@ -488,13 +513,34 @@ describe('BACKUP-036 createBackup', () => {
 
     await createBackup(storage);
 
-    // the consistent snapshot of the data tree is archived under plugins-data/
-    expect(archiverInstanceMock.directory).toHaveBeenCalledWith(expect.stringContaining('plugins-snap'), 'plugins-data');
-    // the real code dir is archived, the dev-link is skipped
-    expect(archiverInstanceMock.directory).toHaveBeenCalledWith(expect.stringContaining('notes'), 'plugins-code/notes');
-    expect(archiverInstanceMock.directory).not.toHaveBeenCalledWith(expect.anything(), 'plugins-code/devlink');
-    // the snapshot staging lives in the backups spool
-    expect(archiverInstanceMock.directory).toHaveBeenCalledWith(expect.stringContaining('/stub/spool/plugins-snap-backup-'), 'plugins-data');
+    // the consistent snapshot and real code files are manifest-bound; the dev-link is skipped.
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('plugins-snap'), { name: 'plugins-data/notes/plugin.db' });
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), { name: 'plugins-code/notes/index.js' });
+    expect(archiverInstanceMock.file).not.toHaveBeenCalledWith(expect.anything(), { name: expect.stringContaining('devlink') });
+  });
+
+  it('BACKUP-036q — self-contained backups archive the at-rest key, but the manifest never exposes its value', async () => {
+    const previous = process.env.ENCRYPTION_KEY;
+    delete process.env.ENCRYPTION_KEY;
+    try {
+      fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('.encryption_key'));
+      fsMock.readFileSync.mockReturnValue(Buffer.from('fixture-secret-value'));
+      setupArchiveSuccess();
+      const storage = stubStorage({ stat: statOf(2048) });
+
+      await createBackup(storage);
+
+      expect(archiverInstanceMock.file).toHaveBeenCalledWith(
+        expect.stringContaining('.encryption_key'),
+        { name: '.encryption_key' },
+      );
+      expect(archiverInstanceMock.append).toHaveBeenCalledWith(
+        expect.not.stringContaining('fixture-secret-value'),
+        { name: 'backup-manifest.json' },
+      );
+    } finally {
+      process.env.ENCRYPTION_KEY = previous;
+    }
   });
 
   it('BACKUP-036b — WAL checkpoint error is swallowed (non-critical)', async () => {
@@ -560,7 +606,7 @@ describe('BACKUP-036 createBackup', () => {
 
     await createBackup(storage);
 
-    expect(archiverInstanceMock.file).toHaveBeenCalledWith('/stub/local/path', { name: 'uploads/photos/flat.jpg' });
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), { name: 'uploads/photos/flat.jpg' });
     const names = archiverInstanceMock.file.mock.calls.map(c => c[1]?.name as string);
     expect(names.some(n => n?.includes('google/'))).toBe(false);
     expect(names.some(n => n?.includes('trek/'))).toBe(false);
@@ -584,7 +630,7 @@ describe('BACKUP-036 createBackup', () => {
     expect(listed).not.toContain('backups');
   });
 
-  it('BACKUP-036f — bundles .encryption_key when present and ENCRYPTION_KEY env is unset', async () => {
+  it('BACKUP-036f — bundles .encryption_key when the file is the active key source', async () => {
     const prevEnvKey = process.env.ENCRYPTION_KEY;
     delete process.env.ENCRYPTION_KEY;
     try {
@@ -603,7 +649,7 @@ describe('BACKUP-036 createBackup', () => {
     }
   });
 
-  it('BACKUP-036g — does NOT bundle .encryption_key when ENCRYPTION_KEY env is set', async () => {
+  it('BACKUP-036g — never bundles .encryption_key when an env key is set', async () => {
     // setup.ts sets process.env.ENCRYPTION_KEY, so the env is the source of truth.
     fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('.encryption_key'));
     setupArchiveSuccess();
@@ -634,6 +680,25 @@ describe('BACKUP-036 createBackup', () => {
     expect(storage.put).toHaveBeenCalledWith('backups', result.filename, {
       tmpPath: expect.stringContaining('zip-build-auto-backup-'),
     });
+  });
+});
+
+describe('BACKUP-060 manifest policy', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('BACKUP-060a — rejects a manifest upload key that storage would reject', () => {
+    const manifest = JSON.stringify({
+      version: 1,
+      entries: [{
+        path: 'uploads/files/.hidden', category: 'uploads', source: 'files/.hidden', size: 0,
+        sha256: '0'.repeat(64),
+      }],
+    });
+    fsMock.existsSync.mockReturnValue(true);
+    fsMock.readFileSync.mockImplementation((p: string) => String(p).endsWith('backup-manifest.json') ? manifest : Buffer.alloc(0));
+
+    expect(validateBackupManifest('/restore', ['uploads/files/.hidden', 'backup-manifest.json']))
+      .toBe('Invalid backup: checksum manifest is malformed.');
   });
 });
 
@@ -692,7 +757,7 @@ describe('BACKUP-038 restoreFromZip', () => {
     const result = await restoreFromZip(stubStorage(), '/data/tmp/upload.zip');
 
     expect(result.success).toBe(false);
-    expect(result.error).toMatch(/travel\.db not found/i);
+    expect(result.error).toMatch(/checksum manifest.*pinned previous image/i);
     expect(result.status).toBe(400);
   });
 
@@ -781,6 +846,60 @@ describe('BACKUP-061 restoreFromZip extraction', () => {
     expect(fsMock.createWriteStream).not.toHaveBeenCalled();
   });
 
+  it('BACKUP-061a1 — rejects an archive with payload entries but no checksum manifest before closing the live DB', async () => {
+    unzipperMock.Open.file.mockResolvedValueOnce({ files: [zipEntry('travel.db')] });
+    fsMock.existsSync.mockImplementation((p: string) => !String(p).endsWith('backup-manifest.json'));
+
+    const result = await restoreFromZip(stubStorage(), '/data/tmp/no-manifest.zip');
+
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/checksum manifest not found.*pinned previous image/i), status: 400 });
+    expect(dbMock.closeDb).not.toHaveBeenCalled();
+  });
+
+  it('BACKUP-061a2 — rejects a checksum mismatch without touching the live DB', () => {
+    const manifest = JSON.stringify({
+      version: 1,
+      entries: [{
+        path: 'travel.db',
+        category: 'database',
+        source: 'travel.db',
+        size: 13,
+        sha256: 'c16a40a4584e5bccc84b45172fcdfa922f59ff1edebf3adba7b8266ea04eb39a',
+      }],
+    });
+    fsMock.existsSync.mockReturnValue(true);
+    fsMock.readFileSync.mockImplementation((p: string) =>
+      String(p).endsWith('backup-manifest.json') ? Buffer.from(manifest) : Buffer.from('tampered-bytes'),
+    );
+    fsMock.readSync.mockImplementation((_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
+      if (position > 0) return 0;
+      const bytes = Buffer.from('tampered-bytes');
+      bytes.copy(buffer);
+      return bytes.length;
+    });
+
+    expect(validateBackupManifest('/restore', ['travel.db', 'backup-manifest.json']))
+      .toMatch(/checksum verification failed/i);
+    expect(dbMock.closeDb).not.toHaveBeenCalled();
+  });
+
+  it('BACKUP-061a3 — rejects a manifest path traversal entry before file verification', () => {
+    fsMock.existsSync.mockReturnValue(true);
+    fsMock.readFileSync.mockReturnValue(Buffer.from(JSON.stringify({
+      version: 1,
+      entries: [{
+        path: '../travel.db',
+        category: 'database',
+        source: 'travel.db',
+        size: 0,
+        sha256: '0'.repeat(64),
+      }],
+    })));
+
+    expect(validateBackupManifest('/restore', ['../travel.db', 'backup-manifest.json']))
+      .toBe('Invalid backup: checksum manifest is malformed.');
+  });
+
   // The `path.isAbsolute(rel)` half of the guard is only reachable where drive letters
   // exist: on POSIX, path.join always keeps an entry under extractDir, so a leading
   // slash is normalised away and only the `..` check above can fire. Asserting it
@@ -848,7 +967,9 @@ describe('BACKUP-061 restoreFromZip extraction', () => {
   });
 
   it('BACKUP-061f — a reopen failure after the swap reports "restart required", not success', async () => {
-    unzipperMock.Open.file.mockResolvedValueOnce({ files: [zipEntry('travel.db')] });
+    // This test uses a complete manifest-bound archive; empty central directories
+    // never bypass validation.
+    setupSuccessfulExtraction();
     const restored = {
       prepare: vi
         .fn()
@@ -867,24 +988,12 @@ describe('BACKUP-061 restoreFromZip extraction', () => {
     });
     const storage = stubStorage();
 
-    const result = await restoreFromZip(storage, '/data/tmp/ok.zip');
-
-    // The files already landed, so this is neither a success nor a plain failure: the
-    // admin has to restart, and the message has to say so.
-    expect(result.success).toBe(false);
-    expect(result.status).toBe(500);
-    expect(result.error).toMatch(/restart the server/i);
-    // A failed reopen leaves no live DB handle for the registry to read: reload
-    // (and with it any rehydration) is skipped rather than reading through a
-    // torn/unavailable connection — already reported as "restart required".
-    expect(storage.reloadConfig).not.toHaveBeenCalled();
+    await expect(restoreFromZip(storage, '/data/tmp/ok.zip')).rejects.toThrow('database is locked');
+    // A failed reopened restored DB is rolled back to the old core snapshot and
+    // opened again; it is never reported as a partly-successful restore.
+    expect(dbMock.reinitialize).toHaveBeenCalledTimes(2);
+    expect(storage.reloadConfig).toHaveBeenCalledTimes(1);
     expect(storage.put).not.toHaveBeenCalled();
-    // Plugin-tree staging is pure filesystem (plugin-backup.ts), has no DB
-    // dependency, and is the archive's ONLY copy of that data — it must still
-    // run even when the DB reopen failed, or extractDir's cleanup right after
-    // would delete it with no recovery path. fs.cpSync only fires from inside
-    // stageExtractedPluginTrees in this flow, so its call is the proof.
-    expect(fsMock.cpSync).toHaveBeenCalled();
   });
 });
 
@@ -1034,12 +1143,68 @@ describe('BACKUP-041 listBackups', () => {
 
 /** Shared helper: configures the stream mocks so extraction succeeds. */
 function setupSuccessfulExtraction() {
-  const fakeExtractStream = { promise: vi.fn().mockResolvedValue(undefined) };
-  const fakeReadStream = { pipe: vi.fn().mockReturnValue(fakeExtractStream) };
-  fsMock.createReadStream.mockReturnValue(fakeReadStream);
-  unzipperMock.Extract.mockReturnValue(fakeExtractStream);
-  return { fakeReadStream, fakeExtractStream };
+  const payloadHash = 'c16a40a4584e5bccc84b45172fcdfa922f59ff1edebf3adba7b8266ea04eb39a';
+  const manifest = JSON.stringify({
+    version: 1,
+    entries: [{ path: 'travel.db', category: 'database', source: 'travel.db', size: 13, sha256: payloadHash }],
+  });
+  fsMock.readFileSync.mockImplementation((p: string) =>
+    String(p).endsWith('backup-manifest.json') ? manifest : Buffer.from('fixture-bytes'),
+  );
+  fsMock.readSync.mockImplementation((_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
+    if (position > 0) return 0;
+    const bytes = Buffer.from('fixture-bytes');
+    bytes.copy(buffer);
+    return bytes.length;
+  });
+  const makeEntry = (entryPath: string) => ({
+    type: 'File', path: entryPath, uncompressedSize: 13,
+    stream: () => ({
+      on: vi.fn(),
+      pipe: (out: { __finish?: () => void }) => { out.__finish?.(); return out; },
+    }),
+  });
+  unzipperMock.Open.file.mockResolvedValue({ files: [makeEntry('travel.db'), makeEntry('backup-manifest.json')] });
+  fsMock.createWriteStream.mockImplementation(() => {
+    const out: { __finish?: () => void; on: ReturnType<typeof vi.fn> } = {
+      on: vi.fn((event: string, callback: () => void) => { if (event === 'finish') out.__finish = callback; }),
+    };
+    return out as never;
+  });
 }
+
+describe('BACKUP-064 restore admission', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('BACKUP-064a — rejects a concurrent restore before it can touch the shared extraction or staging paths', async () => {
+    let releaseFirst!: (directory: { files: never[] }) => void;
+    const firstDirectory = new Promise<{ files: never[] }>((resolve) => { releaseFirst = resolve; });
+    let openCalls = 0;
+    unzipperMock.Open.file.mockImplementation(() => {
+      openCalls += 1;
+      return openCalls === 1 ? firstDirectory : Promise.resolve({ files: [] });
+    });
+    fsMock.existsSync.mockReturnValue(false);
+    fsMock.rmSync.mockReturnValue(undefined);
+
+    const first = restoreFromZip(stubStorage(), '/data/tmp/first.zip');
+    await Promise.resolve();
+    try {
+      await expect(restoreFromZip(stubStorage(), '/data/tmp/second.zip')).resolves.toEqual({
+        success: false,
+        error: 'A backup restore is already in progress.',
+        status: 409,
+      });
+      expect(unzipperMock.Open.file).toHaveBeenCalledOnce();
+    } finally {
+      releaseFirst({ files: [] });
+      await first;
+      unzipperMock.Open.file.mockReset();
+    }
+  });
+});
 
 describe('BACKUP-042 restoreFromZip — integrity check fails', () => {
   beforeEach(() => {
@@ -1049,9 +1214,7 @@ describe('BACKUP-042 restoreFromZip — integrity check fails', () => {
   it('BACKUP-042a — returns status 400 with integrity check error message', async () => {
     setupSuccessfulExtraction();
 
-    fsMock.existsSync.mockImplementation((p: string) =>
-      String(p).endsWith('travel.db')
-    );
+    fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-manifest.json'));
     fsMock.rmSync.mockReturnValue(undefined);
 
     const fakeDbInstance = {
@@ -1082,9 +1245,7 @@ describe('BACKUP-043 restoreFromZip — missing required table', () => {
   it('BACKUP-043a — returns status 400 with missing required table error', async () => {
     setupSuccessfulExtraction();
 
-    fsMock.existsSync.mockImplementation((p: string) =>
-      String(p).endsWith('travel.db')
-    );
+    fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-manifest.json'));
     fsMock.rmSync.mockReturnValue(undefined);
 
     const fakeDbInstance = {
@@ -1118,9 +1279,7 @@ describe('BACKUP-044 restoreFromZip — Database constructor throws (invalid SQL
   it('BACKUP-044a — returns status 400 with "not a valid SQLite database" error', async () => {
     setupSuccessfulExtraction();
 
-    fsMock.existsSync.mockImplementation((p: string) =>
-      String(p).endsWith('travel.db')
-    );
+    fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-manifest.json'));
     fsMock.rmSync.mockReturnValue(undefined);
 
     DatabaseMock.mockImplementation(function () {
@@ -1167,6 +1326,7 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
   it('BACKUP-045a — returns { success: true } on full success', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
+    dbMock.reinitialize.mockReset();
 
     fsMock.existsSync.mockImplementation((p: string) => {
       if (String(p).endsWith('travel.db')) return true;
@@ -1221,9 +1381,11 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow('disk full');
 
     expect(dbMock.reinitialize).toHaveBeenCalled();
+    expect(pluginBackupMock.stageExtractedPluginTrees).not.toHaveBeenCalled();
+    expect(pluginBackupMock.discardStagedPluginTrees).not.toHaveBeenCalled();
   });
 
-  it('BACKUP-045d — restores bundled .encryption_key when the archive carries one', async () => {
+  it('BACKUP-045d — never restores .encryption_key even if a legacy extraction carries one', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
 
@@ -1240,11 +1402,11 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     const result = await restoreFromZip(stubStorage(), '/data/tmp/upload.zip');
 
     expect(result).toEqual({ success: true });
-    // Key copied from the extract dir into the live data dir.
-    expect(fsMock.copyFileSync).toHaveBeenCalledWith(
-      expect.stringContaining('.encryption_key'),
-      expect.stringContaining('.encryption_key'),
-    );
+    // The old key is journaled for rollback, but a key from an archive outside
+    // the manifest is never copied into the live key path.
+    expect(fsMock.copyFileSync.mock.calls.some(([from, to]) =>
+      String(from).includes('restore-') && String(from).endsWith('.encryption_key') && String(to).endsWith('/data/.encryption_key'),
+    )).toBe(false);
   });
 
   it('BACKUP-045e — skips key restore when the archive has no .encryption_key', async () => {
@@ -1303,6 +1465,155 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     expect(result).toEqual({ success: true });
     expect(callOrder).toEqual(['reinitialize', 'reloadConfig', 'put:rehydrate']);
   });
+
+  it('BACKUP-045g — an unavailable immediate plugin apply is not reported as a successful restore', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    pluginBackupMock.stageExtractedPluginTrees.mockReturnValueOnce(true);
+    pluginBackupMock.applyStagedRestoreNowStrict.mockResolvedValueOnce(null);
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow('Plugin restore could not be applied');
+    expect(pluginBackupMock.discardStagedPluginTrees).toHaveBeenCalled();
+  });
+
+  it('BACKUP-045g1 — commits the plugin pair receipt only after every restore phase succeeds', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    const order: string[] = [];
+    pluginBackupMock.stageExtractedPluginTrees.mockImplementationOnce(() => {
+      order.push('plugin staging');
+      return true;
+    });
+    const transaction = {
+      labels: ['plugins-data', 'plugins-code'],
+      rollback: vi.fn(),
+      commitCleanup: vi.fn(() => { order.push('plugin commit'); }),
+    };
+    pluginBackupMock.applyStagedRestoreNowStrict.mockResolvedValueOnce(transaction);
+    dbMock.reinitialize.mockImplementation(() => { order.push('reinitialize'); });
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    fsMock.rmSync.mockReturnValue(undefined);
+    const storage = stubStorage({ reloadConfig: vi.fn(() => { order.push('reloadConfig'); }) });
+
+    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).resolves.toEqual({ success: true });
+
+    expect(transaction.commitCleanup).toHaveBeenCalledOnce();
+    expect(transaction.rollback).not.toHaveBeenCalled();
+    expect(order.indexOf('plugin staging')).toBeGreaterThan(order.indexOf('reinitialize'));
+    expect(order.indexOf('plugin staging')).toBeGreaterThan(order.indexOf('reloadConfig'));
+    expect(order.indexOf('plugin commit')).toBeGreaterThan(order.indexOf('plugin staging'));
+  });
+
+  it('BACKUP-045g1b — a closeDb failure cannot publish plugin staging for the next boot', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    dbMock.closeDb.mockImplementationOnce(() => { throw new Error('close failed'); });
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    fsMock.rmSync.mockReturnValue(undefined);
+
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow('close failed');
+
+    expect(pluginBackupMock.stageExtractedPluginTrees).not.toHaveBeenCalled();
+    expect(pluginBackupMock.applyStagedRestoreNowStrict).not.toHaveBeenCalled();
+  });
+
+  it('BACKUP-045g2 — rolls the plugin pair back first when its pre-commit staging cleanup fails', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    pluginBackupMock.stageExtractedPluginTrees.mockReturnValueOnce(true);
+    const order: string[] = [];
+    const transaction = {
+      labels: ['plugins-data', 'plugins-code'],
+      rollback: vi.fn(() => { order.push('plugin rollback'); }),
+      commitCleanup: vi.fn(() => { throw new Error('plugin staging cleanup failed'); }),
+    };
+    pluginBackupMock.applyStagedRestoreNowStrict.mockResolvedValueOnce(transaction);
+    dbMock.closeDb.mockImplementation(() => { order.push('closeDb'); });
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    fsMock.rmSync.mockReturnValue(undefined);
+
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow('plugin staging cleanup failed');
+
+    expect(transaction.rollback).toHaveBeenCalledOnce();
+    expect(order.indexOf('plugin rollback')).toBeGreaterThanOrEqual(0);
+    expect(order.indexOf('plugin rollback')).toBeLessThan(order.lastIndexOf('closeDb'));
+    expect(pluginBackupMock.discardStagedPluginTrees).not.toHaveBeenCalled();
+  });
+
+  it('BACKUP-045g3 — post-commit journal cleanup failure retains the restored state', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    pluginBackupMock.stageExtractedPluginTrees.mockReturnValueOnce(true);
+    const transaction = {
+      labels: ['plugins-data', 'plugins-code'],
+      rollback: vi.fn(),
+      commitCleanup: vi.fn(),
+    };
+    pluginBackupMock.applyStagedRestoreNowStrict.mockResolvedValueOnce(transaction);
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    fsMock.rmSync.mockImplementation((target: string) => {
+      if (/restore-journal-\d+-[0-9a-f-]+$/.test(String(target))) throw new Error('journal cleanup failed');
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).resolves.toEqual({ success: true });
+
+    expect(transaction.commitCleanup).toHaveBeenCalledOnce();
+    expect(transaction.rollback).not.toHaveBeenCalled();
+    expect(dbMock.reinitialize).toHaveBeenCalledOnce();
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('Restore committed'),
+      expect.stringContaining('restore-journal-'),
+      expect.any(Error),
+    );
+    error.mockRestore();
+  });
+
+  it('BACKUP-045h — a restored storage-config reload failure restores the old DB and reloads its config', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    fsMock.copyFileSync.mockReturnValue(undefined);
+    fsMock.rmSync.mockReturnValue(undefined);
+
+    const storage = stubStorage({
+      reloadConfig: vi.fn()
+        .mockImplementationOnce(() => { throw new Error('restored storage config is invalid'); })
+        .mockImplementationOnce(() => {}),
+    });
+
+    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('restored storage config is invalid');
+    expect(dbMock.reinitialize).toHaveBeenCalledTimes(2);
+    expect(storage.reloadConfig).toHaveBeenCalledTimes(2);
+    expect(fsMock.copyFileSync).toHaveBeenCalledWith(
+      expect.stringMatching(/restore-journal-\d+-[0-9a-f-]+\/core\/travel\.db$/),
+      expect.stringMatching(/\/data\/travel\.db$/),
+    );
+  });
 });
 
 describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', () => {
@@ -1353,7 +1664,7 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
     fsMock.rmSync.mockReturnValue(undefined);
   }
 
-  it('BACKUP-046a — wipes only top-level category objects, then puts each extracted entry (legacy wipe parity)', async () => {
+  it('BACKUP-046a — writes all archive entries before removing stale existing objects', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
     setupExtractedUploads({
@@ -1373,20 +1684,16 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
           if (category === 'journey') yield { key: 'thumbs/old.jpg', size: 1, mtimeMs: 0 };
         })(),
       ),
-      delete: vi.fn(async (category: string) => {
-        // one category's wipe fails — swallowed per-file, exactly like the old
-        // unlink loop (exercises the best-effort .catch)
-        if (category === 'covers') throw new Error('EACCES');
-      }),
+      delete: vi.fn(async () => {}),
     });
 
     const result = await restoreFromZip(storage, '/data/tmp/upload.zip');
 
     expect(result).toEqual({ success: true });
-    // wipe: bare keys deleted in every archived category, nested keys never
+    // stale keys are deleted only after both uploaded archive files are put.
     const deleted = (storage.delete as ReturnType<typeof vi.fn>).mock.calls;
-    expect(deleted.every(([, key]) => !(key as string).includes('/'))).toBe(true);
-    expect(deleted.map(([c]) => c).sort()).toEqual(['avatars', 'covers', 'files', 'journey', 'photos', 'places']);
+    expect(deleted).toHaveLength(7);
+    expect(deleted.map(([c]) => c).sort()).toEqual(['avatars', 'covers', 'files', 'journey', 'journey', 'photos', 'places']);
     // rehydration: every extracted file becomes a category put, nested keys intact
     expect(storage.put).toHaveBeenCalledWith('files', 'a.pdf', { tmpPath: expect.stringContaining('/uploads/files/a.pdf') });
     expect(storage.put).toHaveBeenCalledWith('journey', 'thumbs/t.jpg', { tmpPath: expect.stringContaining('/uploads/journey/thumbs/t.jpg') });
@@ -1395,7 +1702,7 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
     expect(cpTargets.some(t => t.includes('uploads'))).toBe(false);
   });
 
-  it('BACKUP-046b — skips entries that cannot map to a storage key, with a warning (2026-08-17 decision)', async () => {
+  it('BACKUP-046b — fails closed when post-manifest extraction contains an invalid upload entry', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
     setupExtractedUploads({
@@ -1403,24 +1710,8 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
       '/uploads/files': [dirent('a.pdf')],
       '/uploads/mystery': [dirent('b.bin')],
     });
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const { StorageInvalidKeyError } = await import('../../../src/nest/storage/storage.types');
-    const storage = stubStorage({
-      put: vi.fn(async (_c: string, key: string) => {
-        // dot-segment keys from old `dot: true` archives are rejected by
-        // central key validation — the restore must skip, not fail
-        if (key === 'a.pdf') throw new StorageInvalidKeyError(key);
-      }),
-    });
-
-    const result = await restoreFromZip(storage, '/data/tmp/upload.zip');
-
-    expect(result).toEqual({ success: true });
-    // unknown top-level dir + top-level file + invalid key: all skipped, warned
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('mystery/b.bin'));
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('stray.txt'));
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('a.pdf'));
-    warn.mockRestore();
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip'))
+      .rejects.toThrow('invalid upload entry: mystery/b.bin');
   });
 
   it('BACKUP-046c — a genuine put failure still fails the restore', async () => {
@@ -1437,6 +1728,90 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
     await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('ENOSPC');
     // the DB reopen still ran (finally) — the process is never left closed
     expect(dbMock.reinitialize).toHaveBeenCalled();
+  });
+
+  it('BACKUP-046d — a later upload put failure does not delete any pre-existing object', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    setupExtractedUploads({
+      '/uploads': [dirent('files', true)],
+      '/uploads/files': [dirent('first.bin'), dirent('second.bin')],
+    });
+    const storage = stubStorage({
+      list: vi.fn((_category: string) =>
+        (async function* () {
+          yield { key: 'old.bin', size: 1, mtimeMs: 0 };
+        })(),
+      ),
+      put: vi.fn()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('second object write failed')),
+    });
+
+    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('second object write failed');
+    // Compensation may delete archive keys that did not exist before the
+    // restore, but it must never delete the unrelated old inventory key.
+    expect(storage.delete).not.toHaveBeenCalledWith('files', 'old.bin');
+  });
+
+  it('BACKUP-046e — a partially committed replacement is compensated with the pre-restore object', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    setupExtractedUploads({
+      '/uploads': [dirent('files', true)],
+      '/uploads/files': [dirent('same.bin'), dirent('later.bin')],
+    });
+
+    const writes: Array<[string, string, unknown]> = [];
+    const storage = stubStorage({
+      list: vi.fn((_category: string) =>
+        (async function* () {
+          yield { key: 'same.bin', size: 3, mtimeMs: 0 };
+        })(),
+      ),
+      put: vi.fn(async (category: string, key: string, source: unknown) => {
+        writes.push([category, key, source]);
+        if (key === 'later.bin') throw new Error('later put failed after prior overwrite');
+      }),
+    });
+
+    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('later put failed after prior overwrite');
+
+    // The first put might have overwritten the live key before the second put
+    // failed. A restore is not allowed to leave that partial archive state live.
+    expect(writes).toContainEqual([
+      'files',
+      'same.bin',
+      { tmpPath: expect.stringMatching(/restore-journal-\d+-[0-9a-f-]+\/uploads\/files\/same\.bin$/) },
+    ]);
+  });
+
+  it('BACKUP-046f — a stale-object delete failure restores the stale byte from the journal', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    setupExtractedUploads({
+      '/uploads': [dirent('files', true)],
+      '/uploads/files': [dirent('new.bin')],
+    });
+    const writes: Array<[string, string, unknown]> = [];
+    const storage = stubStorage({
+      list: vi.fn((category: string) =>
+        (async function* () {
+          if (category === 'files') yield { key: 'stale.bin', size: 4, mtimeMs: 0 };
+        })(),
+      ),
+      put: vi.fn(async (category: string, key: string, source: unknown) => { writes.push([category, key, source]); }),
+      delete: vi.fn(async (category: string, key: string) => {
+        if (category === 'files' && key === 'stale.bin') throw new Error('stale delete failed');
+      }),
+    });
+
+    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('stale delete failed');
+    expect(writes).toContainEqual([
+      'files',
+      'stale.bin',
+      { tmpPath: expect.stringMatching(/restore-journal-\d+-[0-9a-f-]+\/uploads\/files\/stale\.bin$/) },
+    ]);
   });
 });
 
@@ -1459,15 +1834,14 @@ describe('BACKUP-063 restoreBackup', () => {
   });
 
   it('BACKUP-063b — the local path handed back by storage feeds the restore core', async () => {
-    // The default stub invokes the callback with a local path; the restore core
-    // runs against it for real (empty archive → travel.db missing → 400 result).
+    // Missing manifests fail closed, including legacy archives.
     fsMock.existsSync.mockReturnValue(false);
     unzipperMock.Open.file.mockResolvedValue({ files: [] });
     const storage = stubStorage();
 
     const result = await restoreBackup(storage, 'backup-2026-01-01T00-00-00.zip');
 
-    expect(result).toEqual({ success: false, error: 'Invalid backup: travel.db not found', status: 400 });
+    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/checksum manifest not found.*pinned previous image/i), status: 400 });
   });
 });
 

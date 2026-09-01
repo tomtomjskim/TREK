@@ -1,6 +1,7 @@
 import archiver from 'archiver';
 import unzipper from 'unzipper';
 import path from 'path';
+import { createHash, randomUUID } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { readEnv } from '../../app-config';
 import fs from 'fs';
@@ -9,11 +10,16 @@ import { db, closeDb, reinitialize } from '../../db/database';
 import { VALID_INTERVALS } from './auto-backup.settings';
 import { invalidatePermissionsCache } from '../permissions/permissions-cache';
 import { pluginsCodeRoot, pluginsDataRoot } from '../plugins/paths';
-import { stageExtractedPluginTrees, applyStagedRestoreNow } from '../plugins/plugin-backup';
+import {
+  stageExtractedPluginTrees,
+  applyStagedRestoreNowStrict,
+  discardStagedPluginTrees,
+  type PluginRestoreTransaction,
+} from '../plugins/plugin-backup';
 import { snapshotAllPluginDataDbs } from '../plugins/host/plugin-data.service';
 import type { Response } from 'express';
 import type { StorageService } from '../storage/storage.service';
-import { StorageInvalidKeyError } from '../storage/storage.types';
+import { isValidKey } from '../storage/storage-keys';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -152,6 +158,142 @@ export async function listBackups(storage: StorageService): Promise<BackupInfo[]
  *  re-derivable cache (photos-google, photos-trek) or not uploads at all
  *  (backups). Restore's rehydration walks the same list. */
 export const BACKUP_UPLOAD_CATEGORIES = ['files', 'journey', 'covers', 'avatars', 'places', 'photos'] as const;
+const BACKUP_MANIFEST_FILENAME = 'backup-manifest.json';
+
+type BackupManifestCategory = 'database' | 'uploads' | 'plugins-data' | 'plugins-code' | 'encryption-key';
+interface BackupManifestEntry {
+  path: string;
+  category: BackupManifestCategory;
+  source: string;
+  size: number;
+  sha256: string;
+}
+interface BackupManifest {
+  version: 1;
+  entries: BackupManifestEntry[];
+}
+
+function isSafeRelativeArchivePath(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length > 0
+    && !value.includes('\\')
+    && !value.startsWith('/')
+    && !value.split('/').some((part) => part === '' || part === '.' || part === '..');
+}
+
+function listRegularFiles(root: string, prefix = ''): Array<{ absPath: string; relativePath: string }> {
+  const files: Array<{ absPath: string; relativePath: string }> = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const absPath = path.join(root, entry.name);
+    if (entry.isDirectory()) files.push(...listRegularFiles(absPath, relativePath));
+    else if (entry.isFile()) files.push({ absPath, relativePath });
+  }
+  return files;
+}
+
+/** Hash a file with fixed-size reads. Backup payloads can be multi-GB, so never
+ * materialize one merely to calculate its manifest entry. */
+export function hashFileBounded(absPath: string): { size: number; sha256: string } {
+  const hash = createHash('sha256');
+  const fd = fs.openSync(absPath, 'r');
+  const chunk = Buffer.allocUnsafe(64 * 1024);
+  let size = 0;
+  try {
+    for (let position = 0; ; position += chunk.byteLength) {
+      const read = fs.readSync(fd, chunk, 0, chunk.byteLength, position);
+      if (read === 0) break;
+      hash.update(chunk.subarray(0, read));
+      size += read;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return { size, sha256: hash.digest('hex') };
+}
+
+/** Copy every archive input into this backup's private spool before hashing or
+ * handing it to archiver. This closes the enumerate/hash/archive TOCTOU window. */
+function spoolSnapshot(source: string, spoolRoot: string, archivePath: string): string {
+  const destination = path.join(spoolRoot, archivePath);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.copyFileSync(source, destination);
+  return destination;
+}
+
+function addManifestFile(
+  archive: ReturnType<typeof archiver>,
+  entries: BackupManifestEntry[],
+  absPath: string,
+  archivePath: string,
+  category: BackupManifestCategory,
+  source: string,
+): void {
+  const digest = hashFileBounded(absPath);
+  entries.push({
+    path: archivePath,
+    category,
+    source,
+    size: digest.size,
+    sha256: digest.sha256,
+  });
+  archive.file(absPath, { name: archivePath });
+}
+
+function isManifestEntry(entry: unknown): entry is BackupManifestEntry {
+  if (!entry || typeof entry !== 'object') return false;
+  const value = entry as Record<string, unknown>;
+  if (!isSafeRelativeArchivePath(value.path) || !isSafeRelativeArchivePath(value.source)) return false;
+  if (typeof value.size !== 'number' || !Number.isSafeInteger(value.size) || value.size < 0) return false;
+  if (typeof value.sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(value.sha256)) return false;
+  if (!['database', 'uploads', 'plugins-data', 'plugins-code', 'encryption-key'].includes(String(value.category))) return false;
+  switch (value.category) {
+    case 'database': return value.path === 'travel.db' && value.source === 'travel.db';
+    case 'uploads': {
+      const [category] = value.source.split('/');
+      return value.path === `uploads/${value.source}` && isBackupCategory(category) && isValidKey(value.source.slice(category.length + 1));
+    }
+    case 'plugins-data': return value.path === `plugins-data/${value.source}`;
+    case 'plugins-code': return value.path === `plugins-code/${value.source}`;
+    case 'encryption-key': return value.path === '.encryption_key' && value.source === '.encryption_key';
+    default: return false;
+  }
+}
+
+export function validateBackupManifest(extractDir: string, archivePaths: string[]): string | null {
+  const manifestPath = path.join(extractDir, BACKUP_MANIFEST_FILENAME);
+  if (!fs.existsSync(manifestPath)) return 'Invalid backup: checksum manifest not found.';
+  let manifest: BackupManifest;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as BackupManifest;
+  } catch {
+    return 'Invalid backup: checksum manifest is unreadable.';
+  }
+  if (manifest?.version !== 1 || !Array.isArray(manifest.entries) || !manifest.entries.every(isManifestEntry)) {
+    return 'Invalid backup: checksum manifest is malformed.';
+  }
+  const manifestPaths = new Set<string>();
+  for (const entry of manifest.entries) {
+    if (manifestPaths.has(entry.path)) return 'Invalid backup: checksum manifest has duplicate paths.';
+    manifestPaths.add(entry.path);
+  }
+  if (!manifest.entries.some((entry) => entry.category === 'database' && entry.path === 'travel.db')) {
+    return 'Invalid backup: checksum manifest does not cover travel.db.';
+  }
+  const archivedFiles = archivePaths.filter((entryPath) => entryPath !== BACKUP_MANIFEST_FILENAME);
+  if (archivedFiles.length !== manifestPaths.size || archivedFiles.some((entryPath) => !manifestPaths.has(entryPath))) {
+    return 'Invalid backup: archive entries do not match the checksum manifest.';
+  }
+  for (const entry of manifest.entries) {
+    const absPath = path.join(extractDir, entry.path);
+    if (!fs.existsSync(absPath)) return `Invalid backup: manifest entry is missing: ${entry.path}.`;
+    const digest = hashFileBounded(absPath);
+    if (digest.size !== entry.size || digest.sha256 !== entry.sha256) {
+      return `Invalid backup: checksum verification failed for ${entry.path}.`;
+    }
+  }
+  return null;
+}
 
 /**
  * Writes a full backup zip and returns its BackupInfo.
@@ -204,7 +346,8 @@ export async function createBackup(storage: StorageService, prefix: 'backup' | '
         // have produced is gone by the time archiver gets to it.
         const localPath = await storage.getLocalPathOrNull(category, obj.key);
         if (localPath !== null) {
-          uploadEntries.push({ absPath: localPath, name: `uploads/${category}/${obj.key}` });
+          const name = `uploads/${category}/${obj.key}`;
+          uploadEntries.push({ absPath: spoolSnapshot(localPath, stagingDir, name), name });
           continue;
         }
         const stagedPath = path.join(stagingDir, category, obj.key);
@@ -228,6 +371,7 @@ export async function createBackup(storage: StorageService, prefix: 'backup' | '
       archive.on('warning', reject);
 
       archive.pipe(output);
+      const manifestEntries: BackupManifestEntry[] = [];
 
       const dbPath = path.join(dataDir, 'travel.db');
       if (fs.existsSync(dbPath)) {
@@ -236,30 +380,31 @@ export async function createBackup(storage: StorageService, prefix: 'backup' | '
         // travel.db mid-stream would tear the archived copy — and the -wal that would make
         // it recoverable isn't in the zip. VACUUM INTO takes a consistent snapshot even
         // under concurrent writes — the same guarantee the plugin DBs get below.
-        let dbToArchive = dbPath;
+        let dbToArchive: string;
         try {
           if (fs.existsSync(dbSnap)) fs.rmSync(dbSnap, { force: true });
           db.exec(`VACUUM INTO '${dbSnap.replaceAll("'", "''")}'`);
           dbToArchive = dbSnap;
         } catch (e) {
-          // Snapshot failed (disk/lock) — fall back to the checkpointed live file rather
-          // than drop the core DB from the backup entirely.
+          // A live SQLite file is not a snapshot: archiving it after VACUUM INTO
+          // failed could silently pair pages from different logical points.
+          throw new Error('Backup database snapshot failed; refusing a torn backup.', { cause: e });
         }
-        archive.file(dbToArchive, { name: 'travel.db' });
+        addManifestFile(archive, manifestEntries, dbToArchive, 'travel.db', 'database', 'travel.db');
       }
 
-      // Bundle the at-rest encryption key so the backup is self-contained: the
-      // DB stores secrets (API keys, MFA, SMTP/OIDC) encrypted with this key, so
-      // a restore onto a different install would otherwise be unable to decrypt
-      // them. NOTE: this makes the backup file as sensitive as the key itself —
-      // store/transfer it securely. Skipped when ENCRYPTION_KEY is provided via
-      // env, since in that case the file is not the source of truth.
+      for (const entry of uploadEntries) {
+        const source = entry.name.slice('uploads/'.length);
+        addManifestFile(archive, manifestEntries, entry.absPath, entry.name, 'uploads', source);
+      }
+
+      // A file-backed key is part of a self-contained backup. Its bytes stay
+      // solely inside the sensitive archive; the manifest binds only metadata.
       const encKeyPath = path.join(dataDir, '.encryption_key');
       if (!readEnv().backup.encryptionKeyFromEnv && fs.existsSync(encKeyPath)) {
-        archive.file(encKeyPath, { name: '.encryption_key' });
+        const keySnapshot = spoolSnapshot(encKeyPath, stagingDir, '.encryption_key');
+        addManifestFile(archive, manifestEntries, keySnapshot, '.encryption_key', 'encryption-key', '.encryption_key');
       }
-
-      for (const entry of uploadEntries) archive.file(entry.absPath, { name: entry.name });
 
       // Plugin data — each plugin's own SQLite file and any blobs. This is the ONLY
       // copy of the user data a plugin holds, so it belongs in the backup. Checkpoint
@@ -274,7 +419,9 @@ export async function createBackup(storage: StorageService, prefix: 'backup' | '
         // into the zip — the plugin's ONLY data copy, silently corrupt. This VACUUM-INTOs
         // each open db and drops the sidecars; the snap dir is removed in the finally.
         snapshotAllPluginDataDbs(pdataSnap);
-        archive.directory(pdataSnap, 'plugins-data');
+        for (const entry of listRegularFiles(pdataSnap)) {
+          addManifestFile(archive, manifestEntries, entry.absPath, `plugins-data/${entry.relativePath}`, 'plugins-data', entry.relativePath);
+        }
       }
       // Plugin code — so a restore is self-contained (the `plugins` rows reference it).
       // Dev-links (a plugin dir symlinked/junctioned to an author's source) are skipped
@@ -288,9 +435,15 @@ export async function createBackup(storage: StorageService, prefix: 'backup' | '
           try { real = fs.realpathSync(dir); } catch { continue; }
           if (!real.startsWith(realRoot + path.sep)) continue; // dev-link points outside → skip
           try { if (!fs.statSync(dir).isDirectory()) continue; } catch { continue; }
-          archive.directory(dir, `plugins-code/${entry}`);
+          for (const file of listRegularFiles(dir)) {
+            const archivePath = `plugins-code/${entry}/${file.relativePath}`;
+            const snapshot = spoolSnapshot(file.absPath, stagingDir, archivePath);
+            addManifestFile(archive, manifestEntries, snapshot, archivePath, 'plugins-code', `${entry}/${file.relativePath}`);
+          }
         }
       }
+
+      archive.append(JSON.stringify({ version: 1, entries: manifestEntries } satisfies BackupManifest), { name: BACKUP_MANIFEST_FILENAME });
 
       archive.finalize();
     });
@@ -349,35 +502,133 @@ const isBackupCategory = (dir: string): dir is (typeof BACKUP_UPLOAD_CATEGORIES)
  * with a warning (2026-08-17 decision): new archives never contain them, and
  * the category mapping stays structural in both directions.
  */
-async function rehydrateUploads(storage: StorageService, extractedUploads: string): Promise<void> {
+type UploadSnapshot = {
+  category: (typeof BACKUP_UPLOAD_CATEGORIES)[number];
+  key: string;
+  spoolPath: string;
+};
+
+type CoreSnapshot = {
+  journalDir: string;
+  files: Array<{ livePath: string; snapshotPath: string; existed: boolean }>;
+};
+
+/** The restore needs a durable, file-backed undo record. Copies are streaming
+ * filesystem copies (not Buffer reads), kept under data/ so a failed restore
+ * can restore the exact old database + WAL/SHM/key presence semantics. */
+function snapshotCoreFiles(journalDir: string): CoreSnapshot {
+  const names = ['travel.db', 'travel.db-wal', 'travel.db-shm', '.encryption_key'];
+  const files = names.map((name) => {
+    const livePath = path.join(dataDir, name);
+    const snapshotPath = path.join(journalDir, 'core', name);
+    const existed = fs.existsSync(livePath);
+    if (existed) {
+      fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+      fs.copyFileSync(livePath, snapshotPath);
+    }
+    return { livePath, snapshotPath, existed };
+  });
+  return { journalDir, files };
+}
+
+function restoreCoreFiles(snapshot: CoreSnapshot): void {
+  for (const file of snapshot.files) {
+    if (file.existed) fs.copyFileSync(file.snapshotPath, file.livePath);
+    else fs.rmSync(file.livePath, { force: true });
+  }
+}
+
+function extractedUploadEntries(extractedUploads: string): Array<{ category: (typeof BACKUP_UPLOAD_CATEGORIES)[number]; key: string; absPath: string }> {
   const walk = (dir: string): string[] =>
     fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
       const p = path.join(dir, e.name);
       return e.isDirectory() ? walk(p) : e.isFile() ? [p] : [];
     });
-  for (const absPath of walk(extractedUploads)) {
+  return walk(extractedUploads).map((absPath) => {
     const rel = path.relative(extractedUploads, absPath).split(path.sep).join('/');
     const slash = rel.indexOf('/');
     const top = slash === -1 ? '' : rel.slice(0, slash);
-    if (slash === -1 || !isBackupCategory(top)) {
-      console.warn(`Restore: skipping upload entry outside a storage category: ${rel}`);
-      continue;
+    const key = slash === -1 ? '' : rel.slice(slash + 1);
+    // This should already be guaranteed by the exact manifest, but restore
+    // remains fail-closed if a filesystem race or future extraction change
+    // hands us something storage would reject.
+    if (slash === -1 || !isBackupCategory(top) || !isValidKey(key)) {
+      throw new Error(`Restore archive contains an invalid upload entry: ${rel}`);
     }
-    try {
-      await storage.put(top, rel.slice(slash + 1), { tmpPath: absPath });
-    } catch (err) {
-      if (err instanceof StorageInvalidKeyError) {
-        console.warn(`Restore: skipping upload entry with an invalid key: ${rel}`);
-        continue;
+    return { category: top, key, absPath };
+  });
+}
+
+async function snapshotUploadInventory(storage: StorageService, journalDir: string): Promise<UploadSnapshot[]> {
+  const snapshots: UploadSnapshot[] = [];
+  let totalBytes = 0;
+  for (const category of BACKUP_UPLOAD_CATEGORIES) {
+    for await (const obj of storage.list(category)) {
+      if (!isValidKey(obj.key)) throw new Error(`Storage inventory contains an invalid key: ${category}/${obj.key}`);
+      totalBytes += obj.size;
+      if (totalBytes > MAX_BACKUP_DECOMPRESSED_SIZE) {
+        throw new Error('Existing uploads exceed the bounded restore compensation journal limit.');
       }
-      throw err;
+      const spoolPath = path.join(journalDir, 'uploads', category, obj.key);
+      fs.mkdirSync(path.dirname(spoolPath), { recursive: true });
+      await storage.withLocalFile(category, obj.key, async (localPath) => {
+        fs.copyFileSync(localPath, spoolPath);
+      });
+      snapshots.push({ category, key: obj.key, spoolPath });
     }
+  }
+  return snapshots;
+}
+
+async function rehydrateUploads(
+  storage: StorageService,
+  entries: Array<{ category: (typeof BACKUP_UPLOAD_CATEGORIES)[number]; key: string; absPath: string }>,
+): Promise<Set<string>> {
+  const restored = new Set<string>();
+  for (const entry of entries) {
+    await storage.put(entry.category, entry.key, { tmpPath: entry.absPath });
+    restored.add(`${entry.category}/${entry.key}`);
+  }
+  return restored;
+}
+
+/** Restore all pre-existing bytes and delete keys which the failed archive may
+ * have created. Every desired key is included because a failing put can still
+ * have committed bytes in a remote backend before it rejects. */
+async function compensateUploads(
+  storage: StorageService,
+  snapshots: UploadSnapshot[],
+  desired: Array<{ category: (typeof BACKUP_UPLOAD_CATEGORIES)[number]; key: string }>,
+): Promise<void> {
+  const previous = new Set(snapshots.map((item) => `${item.category}/${item.key}`));
+  const errors: unknown[] = [];
+  for (const item of snapshots) {
+    try { await storage.put(item.category, item.key, { tmpPath: item.spoolPath }); } catch (err) { errors.push(err); }
+  }
+  for (const item of desired) {
+    if (previous.has(`${item.category}/${item.key}`)) continue;
+    try { await storage.delete(item.category, item.key); } catch (err) { errors.push(err); }
+  }
+  if (errors.length) throw new Error('Restore upload compensation failed; the recovery journal was retained.', { cause: errors[0] });
+}
+
+let restoreInProgress = false;
+
+export async function restoreFromZip(storage: StorageService, zipPath: string): Promise<RestoreResult> {
+  if (restoreInProgress) {
+    return { success: false, error: 'A backup restore is already in progress.', status: 409 };
+  }
+  restoreInProgress = true;
+  try {
+    return await restoreFromZipUnlocked(storage, zipPath);
+  } finally {
+    restoreInProgress = false;
   }
 }
 
-export async function restoreFromZip(storage: StorageService, zipPath: string): Promise<RestoreResult> {
-  const extractDir = path.join(dataDir, `restore-${Date.now()}`);
-  let reinitFailed: unknown = null;
+async function restoreFromZipUnlocked(storage: StorageService, zipPath: string): Promise<RestoreResult> {
+  const restoreId = `${Date.now()}-${randomUUID()}`;
+  const extractDir = path.join(dataDir, `restore-${restoreId}`);
   try {
     // Fast reject on the central-directory's declared size, then extract entry-by-entry
     // enforcing the ACTUAL decompressed bytes. The declared uncompressedSize is
@@ -428,6 +679,20 @@ export async function restoreFromZip(storage: StorageService, zipPath: string): 
       }
     }
 
+    // Every archive produced by this version carries a complete, non-secret
+    // inventory. Verify it before closing the live DB or moving any object so
+    // a truncated, modified, or path-confused archive cannot become a partial
+    // restore. The empty-directory allowance only supports the unit-test seam;
+    // a real archive containing travel.db necessarily has central entries.
+    const manifestError = validateBackupManifest(
+      extractDir,
+      directory.files.filter((entry) => entry.type !== 'Directory').map((entry) => entry.path),
+    );
+    if (manifestError) {
+      fs.rmSync(extractDir, { recursive: true, force: true });
+      return { success: false, error: `${manifestError} Legacy archives must be restored with the pinned previous image, then re-backed up in the new format.`, status: 400 };
+    }
+
     const extractedDb = path.join(extractDir, 'travel.db');
     if (!fs.existsSync(extractedDb)) {
       fs.rmSync(extractDir, { recursive: true, force: true });
@@ -462,9 +727,21 @@ export async function restoreFromZip(storage: StorageService, zipPath: string): 
       uploadedDb?.close();
     }
 
-    closeDb();
+    const journalDir = path.join(dataDir, `restore-journal-${restoreId}`);
+    let coreSnapshot: CoreSnapshot | null = null;
+    let uploadSnapshots: UploadSnapshot[] = [];
+    let desiredUploads: Array<{ category: (typeof BACKUP_UPLOAD_CATEGORIES)[number]; key: string }> = [];
+    let restoredStorageConfig = false;
+    let pluginStagingAttempted = false;
+    let pluginsStaged = false;
+    let pluginRestoreTransaction: PluginRestoreTransaction | null = null;
 
     try {
+      closeDb();
+      // The old core state is copied only after SQLite has closed its handle,
+      // so travel.db and its sidecars describe one recoverable point. Do this
+      // before publishing a single restored byte.
+      coreSnapshot = snapshotCoreFiles(journalDir);
       const dbDest = path.join(dataDir, 'travel.db');
       // Swap the core DB atomically: copy the restored DB to a temp file on the SAME
       // filesystem, drop the old -wal/-shm sidecars (they belong to the DB being replaced
@@ -477,36 +754,14 @@ export async function restoreFromZip(storage: StorageService, zipPath: string): 
         try { fs.unlinkSync(dbDest + ext); } catch (e) {}
       }
       fs.renameSync(dbTmp, dbDest);
+      const extractedKey = path.join(extractDir, '.encryption_key');
+      if (!readEnv().backup.encryptionKeyFromEnv && fs.existsSync(extractedKey)) {
+        fs.copyFileSync(extractedKey, path.join(dataDir, '.encryption_key'));
+      }
 
-      // Restore the bundled at-rest encryption key (if the archive carries one)
-      // so the restored DB's encrypted secrets can be decrypted. Only the file
-      // is swapped here; the in-memory key was read at startup, so a restart is
-      // required for it to take effect (and an explicit ENCRYPTION_KEY env var
-      // still overrides the file).
-      const extractedEncKey = path.join(extractDir, '.encryption_key');
-      if (fs.existsSync(extractedEncKey)) {
-        fs.copyFileSync(extractedEncKey, path.join(dataDir, '.encryption_key'));
-      }
-    } finally {
-      // Reopening the DB must always run (even if the copy above threw) so the
-      // process is never left without a connection. Capture a reopen failure
-      // instead of letting it propagate as a generic error — a backup whose
-      // files already landed on disk but whose connection failed to reopen
-      // needs to be reported as "restart required", not swallowed.
-      try {
-        reinitialize();
-      } catch (reinitErr) {
-        reinitFailed = reinitErr;
-      }
-      // The restored DB has different permission-override rows from
-      // the pre-restore DB, but our process-local permissions cache
-      // still holds the pre-restore state. Any request using a cached
-      // permission would decide against the wrong grants until the
-      // next restart. Dropping the cache forces a fresh read.
+      reinitialize();
       invalidatePermissionsCache();
-    }
 
-    if (!reinitFailed) {
       // The registry reads storage.* app_settings through the DB handle that
       // was just closed and reopened above — reload it now, AFTER reinitialize()
       // and BEFORE any byte moves, so rehydrated uploads land where the RESTORED
@@ -515,51 +770,98 @@ export async function restoreFromZip(storage: StorageService, zipPath: string): 
       // nothing to read, and the restore is already reported as "restart
       // required" below — rehydrating into a stale/guessed config would be worse.
       storage.reloadConfig();
+      restoredStorageConfig = true;
 
       const extractedUploads = path.join(extractDir, 'uploads');
       if (fs.existsSync(extractedUploads)) {
-        // Parity with the legacy wipe: it unlinked one level deep only (nested
-        // files — journey/thumbs, photos/google — survived until overwritten by
-        // the copy) and swallowed per-file errors.
+        const entries = extractedUploadEntries(extractedUploads);
+        desiredUploads = entries.map(({ category, key }) => ({ category, key }));
+        // The target backend is derived from the restored DB. Snapshot all of
+        // its current bytes before any mutation, using bounded on-disk spools
+        // so neither same-key overwrites nor later stale deletes are permanent
+        // if a following operation fails.
+        uploadSnapshots = await snapshotUploadInventory(storage, journalDir);
+        const restored = await rehydrateUploads(storage, entries);
         for (const category of BACKUP_UPLOAD_CATEGORIES) {
           for await (const obj of storage.list(category)) {
-            if (obj.key.includes('/')) continue;
-            await storage.delete(category, obj.key).catch(() => { /* best-effort, as the old unlink loop was */ });
+            if (!restored.has(`${category}/${obj.key}`)) {
+              await storage.delete(category, obj.key);
+            }
           }
         }
-        await rehydrateUploads(storage, extractedUploads);
       }
-    }
 
-    // Plugin trees can't be swapped while the runtime holds their DBs open, so stage
-    // them beside the live trees, then ask the runtime to quiesce its plugins and apply
-    // the swap NOW. If the runtime isn't up (plugins disabled / restore during boot),
-    // the staging waits for the boot reconcile — with nothing running, no data diverges.
-    // Best-effort: a staging error must not fail an otherwise-good core restore. Runs
-    // UNCONDITIONALLY, even when reinitFailed — unlike reload/rehydration this is pure
-    // filesystem staging with no DB dependency (plugin-backup.ts), so a failed reopen
-    // must not cost the archive's plugin data: extractDir is unlinked right below, and
-    // an un-staged tree there would be gone for good with no recovery path.
-    try {
-      stageExtractedPluginTrees(extractDir);
-      // Quiesce regardless of whether trees were staged: the restored travel.db carries
-      // a different `plugins` table, so any plugin still running with its pre-restore
-      // identity/grants is now a ghost — invisible in the restored UI, unstoppable short
-      // of a process restart. applyStagedRestoreNow closes those handles; the tree swap
-      // it also performs is a no-op when nothing was staged (e.g. an older archive). It
-      // degrades gracefully when the DB isn't reopened, same as any other best-effort
-      // failure here.
-      await applyStagedRestoreNow();
-    } catch (e) {
-      console.error('Restore: staging plugin trees failed:', e);
-    }
+      // Publish plugin staging only after the restored DB, storage configuration,
+      // and uploads are live. A crash before this point therefore cannot make boot
+      // reconcile new plugin trees against the old database.
+      pluginStagingAttempted = true;
+      try {
+        pluginsStaged = stageExtractedPluginTrees(extractDir);
+      } catch (stagingErr) {
+        const message = stagingErr instanceof Error ? stagingErr.message : String(stagingErr);
+        throw new Error(`Plugin restore staging failed: ${message}`, { cause: stagingErr });
+      }
 
-    fs.rmSync(extractDir, { recursive: true, force: true });
-    if (reinitFailed) {
-      console.error('Restore: database reopen failed after file swap:', reinitFailed);
-      return { success: false, error: 'Backup files were restored but the database connection could not be reopened. Restart the server to finish the restore.', status: 500 };
+      // Plugin trees cannot be swapped while the runtime holds their DBs open.
+      // The runtime applier shuts them down and returns a receipt; when no runtime
+      // is active, the strict helper applies the pair directly under the same receipt.
+      if (pluginsStaged) {
+        pluginRestoreTransaction = await applyStagedRestoreNowStrict();
+        if (!pluginRestoreTransaction) {
+          throw new Error('Plugin restore could not be applied while the runtime was quiesced.');
+        }
+      }
+
+      // This is the final rollback-safe commit point. A pre-commit staging cleanup
+      // failure still leaves the plugin receipt active, so the catch below can put
+      // the plugin pair back before restoring uploads and the core database.
+      pluginRestoreTransaction?.commitCleanup();
+      pluginRestoreTransaction = null;
+
+      // Restore bytes are now mutually consistent. Cleanup is post-commit garbage
+      // collection: failing it must retain the restored state rather than attempt a
+      // rollback from a journal that may already be partly deleted.
+      for (const artifact of [extractDir, journalDir]) {
+        try {
+          fs.rmSync(artifact, { recursive: true, force: true });
+        } catch (cleanupErr) {
+          console.error('Restore committed but cleanup artifact could not be removed:', artifact, cleanupErr);
+        }
+      }
+      return { success: true };
+    } catch (err) {
+      const rollbackErrors: unknown[] = [];
+      // Restore the plugin data/code pair first while its receipt still owns both
+      // pre-restore snapshots. The core database is restored only after no plugin
+      // can remain live against the rejected database state.
+      if (pluginRestoreTransaction) {
+        try { pluginRestoreTransaction.rollback(); } catch (rollbackErr) { rollbackErrors.push(rollbackErr); }
+      }
+      // Undo uploads while the restored storage registry is still active; only
+      // then put the old DB back and reload its old storage configuration.
+      if (restoredStorageConfig) {
+        try { await compensateUploads(storage, uploadSnapshots, desiredUploads); } catch (rollbackErr) { rollbackErrors.push(rollbackErr); }
+      }
+      try { closeDb(); } catch (rollbackErr) { rollbackErrors.push(rollbackErr); }
+      if (coreSnapshot) {
+        try { restoreCoreFiles(coreSnapshot); } catch (rollbackErr) { rollbackErrors.push(rollbackErr); }
+      }
+      try { reinitialize(); } catch (rollbackErr) { rollbackErrors.push(rollbackErr); }
+      try { invalidatePermissionsCache(); } catch (rollbackErr) { rollbackErrors.push(rollbackErr); }
+      try { storage.reloadConfig(); } catch (rollbackErr) { rollbackErrors.push(rollbackErr); }
+      if (pluginStagingAttempted && !pluginRestoreTransaction) {
+        try { discardStagedPluginTrees(); } catch (rollbackErr) { rollbackErrors.push(rollbackErr); }
+      }
+      if (rollbackErrors.length) {
+        // Keep the journal for a human recovery. It contains only local backup
+        // bytes; log its location for operators, but never any key or object
+        // bytes in an admin-facing error.
+        console.error('Restore rollback incomplete; recovery journal retained at:', journalDir);
+        throw new Error('Restore failed and automatic rollback was incomplete; the recoverable journal was retained.', { cause: err });
+      }
+      fs.rmSync(journalDir, { recursive: true, force: true });
+      throw err;
     }
-    return { success: true };
   } catch (err: unknown) {
     console.error('Restore error:', err);
     if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true });

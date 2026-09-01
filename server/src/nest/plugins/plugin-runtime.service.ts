@@ -9,7 +9,7 @@ import type { ChannelMessage, ExternalChannel } from '../notifications/notificat
 import { PluginUserSettingsService } from './plugin-user-settings.service';
 import { PLUGIN_CHANNEL_EVENTS } from './install/manifest';
 import { stripEmoji } from './text-sanitize';
-import { applyStagedPluginTrees, setStagedRestoreApplier } from './plugin-backup';
+import { applyStagedPluginTrees, applyStagedPluginTreesTransaction, setStagedRestoreApplier } from './plugin-backup';
 import { decrypt_api_key } from '../common/crypto/apiKeyCrypto';
 import { PluginSupervisor, type PluginRouteInfo } from './supervisor/plugin-supervisor';
 import fs from 'node:fs';
@@ -217,7 +217,12 @@ export class PluginRuntimeService implements OnApplicationBootstrap, OnModuleDes
     // then swap. Plugins stay down until the app restart the restore already requires.
     setStagedRestoreApplier(async () => {
       await this.supervisor.shutdownAll();
-      applyStagedPluginTrees();
+      const transaction = applyStagedPluginTreesTransaction();
+      // `pluginsStaged` has already been checked by the restore coordinator, so an
+      // absent transaction here means the staged pair vanished unexpectedly. Do not
+      // report a successful core restore without a receipt for the live plugin trees.
+      if (!transaction) throw new Error('No staged plugin restore trees were available after runtime quiesce.');
+      return transaction;
     });
     // Forward core trip events to plugins that subscribed (events:subscribe). The
     // sink is name-only + fire-and-forget, so it can never block a core broadcast.

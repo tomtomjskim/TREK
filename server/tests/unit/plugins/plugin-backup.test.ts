@@ -4,11 +4,18 @@
  * them in (so we never overwrite a plugin DB the runtime holds open). Covers the no-op
  * paths (older archive with no plugin trees) and that the pre-restore tree is replaced.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { stageExtractedPluginTrees, applyStagedPluginTrees, setStagedRestoreApplier, applyStagedRestoreNow } from '../../../src/nest/plugins/plugin-backup';
+import {
+  applyStagedPluginTrees,
+  applyStagedPluginTreesTransaction,
+  applyStagedRestoreNow,
+  applyStagedRestoreNowStrict,
+  setStagedRestoreApplier,
+  stageExtractedPluginTrees,
+} from '../../../src/nest/plugins/plugin-backup';
 
 let root: string;
 beforeEach(() => {
@@ -62,6 +69,105 @@ describe('plugin backup staging + boot reconcile', () => {
     expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('LIVE'); // untouched
   });
 
+  it('keeps both pre-restore trees until the restore caller commits, then rolls both live trees back together', () => {
+    write(path.join(root, 'plugins-data', 'notes', 'plugin.db'), 'OLD-DATA');
+    write(path.join(root, 'plugins', 'notes', 'index.js'), 'OLD-CODE');
+    const extract = path.join(root, 'restore-transaction');
+    write(path.join(extract, 'plugins-data', 'notes', 'plugin.db'), 'NEW-DATA');
+    write(path.join(extract, 'plugins-code', 'notes', 'index.js'), 'NEW-CODE');
+    stageExtractedPluginTrees(extract);
+
+    const transaction = applyStagedPluginTreesTransaction();
+    expect([...(transaction?.labels ?? [])].sort()).toEqual(['plugins-code', 'plugins-data']);
+    expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('NEW-DATA');
+    expect(read(path.join(root, 'plugins', 'notes', 'index.js'))).toBe('NEW-CODE');
+    expect(fs.existsSync(path.join(root, 'plugins-data.pre-restore', 'notes', 'plugin.db'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'plugins.restore', 'notes', 'index.js'))).toBe(true);
+
+    transaction?.rollback();
+    expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('OLD-DATA');
+    expect(read(path.join(root, 'plugins', 'notes', 'index.js'))).toBe('OLD-CODE');
+    expect(fs.existsSync(path.join(root, 'plugins-data.restore'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'plugins-data.pre-restore'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'plugins.restore'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'plugins.pre-restore'))).toBe(false);
+  });
+
+  it('retains a usable rollback receipt when staging cleanup fails before the commit point', () => {
+    write(path.join(root, 'plugins-data', 'notes', 'plugin.db'), 'OLD');
+    const extract = path.join(root, 'restore-cleanup-failure');
+    write(path.join(extract, 'plugins-data', 'notes', 'plugin.db'), 'NEW');
+    stageExtractedPluginTrees(extract);
+    const transaction = applyStagedPluginTreesTransaction();
+    expect(transaction).not.toBeNull();
+
+    const staging = path.join(root, 'plugins-data.restore');
+    const originalRemove = fs.rmSync;
+    const remove = vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+      if (target === staging) throw new Error('staging cleanup failed');
+      return originalRemove(target, options);
+    });
+    expect(() => transaction?.commitCleanup()).toThrow('staging cleanup failed');
+    expect(fs.existsSync(staging)).toBe(true);
+    remove.mockRestore();
+
+    transaction?.rollback();
+    expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('OLD');
+    expect(fs.existsSync(staging)).toBe(false);
+  });
+
+  it('does not offer rollback after the commit point when deleting the second snapshot fails', () => {
+    write(path.join(root, 'plugins-data', 'notes', 'plugin.db'), 'OLD-DATA');
+    write(path.join(root, 'plugins', 'notes', 'index.js'), 'OLD-CODE');
+    const extract = path.join(root, 'restore-second-snapshot-cleanup-failure');
+    write(path.join(extract, 'plugins-data', 'notes', 'plugin.db'), 'NEW-DATA');
+    write(path.join(extract, 'plugins-code', 'notes', 'index.js'), 'NEW-CODE');
+    stageExtractedPluginTrees(extract);
+    const transaction = applyStagedPluginTreesTransaction();
+    expect(transaction).not.toBeNull();
+
+    const codeSnapshot = path.join(root, 'plugins.pre-restore');
+    const originalRemove = fs.rmSync;
+    const remove = vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+      if (target === codeSnapshot) throw new Error('code snapshot cleanup failed');
+      return originalRemove(target, options);
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => transaction?.commitCleanup()).not.toThrow();
+    remove.mockRestore();
+
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('restore committed'), expect.any(Error));
+    error.mockRestore();
+    expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('NEW-DATA');
+    expect(read(path.join(root, 'plugins', 'notes', 'index.js'))).toBe('NEW-CODE');
+    expect(fs.existsSync(path.join(root, 'plugins-data.pre-restore'))).toBe(false);
+    expect(fs.existsSync(codeSnapshot)).toBe(true);
+    expect(() => transaction?.rollback()).toThrow('committed');
+  });
+
+  it('boot reconcile rolls the live tree back when staging cleanup fails before commit', () => {
+    write(path.join(root, 'plugins-data', 'notes', 'plugin.db'), 'OLD');
+    const extract = path.join(root, 'restore-boot-cleanup-failure');
+    write(path.join(extract, 'plugins-data', 'notes', 'plugin.db'), 'NEW');
+    stageExtractedPluginTrees(extract);
+
+    const staging = path.join(root, 'plugins-data.restore');
+    const originalRemove = fs.rmSync;
+    let failedOnce = false;
+    const remove = vi.spyOn(fs, 'rmSync').mockImplementation((target, options) => {
+      if (target === staging && !failedOnce) {
+        failedOnce = true;
+        throw new Error('staging cleanup failed');
+      }
+      return originalRemove(target, options);
+    });
+    expect(() => applyStagedPluginTrees()).toThrow('staging cleanup failed');
+    remove.mockRestore();
+
+    expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('OLD');
+    expect(fs.existsSync(staging)).toBe(false);
+  });
+
   it('reconcile creates the live tree even when there was none before (fresh restore)', () => {
     // no live plugins-data at all; only a staged one
     write(path.join(root, 'plugins-data.restore', 'newplug', 'plugin.db'), 'DATA');
@@ -109,16 +215,57 @@ describe('plugin backup staging + boot reconcile', () => {
     expect(fs.existsSync(path.join(root, 'plugins-data.restore'))).toBe(false)
   })
 
-  it('applyStagedRestoreNow runs the registered applier (runtime quiesce), or reports false when none', async () => {
+  it('applyStagedRestoreNow runs the registered applier and commits its receipt, or reports false when none', async () => {
     expect(await applyStagedRestoreNow()).toBe(false); // no applier registered
     let ran = false;
-    setStagedRestoreApplier(async () => { ran = true; });
+    let committed = false;
+    setStagedRestoreApplier(async () => ({
+      labels: [],
+      rollback: () => {},
+      commitCleanup: () => { ran = true; committed = true; },
+    }));
     expect(await applyStagedRestoreNow()).toBe(true);
     expect(ran).toBe(true);
+    expect(committed).toBe(true);
     // an applier that throws is caught and reported as not-applied (falls back to boot reconcile)
     setStagedRestoreApplier(() => { throw new Error('quiesce failed'); });
     expect(await applyStagedRestoreNow()).toBe(false);
     setStagedRestoreApplier(null);
+  });
+
+  it('strict immediate apply preserves the applier failure for a restore transaction rollback', async () => {
+    setStagedRestoreApplier(() => { throw new Error('plugin tree cleanup failed'); });
+    await expect(applyStagedRestoreNowStrict()).rejects.toThrow('plugin tree cleanup failed');
+    setStagedRestoreApplier(null);
+  });
+
+  it('strict immediate apply returns the live-tree receipt without committing its cleanup', async () => {
+    let committed = false;
+    setStagedRestoreApplier(() => ({
+      labels: ['plugins-data'],
+      rollback: () => {},
+      commitCleanup: () => { committed = true; },
+    }));
+    const transaction = await applyStagedRestoreNowStrict();
+    expect(transaction?.labels).toEqual(['plugins-data']);
+    expect(committed).toBe(false);
+    transaction?.commitCleanup();
+    expect(committed).toBe(true);
+    setStagedRestoreApplier(null);
+  });
+
+  it('strict immediate apply owns a direct receipt when no plugin runtime is active', async () => {
+    write(path.join(root, 'plugins-data', 'notes', 'plugin.db'), 'OLD');
+    const extract = path.join(root, 'restore-runtime-disabled');
+    write(path.join(extract, 'plugins-data', 'notes', 'plugin.db'), 'NEW');
+    stageExtractedPluginTrees(extract);
+
+    const transaction = await applyStagedRestoreNowStrict();
+
+    expect(transaction?.labels).toEqual(['plugins-data']);
+    expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('NEW');
+    transaction?.rollback();
+    expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('OLD');
   });
 
   it('a stale staging from an aborted prior restore is overwritten, not merged', () => {
@@ -129,5 +276,42 @@ describe('plugin backup staging + boot reconcile', () => {
     // the stale 'ghost' entry is gone; only the fresh staging remains
     expect(fs.existsSync(path.join(root, 'plugins-data.restore', 'ghost'))).toBe(false);
     expect(read(path.join(root, 'plugins-data.restore', 'real', 'plugin.db'))).toBe('FRESH');
+  });
+
+  it('fails closed and leaves neither .restore tree when the second paired staging copy fails', () => {
+    const extract = path.join(root, 'restore-paired-failure');
+    write(path.join(extract, 'plugins-data', 'notes', 'plugin.db'), 'NEW-DATA');
+    write(path.join(extract, 'plugins-code', 'notes', 'server', 'index.js'), 'NEW-CODE');
+    const originalCopy = fs.cpSync;
+    const copy = vi.spyOn(fs, 'cpSync').mockImplementation((from, to, options) => {
+      if (String(from).includes('plugins-code')) throw new Error('disk full');
+      return originalCopy(from, to, options);
+    });
+
+    expect(() => stageExtractedPluginTrees(extract)).toThrow('disk full');
+    expect(fs.existsSync(path.join(root, 'plugins-data.restore'))).toBe(false);
+    copy.mockRestore();
+  });
+
+  it('rolls back BOTH live trees when the second paired apply copy fails', () => {
+    write(path.join(root, 'plugins-data', 'notes', 'plugin.db'), 'OLD-DATA');
+    write(path.join(root, 'plugins', 'notes', 'index.js'), 'OLD-CODE');
+    const extract = path.join(root, 'restore-apply-failure');
+    write(path.join(extract, 'plugins-data', 'notes', 'plugin.db'), 'NEW-DATA');
+    write(path.join(extract, 'plugins-code', 'notes', 'index.js'), 'NEW-CODE');
+    stageExtractedPluginTrees(extract);
+    const original = fs.cpSync;
+    const copy = vi.spyOn(fs, 'cpSync').mockImplementation((from, to, options) => {
+      if (String(from).includes('plugins.restore')) throw new Error('code apply failed');
+      return original(from, to, options);
+    });
+
+    expect(() => applyStagedPluginTrees()).toThrow('both live trees were restored');
+    expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('OLD-DATA');
+    expect(read(path.join(root, 'plugins', 'notes', 'index.js'))).toBe('OLD-CODE');
+    expect(fs.existsSync(path.join(root, 'plugins-data.restore'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'plugins-data.pre-restore'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'plugins.pre-restore'))).toBe(false);
+    copy.mockRestore();
   });
 });
