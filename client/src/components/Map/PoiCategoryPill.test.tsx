@@ -1,105 +1,78 @@
-import userEvent from '@testing-library/user-event';
-import type React from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '../../../tests/helpers/render';
-import { resetAllStores } from '../../../tests/helpers/store';
-import PoiCategoryPill from './PoiCategoryPill';
+// FE-COMP-POIPILL-001 to FE-COMP-POIPILL-008
+import React from 'react'
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen } from '../../../tests/helpers/render'
+import { fireEvent } from '@testing-library/react'
+import PoiCategoryPill from './PoiCategoryPill'
+import { POI_CATEGORIES } from './poiCategories'
 
-function renderCompact(overrides: Partial<React.ComponentProps<typeof PoiCategoryPill>> = {}) {
-  const props: React.ComponentProps<typeof PoiCategoryPill> = {
-    active: new Set<string>(),
-    onToggle: vi.fn(),
-    loadingKeys: new Set<string>(),
-    errorKeys: new Set<string>(),
-    compact: true,
-    ...overrides,
-  };
-  return { ...render(<PoiCategoryPill {...props} />), props };
+const CAFE = POI_CATEGORIES.find(c => c.key === 'cafe')!
+const BAR = POI_CATEGORIES.find(c => c.key === 'bar')!
+
+function pill(props: Partial<React.ComponentProps<typeof PoiCategoryPill>> = {}) {
+  return render(
+    <PoiCategoryPill active={new Set()} onToggle={vi.fn()} {...props} />,
+  )
 }
 
-describe('PoiCategoryPill compact mode', () => {
-  beforeEach(() => {
-    resetAllStores();
-  });
+// The spinner replaces the category icon, so "is this segment spinning" reads as
+// "does its button hold an .animate-spin element".
+const spinning = () => screen.getAllByRole('button')
+  .filter(b => b.querySelector('.animate-spin'))
+  .map(b => b.getAttribute('aria-label'))
 
-  it('renders a 44px accessible nearby-search trigger instead of eight inline buttons', () => {
-    renderCompact({ active: new Set(['restaurant', 'cafe']) });
+describe('PoiCategoryPill', () => {
+  it('FE-COMP-POIPILL-001: renders one segment per category, none pressed', () => {
+    pill()
+    const buttons = screen.getAllByRole('button')
+    expect(buttons).toHaveLength(POI_CATEGORIES.length)
+    expect(buttons.every(b => b.getAttribute('aria-pressed') === 'false')).toBe(true)
+  })
 
-    const trigger = screen.getByRole('button', { name: 'Explore places on the map' });
-    expect(trigger).toHaveAttribute('aria-haspopup', 'dialog');
-    expect(trigger).toHaveAttribute('aria-expanded', 'false');
-    expect(trigger).toHaveStyle({ width: '44px', height: '44px' });
-    expect(screen.queryByRole('button', { name: 'Restaurants' })).not.toBeInTheDocument();
-  });
+  it('FE-COMP-POIPILL-002: clicking a segment toggles its category', () => {
+    const onToggle = vi.fn()
+    pill({ onToggle })
+    fireEvent.click(screen.getAllByRole('button')[1])
+    expect(onToggle).toHaveBeenCalledWith(POI_CATEGORIES[1].key)
+  })
 
-  it('opens a labelled two-column category chooser and toggles a category', async () => {
-    const user = userEvent.setup();
-    const onToggle = vi.fn();
-    renderCompact({ onToggle });
+  it('FE-COMP-POIPILL-003: the active category spins while its fetch is in flight', () => {
+    pill({ active: new Set([CAFE.key]), loadingKeys: new Set([CAFE.key]) })
+    expect(spinning()).toEqual(['Cafés'])
+  })
 
-    await user.click(screen.getByRole('button', { name: 'Explore places on the map' }));
+  it('FE-COMP-POIPILL-004: a deselected category never spins, even with a lingering loading key', () => {
+    pill({ active: new Set([BAR.key]), loadingKeys: new Set([CAFE.key, BAR.key]) })
+    expect(spinning()).toEqual(['Bars & nightlife'])
+  })
 
-    const dialog = screen.getByRole('dialog', { name: 'Explore places on the map' });
-    expect(dialog).toHaveAttribute('data-columns', '2');
-    const restaurant = within(dialog).getByRole('button', { name: 'Restaurants' });
-    expect(restaurant).toHaveAttribute('aria-pressed', 'false');
+  it('FE-COMP-POIPILL-005: a failed category offers a retry', () => {
+    pill({ active: new Set([CAFE.key]), errorKeys: new Set([CAFE.key]) })
+    expect(screen.getByText('Search this area')).toBeInTheDocument()
+  })
 
-    await user.click(restaurant);
-    expect(onToggle).toHaveBeenCalledWith('restaurant');
-  });
+  it('FE-COMP-POIPILL-006: "search this area" reports the moved viewport', () => {
+    const onSearchArea = vi.fn()
+    pill({ active: new Set([CAFE.key]), moved: true, onSearchArea })
+    fireEvent.click(screen.getByText('Search this area'))
+    expect(onSearchArea).toHaveBeenCalled()
+  })
 
-  it('keeps loading, active, error, and search-this-area states available in the chooser', async () => {
-    const user = userEvent.setup();
-    const onSearchArea = vi.fn();
-    renderCompact({
-      active: new Set(['restaurant', 'cafe']),
-      loadingKeys: new Set(['cafe']),
-      errorKeys: new Set(['restaurant']),
-      moved: true,
-      onSearchArea,
-    });
+  // The phone map hands the bar the whole width between the screen margins, so
+  // its segments end up the size of everything else the thumb aims at there.
+  it('FE-COMP-POIPILL-007: fullWidth stretches the bar and spreads the segments', () => {
+    pill({ fullWidth: true })
+    const button = screen.getAllByRole('button')[0]
+    expect(button.style.flexGrow).toBe('1')
+    expect(button.style.width).toBe('auto')
+    expect((button.parentElement as HTMLElement).style.display).toBe('flex')
+  })
 
-    await user.click(screen.getByRole('button', { name: 'Explore places on the map' }));
-    const dialog = screen.getByRole('dialog', { name: 'Explore places on the map' });
-
-    expect(within(dialog).getByRole('button', { name: 'Restaurants' })).toHaveAttribute('aria-pressed', 'true');
-    expect(within(dialog).getByRole('button', { name: 'Cafés' })).toHaveAttribute('aria-busy', 'true');
-    await user.click(within(dialog).getByRole('button', { name: 'Search this area' }));
-    expect(onSearchArea).toHaveBeenCalledTimes(1);
-  });
-
-  it('closes on Escape and restores focus to the trigger', async () => {
-    const user = userEvent.setup();
-    renderCompact();
-
-    const trigger = screen.getByRole('button', { name: 'Explore places on the map' });
-    await user.click(trigger);
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
-
-    await user.keyboard('{Escape}');
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    expect(trigger).toHaveFocus();
-  });
-
-  it('closes when pointer input lands outside the trigger and chooser', async () => {
-    const user = userEvent.setup();
-    renderCompact();
-
-    await user.click(screen.getByRole('button', { name: 'Explore places on the map' }));
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
-
-    await user.click(document.body);
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-  });
-});
-
-describe('PoiCategoryPill wide mode', () => {
-  it('preserves the existing hover and focus tooltip for icon-only categories', async () => {
-    const user = userEvent.setup();
-    render(<PoiCategoryPill active={new Set()} onToggle={vi.fn()} />);
-
-    await user.hover(screen.getByRole('button', { name: 'Restaurants' }));
-
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('Restaurants');
-  });
-});
+  it('FE-COMP-POIPILL-008: without it the bar stays content-width, as the desktop map floats it', () => {
+    pill()
+    const button = screen.getAllByRole('button')[0]
+    expect(button.style.flexGrow).toBe('')
+    expect(button.style.width).toBe('34px')
+    expect((button.parentElement as HTMLElement).style.display).toBe('inline-flex')
+  })
+})

@@ -46,14 +46,12 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
   const [dragId, setDragId] = useState<number | null>(null)
   const [overId, setOverId] = useState<number | null>(null)
   const contribFor = usePluginViewContributions('packing', tripId)
-  const mutableItems = items.filter(item => !item.is_private || item.owner_id === currentUserId)
-  const mutableAllItems = allItems.filter(item => !item.is_private || item.owner_id === currentUserId)
 
   const handleReorderDrop = (targetId: number) => {
     const from = dragId
     setDragId(null); setOverId(null)
     if (from == null || from === targetId) return
-    const catOrder = mutableItems.map(i => i.id)
+    const catOrder = items.map(i => i.id)
     const fi = catOrder.indexOf(from)
     const ti = catOrder.indexOf(targetId)
     if (fi < 0 || ti < 0) return
@@ -61,9 +59,9 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
     catOrder.splice(ti, 0, from)
     // Slot the reordered category ids back into the positions this category's
     // items occupy in the global list, leaving every other category untouched.
-    const catIds = new Set(mutableItems.map(i => i.id))
+    const catIds = new Set(items.map(i => i.id))
     let ci = 0
-    const globalIds = mutableAllItems.map(i => (catIds.has(i.id) ? catOrder[ci++] : i.id))
+    const globalIds = allItems.map(i => (catIds.has(i.id) ? catOrder[ci++] : i.id))
     onReorder(globalIds)
   }
   const [editingName, setEditingName] = useState(false)
@@ -90,7 +88,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
   }, [showAssigneeDropdown])
 
   const abgehakt = items.filter(i => i.checked).length
-  const alleAbgehakt = mutableItems.length > 0 && mutableItems.every(item => !!item.checked)
+  const alleAbgehakt = abgehakt === items.length
   const dot = katColor(kategorie, allCategories)
 
   const handleSaveKatName = async () => {
@@ -100,19 +98,14 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
     catch { toast.error(t('packing.toast.renameError')) }
   }
 
+  // togglePackingItem rolls its own optimistic update back and reports the
+  // failure itself, so the bulk actions just drive it item by item. They go out
+  // together: serialised, a long list costs one round trip per item.
   const handleCheckAll = async () => {
-    try {
-      for (const item of mutableItems) {
-        if (!item.checked) await togglePackingItem(tripId, item.id, true)
-      }
-    } catch { toast.error(t('packing.toast.saveError')) }
+    await Promise.all(items.filter(i => !i.checked).map(i => togglePackingItem(tripId, i.id, true)))
   }
   const handleUncheckAll = async () => {
-    try {
-      for (const item of mutableItems) {
-        if (item.checked) await togglePackingItem(tripId, item.id, false)
-      }
-    } catch { toast.error(t('packing.toast.saveError')) }
+    await Promise.all(items.filter(i => i.checked).map(i => togglePackingItem(tripId, i.id, false)))
   }
   const handleDeleteAll = async () => {
     await onDeleteAll(items)
@@ -122,7 +115,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
   return (
     <div style={{ marginBottom: 6, background: 'var(--bg-card)', borderRadius: 14, border: '1px solid var(--border-secondary)', overflow: 'visible' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderBottom: offen ? '1px solid var(--border-secondary)' : 'none' }}>
-        <button onClick={() => setOffen(o => !o)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--text-faint)', flexShrink: 0 }}>
+        <button type="button" onClick={() => setOffen(o => !o)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', color: 'var(--text-faint)', flexShrink: 0 }}>
           {offen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         </button>
 
@@ -144,35 +137,46 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
 
         {/* Assignee chips */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 3, flex: 1, minWidth: 0, marginLeft: 4 }}>
-          {assignees.map(a => (
-            <div key={a.user_id} style={{ position: 'relative' }}
-              onClick={e => { e.stopPropagation(); if (canEdit) onSetAssignees(kategorie, assignees.filter(x => x.user_id !== a.user_id).map(x => x.user_id)) }}
-            >
-              <div className="assignee-chip"
-                style={{
-                  width: 22, height: 22, borderRadius: '50%', flexShrink: 0, cursor: canEdit ? 'pointer' : 'default',
-                  background: `hsl(${a.username.charCodeAt(0) * 37 % 360}, 55%, 55%)`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 'calc(10px * var(--fs-scale-caption, 1))', fontWeight: 700, color: 'white', textTransform: 'uppercase',
-                  border: '2px solid var(--bg-card)', transition: 'opacity 0.15s',
-                }}
+          {assignees.map(a => {
+            // The chip is only ever clickable for an editor, so read-only members
+            // get the plain div back rather than a focusable stop that does nothing.
+            const chip = (
+              <>
+                <div className="assignee-chip"
+                  style={{
+                    width: 22, height: 22, borderRadius: '50%', flexShrink: 0, cursor: canEdit ? 'pointer' : 'default',
+                    background: `hsl(${(a.username.codePointAt(0) ?? 0) * 37 % 360}, 55%, 55%)`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 'calc(10px * var(--fs-scale-caption, 1))', fontWeight: 700, color: 'white', textTransform: 'uppercase',
+                    border: '2px solid var(--bg-card)', transition: 'opacity 0.15s',
+                  }}
+                >
+                  {a.username[0]}
+                </div>
+                <div className="assignee-tooltip" style={{
+                  position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
+                  marginTop: 6, padding: '3px 8px', borderRadius: 6, zIndex: 60,
+                  background: 'var(--text-primary)', color: 'var(--bg-primary)',
+                  fontSize: 'calc(10px * var(--fs-scale-caption, 1))', fontWeight: 600, whiteSpace: 'nowrap',
+                  pointerEvents: 'none', opacity: 0, transition: 'opacity 0.15s',
+                }}>
+                  {a.username}
+                </div>
+              </>
+            )
+            if (!canEdit) return <div key={a.user_id} style={{ position: 'relative' }}>{chip}</div>
+            return (
+              <button type="button" key={a.user_id}
+                style={{ position: 'relative', background: 'none', border: 'none', padding: 0, font: 'inherit', cursor: 'pointer' }}
+                onClick={e => { e.stopPropagation(); onSetAssignees(kategorie, assignees.filter(x => x.user_id !== a.user_id).map(x => x.user_id)) }}
               >
-                {a.username[0]}
-              </div>
-              <div className="assignee-tooltip" style={{
-                position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
-                marginTop: 6, padding: '3px 8px', borderRadius: 6, zIndex: 60,
-                background: 'var(--text-primary)', color: 'var(--bg-primary)',
-                fontSize: 'calc(10px * var(--fs-scale-caption, 1))', fontWeight: 600, whiteSpace: 'nowrap',
-                pointerEvents: 'none', opacity: 0, transition: 'opacity 0.15s',
-              }}>
-                {a.username}
-              </div>
-            </div>
-          ))}
+                {chip}
+              </button>
+            )
+          })}
           {canEdit && (
           <div ref={assigneeDropdownRef} style={{ position: 'relative' }}>
-            <button onClick={e => { e.stopPropagation(); setShowAssigneeDropdown(v => !v) }}
+            <button type="button" onClick={e => { e.stopPropagation(); setShowAssigneeDropdown(v => !v) }}
               style={{
                 width: 20, height: 20, borderRadius: '50%', border: '1.5px dashed var(--border-primary)',
                 background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -192,7 +196,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
                 {tripMembers.map(m => {
                   const isAssigned = assignees.some(a => a.user_id === m.id)
                   return (
-                    <button key={m.id} onClick={e => {
+                    <button type="button" key={m.id} onClick={e => {
                       e.stopPropagation()
                       const newIds = isAssigned
                         ? assignees.filter(a => a.user_id !== m.id).map(a => a.user_id)
@@ -211,7 +215,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
                     >
                       <div style={{
                         width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
-                        background: `hsl(${m.username.charCodeAt(0) * 37 % 360}, 55%, 55%)`,
+                        background: `hsl(${(m.username.codePointAt(0) ?? 0) * 37 % 360}, 55%, 55%)`,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                         fontSize: 'calc(10px * var(--fs-scale-caption, 1))', fontWeight: 700, color: 'white', textTransform: 'uppercase',
                       }}>
@@ -242,8 +246,8 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
           {abgehakt}/{items.length}
         </span>
 
-        {canEdit && <div style={{ position: 'relative' }}>
-          <button ref={menuBtnRef} onClick={() => setShowMenu(m => !m)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', borderRadius: 6, display: 'flex', color: 'var(--text-faint)' }}
+        <div style={{ position: 'relative' }}>
+          <button type="button" ref={menuBtnRef} onClick={() => setShowMenu(m => !m)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', borderRadius: 6, display: 'flex', color: 'var(--text-faint)' }}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--text-secondary)'} onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}>
             <MoreHorizontal size={15} />
           </button>
@@ -251,18 +255,20 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
             const rect = menuBtnRef.current?.getBoundingClientRect();
             return (
             <>
-              <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setShowMenu(false)} />
+              <div role="presentation" style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setShowMenu(false)} />
               <div style={{ position: 'fixed', right: rect ? window.innerWidth - rect.right : 0, top: rect ? rect.bottom + 4 : 0, zIndex: 100, background: 'var(--bg-card)', border: '1px solid var(--border-primary)', borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.1)', padding: 4, minWidth: 170 }}>
-                <MenuItem icon={<Pencil size={13} />} label={t('packing.menuRename')} onClick={() => { setEditingName(true); setShowMenu(false) }} />
+                {canEdit && <MenuItem icon={<Pencil size={13} />} label={t('packing.menuRename')} onClick={() => { setEditingName(true); setShowMenu(false) }} />}
                 <MenuItem icon={<CheckCheck size={13} />} label={t('packing.menuCheckAll')} onClick={() => { handleCheckAll(); setShowMenu(false) }} />
                 <MenuItem icon={<RotateCcw size={13} />} label={t('packing.menuUncheckAll')} onClick={() => { handleUncheckAll(); setShowMenu(false) }} />
+                {canEdit && <>
                 <div style={{ height: 1, background: 'var(--bg-tertiary)', margin: '4px 0' }} />
                 <MenuItem icon={<Trash2 size={13} />} label={t('packing.menuDeleteCat')} danger onClick={handleDeleteAll} />
+                </>}
               </div>
             </>
             );
           })()}
-        </div>}
+        </div>
       </div>
 
       {offen && (
@@ -271,7 +277,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
             const contributions = contribFor(item.id)
             return (
               <React.Fragment key={item.id}>
-                <ArtikelZeile item={item} tripId={tripId} categories={allCategories} onDelete={onDeleteItem} bagTrackingEnabled={bagTrackingEnabled} bags={bags} onCreateBag={onCreateBag} canEdit={canEdit}
+                <ArtikelZeile item={item} tripId={tripId} categories={allCategories} onCategoryChange={() => {}} onDelete={onDeleteItem} bagTrackingEnabled={bagTrackingEnabled} bags={bags} onCreateBag={onCreateBag} canEdit={canEdit}
                   tripMembers={tripMembers} currentUserId={currentUserId} onSetSharing={onSetSharing} onClone={onClone} onJoin={onJoin} onLeave={onLeave}
                   drag={canEdit ? {
                     isDragging: dragId === item.id,
@@ -304,18 +310,19 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
                 placeholder={t('packing.addItemPlaceholder')}
                 style={{ flex: 1, padding: '6px 10px', borderRadius: 8, border: '1px solid var(--border-primary)', fontSize: 'calc(12.5px * var(--fs-scale-body, 1))', fontFamily: 'inherit', outline: 'none', color: 'var(--text-primary)', background: 'var(--bg-input)' }}
               />
-              <button onClick={() => { if (newItemName.trim()) { onAddItem(kategorie, newItemName.trim()); setNewItemName(''); setTimeout(() => addItemRef.current?.focus(), 30) } }}
+              {/* disabled while the field is empty, so no extra guard here */}
+              <button type="button" onClick={() => { onAddItem(kategorie, newItemName.trim()); setNewItemName(''); setTimeout(() => addItemRef.current?.focus(), 30) }}
                 disabled={!newItemName.trim()}
                 style={{ padding: '5px 8px', borderRadius: 8, border: 'none', background: newItemName.trim() ? 'var(--text-primary)' : 'var(--border-primary)', color: 'var(--bg-primary)', cursor: newItemName.trim() ? 'pointer' : 'default', display: 'flex' }}>
                 <Plus size={14} />
               </button>
-              <button onClick={() => { setShowAddItem(false); setNewItemName('') }}
+              <button type="button" onClick={() => { setShowAddItem(false); setNewItemName('') }}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, display: 'flex', color: 'var(--text-faint)' }}>
                 <X size={14} />
               </button>
             </div>
           ) : (
-            <button onClick={() => { setShowAddItem(true); setTimeout(() => addItemRef.current?.focus(), 30) }}
+            <button type="button" onClick={() => { setShowAddItem(true); setTimeout(() => addItemRef.current?.focus(), 30) }}
               style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 10px', margin: '2px 4px', borderRadius: 8, border: 'none', background: 'none', cursor: 'pointer', fontSize: 'calc(12px * var(--fs-scale-body, 1))', color: 'var(--text-faint)', fontFamily: 'inherit' }}
               onMouseEnter={e => e.currentTarget.style.color = 'var(--text-secondary)'}
               onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}>
@@ -337,7 +344,7 @@ interface MenuItemProps {
 
 function MenuItem({ icon, label, onClick, danger = false }: MenuItemProps) {
   return (
-    <button onClick={onClick} style={{
+    <button type="button" onClick={onClick} style={{
       display: 'flex', alignItems: 'center', gap: 8, width: '100%',
       padding: '7px 10px', background: 'none', border: 'none', cursor: 'pointer',
       fontSize: 'calc(12.5px * var(--fs-scale-body, 1))', fontFamily: 'inherit', borderRadius: 7, textAlign: 'left',

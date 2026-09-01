@@ -55,6 +55,19 @@ vi.mock('../../src/config', () => ({
   DEFAULT_LANGUAGE: 'en',
 }));
 vi.mock('../../src/websocket', () => ({ broadcast: vi.fn(), broadcastToUser: vi.fn() }));
+// BOOT-007 boots with NODE_ENV=production, which opens the cron gate — keep the
+// registrar inert so a bootstrap test never schedules real jobs or runs boot
+// sweeps against the real uploads/data dirs. The gate itself is covered by
+// tests/integration/scheduler-gate.test.ts.
+vi.mock('../../src/nest/scheduling/cron-registrar.service', () => ({
+  CronRegistrarService: class {
+    isEnabled() { return false; }
+    register() { return false; }
+    unregister() {}
+    get jobCount() { return 0; }
+    onApplicationShutdown() {}
+  },
+}));
 
 describe('BOOTSTRAP (F6) — unified NestJS app serves the whole surface', () => {
   let app: INestApplication;

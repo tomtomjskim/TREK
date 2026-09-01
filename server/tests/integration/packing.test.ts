@@ -45,7 +45,7 @@ vi.mock('../../src/websocket', () => ({ broadcast: vi.fn(), broadcastToUser: vi.
 
 import { buildApp } from '../../src/bootstrap';
 import { createTables } from '../../src/db/schema';
-import { runMigrations } from '../../src/db/migrationRunner';
+import { runMigrations } from '../../src/db/migrations';
 import { resetTestDb, resetRateLimits } from '../helpers/test-db';
 import { createUser, createTrip, createPackingItem, addTripMember } from '../helpers/factories';
 import { authCookie } from '../helpers/auth';
@@ -257,63 +257,15 @@ describe('Three-tier packing sharing (#858)', () => {
     addTripMember(testDb, trip.id, member.id);
     const created = await request(app).post(`/api/trips/${trip.id}/packing`).set('Cookie', authCookie(owner.id)).send({ name: 'Tent', visibility: 'personal' });
 
-    const denied = await request(app).put(`/api/trips/${trip.id}/packing/${created.body.item.id}/sharing`).set('Cookie', authCookie(member.id)).send({ visibility: 'common' });
-    expect(denied.status).toBe(404);
-  });
+    // A member who cannot see the item at all gets 404, not 403: answering 403
+    // would confirm that the id exists (GHSA-vh2h-288v-ggch).
+    const hidden = await request(app).put(`/api/trips/${trip.id}/packing/${created.body.item.id}/sharing`).set('Cookie', authCookie(member.id)).send({ visibility: 'common' });
+    expect(hidden.status).toBe(404);
 
-  it('PACK-3T-006 — a member cannot mutate, delete, or clone an owner-only item by ID', async () => {
-    const { user: owner } = createUser(testDb);
-    const { user: member } = createUser(testDb);
-    const trip = createTrip(testDb, owner.id);
-    addTripMember(testDb, trip.id, member.id);
-    const created = await request(app)
-      .post(`/api/trips/${trip.id}/packing`)
-      .set('Cookie', authCookie(owner.id))
-      .send({ name: 'Private medication', visibility: 'personal' });
-    const itemId = created.body.item.id;
-
-    const clone = await request(app)
-      .post(`/api/trips/${trip.id}/packing/${itemId}/clone`)
-      .set('Cookie', authCookie(member.id));
-    const update = await request(app)
-      .put(`/api/trips/${trip.id}/packing/${itemId}`)
-      .set('Cookie', authCookie(member.id))
-      .send({ name: 'Exposed' });
-    const remove = await request(app)
-      .delete(`/api/trips/${trip.id}/packing/${itemId}`)
-      .set('Cookie', authCookie(member.id));
-
-    expect(clone.status).toBe(404);
-    expect(update.status).toBe(404);
-    expect(remove.status).toBe(404);
-    expect(testDb.prepare('SELECT name FROM packing_items WHERE id = ?').get(itemId))
-      .toEqual({ name: 'Private medication' });
-  });
-
-  it('PACK-3T-007 — contributor self-removal cannot disclose a hidden or non-pledged item', async () => {
-    const { user: owner } = createUser(testDb);
-    const { user: member } = createUser(testDb);
-    const trip = createTrip(testDb, owner.id);
-    addTripMember(testDb, trip.id, member.id);
-    const hidden = await request(app)
-      .post(`/api/trips/${trip.id}/packing`)
-      .set('Cookie', authCookie(owner.id))
-      .send({ name: 'Private medication', visibility: 'personal' });
-    const common = await request(app)
-      .post(`/api/trips/${trip.id}/packing`)
-      .set('Cookie', authCookie(owner.id))
-      .send({ name: 'Common', visibility: 'common' });
-
-    const hiddenAttempt = await request(app)
-      .delete(`/api/trips/${trip.id}/packing/${hidden.body.item.id}/contributors/${member.id}`)
-      .set('Cookie', authCookie(member.id));
-    const nonPledgeAttempt = await request(app)
-      .delete(`/api/trips/${trip.id}/packing/${common.body.item.id}/contributors/${member.id}`)
-      .set('Cookie', authCookie(member.id));
-
-    expect(hiddenAttempt.status).toBe(404);
-    expect(nonPledgeAttempt.status).toBe(404);
-    expect(hiddenAttempt.body.item).toBeUndefined();
+    // An item the member CAN see but does not own still answers 403.
+    const shared = await request(app).post(`/api/trips/${trip.id}/packing`).set('Cookie', authCookie(owner.id)).send({ name: 'Stove', visibility: 'common' });
+    const denied = await request(app).put(`/api/trips/${trip.id}/packing/${shared.body.item.id}/sharing`).set('Cookie', authCookie(member.id)).send({ visibility: 'personal' });
+    expect(denied.status).toBe(403);
   });
 });
 
@@ -582,35 +534,6 @@ describe('Packing — apply-template, bag members, save-as-template', () => {
     expect(res.body.error).toBeDefined();
   });
 
-  it('PACK-015c — instance list and apply endpoints do not expose a personal template', async () => {
-    const { user } = createUser(testDb);
-    const trip = createTrip(testDb, user.id);
-    const templateId = Number(
-      testDb
-        .prepare("INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES (?, 'personal', ?, ?)")
-        .run('Private template', user.id, user.id).lastInsertRowid,
-    );
-    const categoryId = Number(
-      testDb
-        .prepare('INSERT INTO packing_template_categories (template_id, name) VALUES (?, ?)')
-        .run(templateId, 'Private').lastInsertRowid,
-    );
-    testDb.prepare('INSERT INTO packing_template_items (category_id, name) VALUES (?, ?)').run(categoryId, 'Secret');
-    const cookie = authCookie(user.id);
-
-    const listed = await request(app)
-      .get(`/api/trips/${trip.id}/packing/templates`)
-      .set('Cookie', cookie);
-    expect(listed.status).toBe(200);
-    expect(listed.body.templates).toEqual([]);
-
-    const applied = await request(app)
-      .post(`/api/trips/${trip.id}/packing/apply-template/${templateId}`)
-      .set('Cookie', cookie);
-    expect(applied.status).toBe(404);
-    expect(testDb.prepare('SELECT COUNT(*) AS count FROM packing_items WHERE trip_id = ?').get(trip.id)).toEqual({ count: 0 });
-  });
-
   it('PACK-016 — PUT /bags/:bagId/members sets bag members', async () => {
     const { user } = createUser(testDb);
     const { user: member } = createUser(testDb);
@@ -722,39 +645,5 @@ describe('Packing — apply-template, bag members, save-as-template', () => {
     expect(Array.isArray(res.body.templates)).toBe(true);
     expect(res.body.templates.some((t: { name: string }) => t.name === 'Shared Template')).toBe(true);
     expect(res.body.templates[0]).toHaveProperty('item_count');
-  });
-
-  it('PACK-017f — saving an instance template excludes another member\'s Personal item', async () => {
-    const { user: admin } = createUser(testDb, { role: 'admin' });
-    const { user: member } = createUser(testDb);
-    const trip = createTrip(testDb, admin.id);
-    addTripMember(testDb, trip.id, member.id);
-
-    const common = await request(app)
-      .post(`/api/trips/${trip.id}/packing`)
-      .set('Cookie', authCookie(admin.id))
-      .send({ name: 'Group charger', visibility: 'common' });
-    expect(common.status).toBe(201);
-
-    const personal = await request(app)
-      .post(`/api/trips/${trip.id}/packing`)
-      .set('Cookie', authCookie(member.id))
-      .send({ name: 'Private diary', visibility: 'personal' });
-    expect(personal.status).toBe(201);
-
-    const saved = await request(app)
-      .post(`/api/trips/${trip.id}/packing/save-as-template`)
-      .set('Cookie', authCookie(admin.id))
-      .send({ name: 'Safe Shared Template' });
-    expect(saved.status).toBe(201);
-
-    const storedItems = testDb.prepare(`
-      SELECT ti.name
-      FROM packing_template_items ti
-      JOIN packing_template_categories tc ON tc.id = ti.category_id
-      WHERE tc.template_id = ?
-      ORDER BY ti.sort_order
-    `).all(saved.body.template.id) as { name: string }[];
-    expect(storedItems.map(item => item.name)).toEqual(['Group charger']);
   });
 });

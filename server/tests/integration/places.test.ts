@@ -7,7 +7,7 @@
  * - PLACE-014: reordering within a day is tested in assignments.test.ts
  * - PLACE-019: GPX bulk import tested here using the test fixture
  */
-import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll, type MockInstance } from 'vitest';
 import request from 'supertest';
 import type { Application } from 'express';
 import type { INestApplication } from '@nestjs/common';
@@ -48,35 +48,24 @@ vi.mock('../../src/config', () => ({
   DEFAULT_LANGUAGE: 'en',
 }));
 vi.mock('../../src/websocket', () => ({ broadcast: vi.fn(), broadcastToUser: vi.fn() }));
-vi.mock('../../src/services/placeService', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/services/placeService')>();
-  return {
-    ...actual,
-    importGoogleList: vi.fn(),
-    searchPlaceImage: vi.fn(),
-  };
-});
-vi.mock('../../src/services/placeEnrichment', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../src/services/placeEnrichment')>();
-  return {
-    ...actual,
-    previewTripPlaceEnrichment: vi.fn(),
-    applyTripPlaceEnrichment: vi.fn(),
-  };
-});
 
 import { buildApp } from '../../src/bootstrap';
 import { createTables } from '../../src/db/schema';
-import { runMigrations } from '../../src/db/migrationRunner';
+import { runMigrations } from '../../src/db/migrations';
 import { resetTestDb, resetRateLimits } from '../helpers/test-db';
 import { createUser, createAdmin, createTrip, createPlace, addTripMember } from '../helpers/factories';
 import { authCookie } from '../helpers/auth';
-import * as placeService from '../../src/services/placeService';
-import * as placeEnrichment from '../../src/services/placeEnrichment';
-import { invalidatePermissionsCache } from '../../src/services/permissions';
+import { PlacesService } from '../../src/nest/places/places.service';
+import { invalidatePermissionsCache } from '../../src/nest/permissions/permissions-cache';
 
 let nestApp: INestApplication;
 let app: Application;
+// Since the place DI fold the two outbound-I/O paths are stubbed as spies on the
+// container's PlacesService singleton (permissions precedent) instead of a path
+// mock of the deleted services/placeService. Bare spies keep the real
+// implementation, so only the *Once overrides below change behaviour.
+let importGoogleList: MockInstance;
+let searchPlaceImage: MockInstance;
 const GPX_FIXTURE = path.join(__dirname, '../fixtures/test.gpx');
 const KML_FIXTURE = path.join(__dirname, '../fixtures/test.kml');
 const KML_NESTED_FIXTURE = path.join(__dirname, '../fixtures/test-nested.kml');
@@ -94,8 +83,10 @@ beforeEach(() => {
   resetTestDb(testDb);
   resetRateLimits(nestApp);
   invalidatePermissionsCache();
-  vi.mocked(placeEnrichment.previewTripPlaceEnrichment).mockReset();
-  vi.mocked(placeEnrichment.applyTripPlaceEnrichment).mockReset();
+  // Re-attached per test: one describe below calls vi.restoreAllMocks() in its
+  // afterEach, which would otherwise strip these for every later test.
+  importGoogleList = vi.spyOn(nestApp.get(PlacesService), 'importGoogleList');
+  searchPlaceImage = vi.spyOn(nestApp.get(PlacesService), 'searchImage');
 });
 
 afterAll(async () => {
@@ -231,75 +222,6 @@ describe('List places', () => {
     expect(res.status).toBe(200);
     expect(res.body.places).toHaveLength(2);
     expect(res.body.places.every((p: any) => p.category?.id === cats[0].id)).toBe(true);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Preview-first Google enrichment
-// ─────────────────────────────────────────────────────────────────────────────
-
-describe('Place enrichment', () => {
-  it('PLACE-ENRICH-001 — preview requires trip access before provider work', async () => {
-    const { user: owner } = createUser(testDb);
-    const { user: outsider } = createUser(testDb);
-    const trip = createTrip(testDb, owner.id);
-
-    const res = await request(app)
-      .post(`/api/trips/${trip.id}/places/enrichment/preview`)
-      .set('Cookie', authCookie(outsider.id))
-      .send({});
-
-    expect(res.status).toBe(404);
-    expect(placeEnrichment.previewTripPlaceEnrichment).not.toHaveBeenCalled();
-  });
-
-  it('PLACE-ENRICH-002 — preview forwards a validated batch and returns usage', async () => {
-    const { user } = createUser(testDb);
-    const trip = createTrip(testDb, user.id);
-    const payload = { entries: [], errors: [], requested: 0, processed: 0, skipped: 0, stopped: null, usage: [] };
-    vi.mocked(placeEnrichment.previewTripPlaceEnrichment).mockResolvedValueOnce(payload);
-
-    const res = await request(app)
-      .post(`/api/trips/${trip.id}/places/enrichment/preview`)
-      .set('Cookie', authCookie(user.id))
-      .send({ place_ids: [1, 2], lang: 'ko' });
-
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual(payload);
-    expect(placeEnrichment.previewTripPlaceEnrichment).toHaveBeenCalledWith(
-      String(trip.id), user.id, { place_ids: [1, 2], lang: 'ko' },
-    );
-  });
-
-  it('PLACE-ENRICH-003 — apply rejects malformed Google IDs before provider work', async () => {
-    const { user } = createUser(testDb);
-    const trip = createTrip(testDb, user.id);
-
-    const res = await request(app)
-      .post(`/api/trips/${trip.id}/places/enrichment/apply`)
-      .set('Cookie', authCookie(user.id))
-      .send({ matches: [{ place_id: 1, google_place_id: '../../bad?key=x' }] });
-
-    expect(res.status).toBe(400);
-    expect(placeEnrichment.applyTripPlaceEnrichment).not.toHaveBeenCalled();
-  });
-
-  it('PLACE-ENRICH-004 — apply maps a no-progress hard stop to 429', async () => {
-    const { user } = createUser(testDb);
-    const trip = createTrip(testDb, user.id);
-    vi.mocked(placeEnrichment.applyTripPlaceEnrichment).mockResolvedValueOnce({
-      updated: [], errors: [], requested: 1, processed: 0, skipped: 0,
-      stopped: { code: 'GOOGLE_API_MONTHLY_CAP_REACHED', error: 'cap reached', sku: 'place_details_enterprise' },
-      usage: [],
-    });
-
-    const res = await request(app)
-      .post(`/api/trips/${trip.id}/places/enrichment/apply`)
-      .set('Cookie', authCookie(user.id))
-      .send({ matches: [{ place_id: 1, google_place_id: 'ChIJValid_123' }] });
-
-    expect(res.status).toBe(429);
-    expect(res.body).toMatchObject({ error: 'cap reached', code: 'GOOGLE_API_MONTHLY_CAP_REACHED' });
   });
 });
 
@@ -627,7 +549,7 @@ describe('Naver list import', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
+        text: async () => JSON.stringify({
           folder: { name: 'Seoul Food', bookmarkCount: 22 },
           bookmarkList: [
             { name: 'SINSAJEON', px: 127.0226195, py: 37.5186363, memo: null, address: 'Sinsa-dong Seoul' },
@@ -637,7 +559,7 @@ describe('Naver list import', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({
+        text: async () => JSON.stringify({
           folder: { name: 'Seoul Food', bookmarkCount: 22 },
           bookmarkList: [
             { name: 'WAIKIKI MARKET', px: 126.8886523, py: 37.5589079, memo: null, address: 'Mapo-gu Seoul' },
@@ -711,7 +633,7 @@ describe('Naver list import', () => {
 
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ folder: { name: 'Empty List', bookmarkCount: 0 }, bookmarkList: [] }),
+      text: async () => JSON.stringify({ folder: { name: 'Empty List', bookmarkCount: 0 }, bookmarkList: [] }),
     });
 
     vi.stubGlobal('fetch', fetchMock);
@@ -734,7 +656,7 @@ describe('Naver list import', () => {
 
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
-      json: async () => ({
+      text: async () => JSON.stringify({
         folder: { name: 'No Coords', bookmarkCount: 2 },
         bookmarkList: [
           { name: 'Place A', px: undefined, py: undefined },
@@ -763,7 +685,7 @@ describe('Naver list import', () => {
 
     const fetchMock = vi.fn().mockResolvedValueOnce({
       ok: true,
-      json: async () => ({
+      text: async () => JSON.stringify({
         folder: { name: 'Seoul', bookmarkCount: 1 },
         bookmarkList: [{ name: 'Gyeongbokgung', px: 126.9770, py: 37.5796, memo: null, address: 'Sejongno Seoul' }],
       }),
@@ -974,7 +896,7 @@ describe('Google Maps list import', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
 
-    vi.mocked(placeService.importGoogleList).mockResolvedValueOnce({
+    importGoogleList.mockResolvedValueOnce({
       places: [{ id: 1, name: 'Mocked Place' } as any],
       listName: 'My List',
     } as any);
@@ -992,7 +914,7 @@ describe('Google Maps list import', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
 
-    vi.mocked(placeService.importGoogleList).mockResolvedValueOnce({
+    importGoogleList.mockResolvedValueOnce({
       error: 'Invalid list URL',
       status: 422,
     } as any);
@@ -1009,7 +931,7 @@ describe('Google Maps list import', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
 
-    vi.mocked(placeService.importGoogleList).mockRejectedValueOnce(new Error('Network failure'));
+    importGoogleList.mockRejectedValueOnce(new Error('Network failure'));
 
     const res = await request(app)
       .post(`/api/trips/${trip.id}/places/import/google-list`)
@@ -1029,7 +951,7 @@ describe('Place image search', () => {
     const trip = createTrip(testDb, user.id);
     const place = createPlace(testDb, trip.id, { name: 'Louvre' });
 
-    vi.mocked(placeService.searchPlaceImage).mockResolvedValueOnce({
+    searchPlaceImage.mockResolvedValueOnce({
       photos: [{ url: 'https://example.com/photo.jpg' }],
     } as any);
 
@@ -1045,7 +967,7 @@ describe('Place image search', () => {
     const trip = createTrip(testDb, user.id);
     const place = createPlace(testDb, trip.id, { name: 'Tower' });
 
-    vi.mocked(placeService.searchPlaceImage).mockResolvedValueOnce({
+    searchPlaceImage.mockResolvedValueOnce({
       error: 'No images found',
       status: 404,
     } as any);
@@ -1062,7 +984,7 @@ describe('Place image search', () => {
     const trip = createTrip(testDb, user.id);
     const place = createPlace(testDb, trip.id, { name: 'Bridge' });
 
-    vi.mocked(placeService.searchPlaceImage).mockRejectedValueOnce(new Error('Unsplash down'));
+    searchPlaceImage.mockRejectedValueOnce(new Error('Unsplash down'));
 
     const res = await request(app)
       .get(`/api/trips/${trip.id}/places/${place.id}/image`)
@@ -1103,5 +1025,51 @@ describe('Delete place — not found', () => {
       .delete(`/api/trips/${trip.id}/places/99999`)
       .set('Cookie', authCookie(user.id));
     expect(res.status).toBe(404);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom place image upload (#1136)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Custom place image upload', () => {
+  const FIXTURE_JPEG = path.join(__dirname, '../fixtures/small-image.jpg');
+  const FIXTURE_PDF = path.join(__dirname, '../fixtures/test.pdf');
+
+  it('PLACE-026 — POST /:id/image stores the upload, then PUT image_url:null clears it', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const place = createPlace(testDb, trip.id, { name: 'Snap' });
+
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/places/${place.id}/image`)
+      .set('Cookie', authCookie(user.id))
+      .attach('image', FIXTURE_JPEG);
+    expect(res.status).toBe(200);
+    expect(res.body.place.image_url).toMatch(/^\/uploads\/places\/[0-9a-f-]{36}\./);
+    // The bytes land at the final uploads/places path under the bare uuid name.
+    const fsMod = require('fs') as typeof import('fs');
+    const pathMod = require('path') as typeof import('path');
+    const diskName = res.body.place.image_url.replace('/uploads/places/', '');
+    expect(fsMod.existsSync(pathMod.join(__dirname, '../../uploads/places', diskName))).toBe(true);
+
+    const cleared = await request(app)
+      .put(`/api/trips/${trip.id}/places/${place.id}`)
+      .set('Cookie', authCookie(user.id))
+      .send({ image_url: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.place.image_url).toBeNull();
+  });
+
+  it('PLACE-027 — uploading a non-image (PDF) is rejected', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const place = createPlace(testDb, trip.id, { name: 'Snap' });
+
+    const res = await request(app)
+      .post(`/api/trips/${trip.id}/places/${place.id}/image`)
+      .set('Cookie', authCookie(user.id))
+      .attach('image', FIXTURE_PDF);
+    expect(res.status).toBe(400);
   });
 });

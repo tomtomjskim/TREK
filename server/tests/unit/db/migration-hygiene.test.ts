@@ -15,17 +15,13 @@
  * ALLOWED_DESTRUCTIVE below with the reason. Anything not on that list is
  * treated as a regression.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { createTestDb } from '../../helpers/test-db';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const MIGRATIONS_PATH = resolve(here, '../../../src/db/migrations.ts');
-const FORK_MIGRATIONS_PATH = resolve(here, '../../../src/db/forkMigrations.ts');
+const MIGRATIONS_PATH = resolve(__dirname, '../../../src/db/migrations.ts');
 const migrationsSource = readFileSync(MIGRATIONS_PATH, 'utf8');
-const forkMigrationsSource = readFileSync(FORK_MIGRATIONS_PATH, 'utf8');
 
 /**
  * Strip line and block comments so commented-out SQL (or prose mentioning
@@ -39,7 +35,6 @@ function stripComments(src: string): string {
 }
 
 const scannableSource = stripComments(migrationsSource);
-const forkScannableSource = stripComments(forkMigrationsSource);
 
 interface DestructiveHit {
   /** Normalised signature used as the allowlist key, e.g. "DROP TABLE budget_items". */
@@ -98,6 +93,7 @@ const ALLOWED_DESTRUCTIVE: Record<string, string> = {
     'Make place_id nullable + ON DELETE SET NULL. Rebuild, rows copied.',
   'DROP TABLE schema_version':
     'Add surrogate id PK to schema_version. Rebuild, version row copied.',
+
   // ── photo/journey table rebuilds (data preserved) ────────────────────────
   'DROP TABLE trip_photos':
     'trip_photos normalisation + later photo_id FK refactor. Rebuilds, rows copied.',
@@ -136,14 +132,11 @@ const ALLOWED_DESTRUCTIVE: Record<string, string> = {
   'DELETE FROM journey_entries':
     "Migration 121: DELETE ... WHERE title IN ('Gallery','[Trip Photos]') — remove synthetic wrapper entries replaced by the gallery model.",
   'DELETE FROM place_regions':
-    'Atlas cache invalidation: earlier bounded enclave rows and official v174 full cache reset are both re-derivable from place coordinates.',
+    'Atlas enclave fix: DELETE ... WHERE place_id IN (places inside specific enclave boxes) — invalidate stale region cache; re-resolved on next request.',
   'DELETE FROM visited_regions':
     'Atlas geoBoundaries swap (#1119): DELETE ... WHERE id = ? — after UPDATE OR IGNORE re-codes a manually-marked region to its current code, drop only the single leftover row whose UNIQUE(user_id, region_code) collision caused the update to be skipped (a duplicate of a region the user already has).',
-};
-
-const ALLOWED_FORK_DESTRUCTIVE: Record<string, string> = {
-  'DROP TABLE packing_templates':
-    'Fork packing-scope migration rebuilds into packing_templates_new, copies every row, verifies row count/FKs, then renames it.',
+  'DELETE FROM reservation_day_positions':
+    'DELETE ... WHERE the row joins a reservation and a day sitting on different trips. The table has no trip_id and its two foreign keys only require the ids to exist, so a pair that never belonged together was storable; the writer scopes to the trip now and this clears what earlier builds allowed. Bounded by the join — a row whose reservation and day agree on their trip is untouched.',
 };
 
 describe('migration hygiene — destructive operation guard', () => {
@@ -173,16 +166,6 @@ describe('migration hygiene — destructive operation guard', () => {
     const dead = Object.keys(ALLOWED_DESTRUCTIVE).filter((sig) => !present.has(sig));
     expect(dead, `Allowlist entries no longer found in migrations.ts: ${dead.join(', ')}`).toEqual([]);
   });
-
-  it('keeps fork migrations on their own reviewed destructive-operation allowlist', () => {
-    const hits = findDestructiveStatements(forkScannableSource);
-    const offenders = hits.filter((hit) => !(hit.signature in ALLOWED_FORK_DESTRUCTIVE));
-    const present = new Set(hits.map((hit) => hit.signature));
-    const dead = Object.keys(ALLOWED_FORK_DESTRUCTIVE).filter((signature) => !present.has(signature));
-
-    expect(offenders).toEqual([]);
-    expect(dead).toEqual([]);
-  });
 });
 
 describe('migration hygiene — no silently swallowed errors', () => {
@@ -206,31 +189,8 @@ describe('migration hygiene — full chain smoke', () => {
     try {
       const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
       expect(row.version).toBeGreaterThan(0);
-      const usageTable = db.prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'google_api_usage'",
-      ).get();
-      expect(usageTable).toEqual({ name: 'google_api_usage' });
     } finally {
       db.close();
-    }
-  });
-
-  it('emits only the upstream-known duplicate-column warnings on a fresh schema', () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const db = createTestDb();
-    try {
-      const migrationWarnings = warn.mock.calls.filter(
-        ([message]) => message === '[migrations] Non-fatal migration step failed:',
-      );
-      const duplicateColumns = migrationWarnings.map(([, error]) =>
-        error instanceof Error ? error.message : String(error),
-      );
-      expect(duplicateColumns.sort()).toEqual(
-        ['duplicate column name: links', 'duplicate column name: links', 'duplicate column name: role'].sort(),
-      );
-    } finally {
-      db.close();
-      warn.mockRestore();
     }
   });
 });

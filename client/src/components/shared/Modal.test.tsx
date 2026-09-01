@@ -1,12 +1,14 @@
 import { render, screen, fireEvent } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
 import Modal from './Modal';
+import { lockBodyScroll, resetBodyScrollLock } from '../../utils/bodyScrollLock';
 
 describe('Modal', () => {
   const onClose = vi.fn();
 
   beforeEach(() => {
     onClose.mockClear();
+    resetBodyScrollLock();
     document.body.style.overflow = '';
   });
 
@@ -81,24 +83,17 @@ describe('Modal', () => {
     expect(document.body.style.overflow).toBe('hidden');
   });
 
-  it('FE-COMP-MODAL-012: exposes linked alert-dialog semantics when requested', () => {
-    render(
-      <Modal
-        isOpen={true}
-        onClose={onClose}
-        title="Remove 2026"
-        dialogRole="alertdialog"
-        ariaDescribedBy="remove-year-description"
-      >
-        <p id="remove-year-description">This cannot be undone.</p>
-      </Modal>
-    );
+  // #1809: the document is the scroller on a phone, so closing this modal must
+  // not unlock the page while another overlay is still holding the lock.
+  it('FE-COMP-MODAL-012: unmounting keeps a lock another overlay still holds', () => {
+    const otherOverlay = lockBodyScroll();
+    const { unmount } = render(<Modal isOpen={true} onClose={onClose} />);
+    expect(document.body.style.overflow).toBe('hidden');
 
-    const dialog = screen.getByRole('alertdialog');
-    expect(dialog).toHaveAttribute('aria-modal', 'true');
-    expect(dialog).toHaveAttribute('aria-describedby', 'remove-year-description');
-    const titleId = dialog.getAttribute('aria-labelledby');
-    expect(titleId).toBeTruthy();
-    expect(document.getElementById(titleId!)).toHaveTextContent('Remove 2026');
+    unmount();
+    expect(document.body.style.overflow).toBe('hidden');
+
+    otherOverlay();
+    expect(document.body.style.overflow).toBe('');
   });
 });

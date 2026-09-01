@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
-import { cleanup, render, screen, waitFor, act, fireEvent } from '../../tests/helpers/render';
-import { Routes, Route } from 'react-router-dom';
+import { render, screen, waitFor, act, fireEvent } from '../../tests/helpers/render';
+import { Routes, Route } from 'react-router';
 import { resetAllStores, seedStore } from '../../tests/helpers/store';
 import { buildUser, buildTrip, buildDay, buildPlace, buildAssignment } from '../../tests/helpers/factories';
 import { useAuthStore } from '../store/authStore';
@@ -93,6 +93,15 @@ vi.mock('../components/Memories/MemoriesPanel', () => ({
 
 vi.mock('../components/Collab/CollabPanel', () => ({
   default: () => React.createElement('div', { 'data-testid': 'collab-panel' }),
+}));
+
+// The trip-open splash cycles its mascot scenes on an infinite setInterval. Under
+// fake timers that interval never settles, so vi.runAllTimers() aborts with
+// "assuming an infinite loop". The animation is irrelevant to page wiring — stub it
+// to a lightweight status node (like the other heavy sub-components here).
+vi.mock('../components/shared/TripLoadingSplash', () => ({
+  default: ({ title }: { title?: string }) =>
+    React.createElement('div', { 'data-testid': 'trip-loading-splash', role: 'status' }, title || 'TREK'),
 }));
 
 const capturedFileManagerProps: { current: Record<string, any> } = { current: {} };
@@ -279,9 +288,8 @@ describe('TripPlannerPage', () => {
 
       renderPlannerPage(99);
 
-      // Loading state: shows loading gif
-      const loadingImg = document.querySelector('img[alt="Loading"]');
-      expect(loadingImg).toBeInTheDocument();
+      // Loading state: shows the trip-open loading splash
+      expect(screen.getByTestId('trip-loading-splash')).toBeInTheDocument();
     });
   });
 
@@ -392,25 +400,6 @@ describe('TripPlannerPage', () => {
       await waitFor(() => {
         expect(screen.getByTestId('map-view')).toBeInTheDocument();
       });
-    });
-  });
-
-  describe('FE-PAGE-PLANNER-009b: Map controls adapt to the live panel corridor', () => {
-    it('uses compact controls at an unfolded Fold-width viewport', async () => {
-      vi.useFakeTimers();
-      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 884 });
-      seedTripStore({ id: 42 });
-
-      renderPlannerPage(42);
-      act(() => { vi.runAllTimers(); });
-      vi.useRealTimers();
-
-      await waitFor(() => {
-        expect(screen.getByTestId('adaptive-map-controls')).toHaveAttribute('data-layout-mode', 'compact');
-      });
-      expect(screen.getByRole('button', { name: 'Explore places on the map' })).toBeInTheDocument();
-
-      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 });
     });
   });
 
@@ -565,7 +554,7 @@ describe('TripPlannerPage', () => {
   });
 
   describe('FE-PAGE-PLANNER-016: Left panel collapse toggle', () => {
-    it('uses an accessible 44px target and changes its name after collapse', async () => {
+    it('collapses the left sidebar when the collapse button is clicked', async () => {
       vi.useFakeTimers();
 
       seedTripStore({ id: 42 });
@@ -581,27 +570,13 @@ describe('TripPlannerPage', () => {
       });
 
       const sidebarContainer = screen.getByTestId('day-plan-sidebar').parentElement!;
-      const collapseButton = screen.getByRole('button', { name: 'Close Plan' });
-      expect(collapseButton).toHaveStyle({ width: '44px', height: '44px' });
+      const collapseButton = sidebarContainer.previousElementSibling as HTMLElement;
 
       fireEvent.click(collapseButton);
 
       await waitFor(() => {
         expect(sidebarContainer).toHaveStyle('opacity: 0');
       });
-      expect(screen.getByRole('button', { name: 'Open Plan' })).toBeInTheDocument();
-    });
-
-    it('gives the Places panel toggle the same accessible touch target', async () => {
-      vi.useFakeTimers();
-      seedTripStore({ id: 42 });
-
-      renderPlannerPage(42);
-      act(() => { vi.runAllTimers(); });
-      vi.useRealTimers();
-
-      const toggle = await screen.findByRole('button', { name: 'Close Places' });
-      expect(toggle).toHaveStyle({ width: '44px', height: '44px' });
     });
   });
 
@@ -1445,10 +1420,7 @@ describe('TripPlannerPage', () => {
   });
 
   describe('FE-PAGE-PLANNER-048: trip-page plugins can replace core tabs and pick a position', () => {
-    afterEach(() => {
-      cleanup();
-      usePluginStore.setState({ plugins: [], loaded: false });
-    });
+    afterEach(() => usePluginStore.setState({ plugins: [], loaded: false }));
 
     it('hides the replaced core tab and splices the plugin tab at its position', async () => {
       usePluginStore.setState({

@@ -30,6 +30,10 @@ vi.mock('../components/Vacay/VacaySettings', () => ({
   ),
 }));
 
+vi.mock('../components/Vacay/VacaySharedCalendars', () => ({
+  default: () => <div data-testid="vacay-shared-calendars" />,
+}));
+
 vi.mock('../components/Layout/Navbar', () => ({
   default: () => <nav data-testid="navbar" />,
 }));
@@ -47,11 +51,14 @@ const makeVacayState = (overrides = {}) => ({
   pendingInvites: [] as any[],
   incomingInvites: [] as any[],
   plan: null,
+  sharedCalendars: [] as any[],
   loadAll: vi.fn().mockResolvedValue(undefined),
   loadPlan: vi.fn().mockResolvedValue(undefined),
   loadEntries: vi.fn().mockResolvedValue(undefined),
   loadStats: vi.fn().mockResolvedValue(undefined),
   loadHolidays: vi.fn().mockResolvedValue(undefined),
+  loadShares: vi.fn().mockResolvedValue(undefined),
+  loadSharedCalendars: vi.fn().mockResolvedValue(undefined),
   setSelectedYear: vi.fn(),
   addYear: vi.fn(),
   removeYear: vi.fn().mockResolvedValue(undefined),
@@ -514,5 +521,30 @@ describe('VacayPage', () => {
       expect(mockRemoveYear).toHaveBeenCalledTimes(2);
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
     });
+  });
+
+  // FE-PAGE-VACAY-024: Shared calendars card renders in the sidebar
+  it('renders VacaySharedCalendars', async () => {
+    render(<VacayPage />);
+    await waitFor(() => {
+      expect(screen.getByTestId('vacay-shared-calendars')).toBeInTheDocument();
+    });
+  });
+
+  // FE-PAGE-VACAY-025: WebSocket vacay:share reloads shares and shared calendars
+  it('handles vacay:share WebSocket message', () => {
+    const mockLoadShares = vi.fn().mockResolvedValue(undefined);
+    const mockLoadSharedCalendars = vi.fn().mockResolvedValue(undefined);
+    const addListenerMock = websocket.addListener as ReturnType<typeof vi.fn>;
+    seedStore(useVacayStore, makeVacayState({
+      loadShares: mockLoadShares,
+      loadSharedCalendars: mockLoadSharedCalendars,
+    }) as any);
+    render(<VacayPage />);
+    const handler = addListenerMock.mock.calls[0][0];
+    mockLoadSharedCalendars.mockClear();
+    handler({ type: 'vacay:share' });
+    expect(mockLoadShares).toHaveBeenCalled();
+    expect(mockLoadSharedCalendars).toHaveBeenCalledWith(2025);
   });
 });
