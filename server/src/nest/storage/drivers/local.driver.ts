@@ -60,10 +60,17 @@ export class LocalDriver implements StorageDriver {
   init(opts: { ensurePrefixes?: string[]; cleanSpool?: boolean } = {}): void {
     fs.mkdirSync(this.configuredRoot, { recursive: true });
     this.realRoot = fs.realpathSync(this.configuredRoot);
-    fs.mkdirSync(this.spoolDir(), { recursive: true });
+    const spool = this.spoolDir();
+    this.assertNoSymlinkComponents(spool, SPOOL_DIR_NAME);
+    fs.mkdirSync(spool, { recursive: true });
+    this.assertNoSymlinkComponents(spool, SPOOL_DIR_NAME);
     for (const prefix of opts.ensurePrefixes ?? []) {
       assertValidPrefix(prefix);
-      if (prefix) fs.mkdirSync(path.join(this.realRoot, prefix), { recursive: true });
+      const normalized = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+      if (!normalized) continue;
+      const prefixPath = this.resolvePath(normalized);
+      fs.mkdirSync(prefixPath, { recursive: true });
+      this.assertNoSymlinkComponents(prefixPath, prefix);
     }
     if (opts.cleanSpool) {
       for (const entry of fs.readdirSync(this.spoolDir())) {
@@ -95,20 +102,62 @@ export class LocalDriver implements StorageDriver {
   }
 
   getSpoolDir(): string {
-    return this.spoolDir();
+    const spool = this.spoolDir();
+    this.assertNoSymlinkComponents(spool, SPOOL_DIR_NAME);
+    return spool;
   }
 
   /**
    * Central key validation plus defense-in-depth containment: even a key that
-   * somehow passed validation must resolve inside the real root.
+   * somehow passed validation must resolve inside the real root. The configured
+   * root itself may be a symlink (the supported Docker layout), but no component
+   * below that real root may be one: otherwise a valid lexical key could escape.
    */
   private resolvePath(key: string): string {
     assertValidKey(key);
-    const resolved = path.resolve(this.root(), key);
-    if (!resolved.startsWith(this.root() + path.sep)) {
+    const root = this.root();
+    const resolved = path.resolve(root, key);
+    if (!resolved.startsWith(root + path.sep)) {
       throw new StorageInvalidKeyError(key);
     }
+    this.assertNoSymlinkComponents(resolved, key);
     return resolved;
+  }
+
+  private assertNoSymlinkComponents(resolved: string, key: string): void {
+    const root = this.root();
+    const relative = path.relative(root, resolved);
+    if (relative === '' || relative === '.') return;
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new StorageInvalidKeyError(key);
+    }
+
+    let current = root;
+    for (const segment of relative.split(path.sep)) {
+      current = path.join(current, segment);
+      try {
+        const stat = fs.lstatSync(current);
+        if (stat.isSymbolicLink()) throw new StorageInvalidKeyError(key);
+        let actual: string;
+        try {
+          actual = fs.realpathSync(current);
+        } catch (err) {
+          // lstat already proved that this component exists. A missing realpath
+          // therefore means a dangling link/reparse point, not a safe missing
+          // child that may be created below the storage root.
+          if (isMissing(err)) throw new StorageInvalidKeyError(key);
+          throw err;
+        }
+        const sameLocation = path.relative(current, actual) === '' && path.relative(actual, current) === '';
+        // realpath comparison also catches Windows junctions/reparse points,
+        // whose lstat shape is not consistent across supported Node versions.
+        if (!sameLocation) throw new StorageInvalidKeyError(key);
+      } catch (err) {
+        if (err instanceof StorageInvalidKeyError) throw err;
+        if (isMissing(err)) return;
+        throw new StorageBackendError(`failed to verify local storage path '${key}' on '${this.id}'`, err);
+      }
+    }
   }
 
   getLocalPath(key: string): string {
@@ -118,26 +167,56 @@ export class LocalDriver implements StorageDriver {
   async put(key: string, source: Readable | LocalTempFile): Promise<void> {
     const dest = this.resolvePath(key);
     await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    this.assertNoSymlinkComponents(dest, key);
 
     if (isLocalTempFile(source)) {
+      let sourceStat: fs.Stats;
       try {
-        await fs.promises.rename(source.tmpPath, dest);
+        sourceStat = fs.lstatSync(source.tmpPath);
       } catch (err) {
+        throw new StorageBackendError(`put source is unavailable for '${key}' on '${this.id}'`, err);
+      }
+      if (sourceStat.isSymbolicLink() || !sourceStat.isFile()) throw new StorageInvalidKeyError(key);
+      try {
+        this.assertNoSymlinkComponents(dest, key);
+        await fs.promises.rename(source.tmpPath, dest);
+        const committed = await fs.promises.lstat(dest);
+        if (committed.isSymbolicLink() || !committed.isFile()) {
+          await fs.promises.rm(dest, { recursive: true, force: true });
+          throw new StorageInvalidKeyError(key);
+        }
+      } catch (err) {
+        if (err instanceof StorageInvalidKeyError) throw err;
         if (errnoCode(err) !== 'EXDEV') {
           throw new StorageBackendError(`put failed for '${key}' on '${this.id}'`, err);
         }
-        await fs.promises.copyFile(source.tmpPath, dest);
-        await fs.promises.unlink(source.tmpPath);
+        // A cross-volume copy cannot write directly over the live object: an
+        // ENOSPC/I/O error would leave it truncated. Copy into this backend's
+        // same-volume spool, then commit with one rename just like stream puts.
+        const copySpool = path.join(this.getSpoolDir(), randomUUID());
+        try {
+          await fs.promises.copyFile(source.tmpPath, copySpool);
+          this.assertNoSymlinkComponents(dest, key);
+          await fs.promises.rename(copySpool, dest);
+          await fs.promises.unlink(source.tmpPath);
+        } catch (copyErr) {
+          await fs.promises.rm(copySpool, { force: true });
+          throw copyErr instanceof StorageInvalidKeyError
+            ? copyErr
+            : new StorageBackendError(`put failed for '${key}' on '${this.id}'`, copyErr);
+        }
       }
       return;
     }
 
-    const spool = path.join(this.spoolDir(), randomUUID());
+    const spool = path.join(this.getSpoolDir(), randomUUID());
     try {
       await pipeline(source, fs.createWriteStream(spool));
+      this.assertNoSymlinkComponents(dest, key);
       await fs.promises.rename(spool, dest);
     } catch (err) {
       await fs.promises.rm(spool, { force: true });
+      if (err instanceof StorageInvalidKeyError) throw err;
       throw err instanceof Error && !errnoCode(err)
         ? err // source-stream failure: surface the caller's own error untouched
         : new StorageBackendError(`put failed for '${key}' on '${this.id}'`, err);
@@ -146,19 +225,34 @@ export class LocalDriver implements StorageDriver {
 
   async getStream(key: string, range?: ByteRange): Promise<{ stream: Readable; stat: ObjectStat }> {
     const resolved = this.resolvePath(key);
-    const stat = await this.stat(key);
-    if (!stat) throw new StorageNotFoundError(key);
-    const stream = fs.createReadStream(
-      resolved,
-      range ? { start: range.start, end: range.end } : undefined,
-    );
-    return { stream, stat };
+    let handle: fs.promises.FileHandle;
+    try {
+      handle = await fs.promises.open(resolved, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0));
+    } catch (err) {
+      if (isMissing(err)) throw new StorageNotFoundError(key);
+      if (errnoCode(err) === 'ELOOP') throw new StorageInvalidKeyError(key);
+      throw new StorageBackendError(`get failed for '${key}' on '${this.id}'`, err);
+    }
+    try {
+      const st = await handle.stat();
+      if (!st.isFile()) {
+        await handle.close();
+        throw new StorageNotFoundError(key);
+      }
+      const stream = handle.createReadStream(
+        range ? { start: range.start, end: range.end } : undefined,
+      );
+      return { stream, stat: { key, size: st.size, mtimeMs: st.mtimeMs } };
+    } catch (err) {
+      try { await handle.close(); } catch { /* best effort */ }
+      throw err;
+    }
   }
 
   async stat(key: string): Promise<ObjectStat | null> {
     const resolved = this.resolvePath(key);
     try {
-      const st = await fs.promises.stat(resolved);
+      const st = await fs.promises.lstat(resolved);
       if (!st.isFile()) return null;
       return { key, size: st.size, mtimeMs: st.mtimeMs };
     } catch (err) {
@@ -180,7 +274,9 @@ export class LocalDriver implements StorageDriver {
   async *list(prefix: string): AsyncIterable<ObjectStat> {
     assertValidPrefix(prefix);
     const root = this.root();
-    yield* this.walk(prefix ? path.resolve(root, prefix) : root, root);
+    const normalized = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+    const start = normalized ? this.resolvePath(normalized) : root;
+    yield* this.walk(start, root);
   }
 
   private async *walk(dir: string, root: string): AsyncIterable<ObjectStat> {
@@ -196,12 +292,20 @@ export class LocalDriver implements StorageDriver {
       // already makes dot segments unreachable, but list walks the real disk.
       if (entry.name.startsWith('.')) continue;
       const entryPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
+      let st: fs.Stats;
+      try {
+        st = await fs.promises.lstat(entryPath);
+      } catch (err) {
+        if (isMissing(err)) continue;
+        throw new StorageBackendError(`list failed under '${dir}' on '${this.id}'`, err);
+      }
+      const key = path.relative(root, entryPath).split(path.sep).join('/');
+      this.assertNoSymlinkComponents(entryPath, key);
+      if (st.isDirectory()) {
         yield* this.walk(entryPath, root);
-      } else if (entry.isFile()) {
-        const st = await fs.promises.stat(entryPath);
+      } else if (st.isFile()) {
         yield {
-          key: path.relative(root, entryPath).split(path.sep).join('/'),
+          key,
           size: st.size,
           mtimeMs: st.mtimeMs,
         };
