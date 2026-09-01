@@ -531,7 +531,6 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
           if (prev && !prev.isPlace && !withinDriveRange(prev, { lat: it.data.place.lat, lng: it.data.place.lng })) {
             if (cur.length >= 2 && curHasPlace) runs.push(cur)
             cur = []
-            curHasPlace = false
           }
           cur.push({ id: it.data.id, lat: it.data.place.lat, lng: it.data.place.lng, isPlace: true, leg_transport_mode: it.data.leg_transport_mode ?? null, incoming_leg_transport_mode: it.data.incoming_leg_transport_mode ?? null })
           curHasPlace = true
@@ -2148,7 +2147,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                                 const timeLabel = st || et
                                   ? `${st ? formatTime(st, locale, timeFormat) : ''}${et ? ` – ${formatTime(et, locale, timeFormat)}` : ''}`
                                   : ''
-                                let meta: any = {}
+                                let meta: any
                                 try { meta = typeof res.metadata === 'string' ? JSON.parse(res.metadata || '{}') : (res.metadata || {}) } catch { meta = {} }
                                 const carrierLabel = meta
                                   ? (meta.airline && meta.flight_number ? `${meta.airline} ${meta.flight_number}` : meta.flight_number || meta.train_number || '')
