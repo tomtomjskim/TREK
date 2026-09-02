@@ -1044,7 +1044,7 @@ describe('DayDetailPanel', () => {
     // Both triggers show "Day 1"; the second one is the end picker.
     await userEvent.click(getDayPickerTriggers()[1]);
     // Select "Day 16" (id=7) from the open dropdown — textContent starts with "Day 16".
-    await userEvent.click(screen.getAllByRole('button').find(b => b.textContent?.startsWith('Day 16'))!);
+    await userEvent.click(screen.getAllByRole('option').find(option => option.textContent?.startsWith('Day 16'))!);
 
     await userEvent.click(screen.getByRole('button', { name: /^Save$/i }));
 
@@ -1078,13 +1078,13 @@ describe('DayDetailPanel', () => {
 
     // Set end to day 16 (id=7, low ID but last day by position).
     await userEvent.click(getDayPickerTriggers()[1]);
-    await userEvent.click(screen.getAllByRole('button').find(b => b.textContent?.startsWith('Day 16'))!);
+    await userEvent.click(screen.getAllByRole('option').find(option => option.textContent?.startsWith('Day 16'))!);
 
     // Set start to day 9 (id=25, high ID, but earlier by position than day 16).
     // Old code: Math.max(25, 7) = 25 → end collapses to day 9.
     // New code: position(id=25)=8 < position(id=7)=15 → end stays at 7 (day 16).
     await userEvent.click(getDayPickerTriggers()[0]);
-    await userEvent.click(screen.getAllByRole('button').find(b => b.textContent?.startsWith('Day 9'))!);
+    await userEvent.click(screen.getAllByRole('option').find(option => option.textContent?.startsWith('Day 9'))!);
 
     await userEvent.click(screen.getByRole('button', { name: /^Save$/i }));
 
@@ -1154,7 +1154,7 @@ describe('DayDetailPanel', () => {
 
     // Pick end = day 3 (id=103, position 2 > position 0 of start id=101).
     await userEvent.click(getDayPickerTriggers()[1]);
-    await userEvent.click(screen.getAllByRole('button').find(b => b.textContent?.startsWith('Day 3'))!);
+    await userEvent.click(screen.getAllByRole('option').find(option => option.textContent?.startsWith('Day 3'))!);
 
     await userEvent.click(screen.getByRole('button', { name: /^Save$/i }));
 
@@ -1198,7 +1198,7 @@ describe('DayDetailPanel', () => {
 
     // Extend end picker to Day 16 (id=7)
     await userEvent.click(getDayPickerTriggers()[1]);
-    await userEvent.click(screen.getAllByRole('button').find(b => b.textContent?.startsWith('Day 16'))!);
+    await userEvent.click(screen.getAllByRole('option').find(option => option.textContent?.startsWith('Day 16'))!);
     await userEvent.click(screen.getByRole('button', { name: /^Save$/i }));
 
     // Old code: 17>=17 && 17<=7 → false (hotel vanishes). New code: position 0 in [0,15] → visible.
@@ -1229,7 +1229,7 @@ describe('DayDetailPanel', () => {
 
     // Extend end to Day 16 (id=7) — start stays at current day id=22
     await userEvent.click(getDayPickerTriggers()[1]);
-    await userEvent.click(screen.getAllByRole('button').find(b => b.textContent?.startsWith('Day 16'))!);
+    await userEvent.click(screen.getAllByRole('option').find(option => option.textContent?.startsWith('Day 16'))!);
     await userEvent.click(screen.getByRole('button', { name: /^Save$/i }));
 
     // Old code: 22>=22 && 22<=7 → false (hotel vanishes). New code: position 5 in [5,15] → visible.
@@ -1633,9 +1633,9 @@ describe('DayDetailPanel remaining branches', () => {
     await user.click(within(range).getAllByRole('button')[0]);
 
     expect(screen.getAllByText('Jun 15').length).toBeGreaterThanOrEqual(1);
-    const freeDay = screen.getAllByRole('button', { name: /Free Day/ });
-    expect(freeDay.some(b => b.textContent?.includes('Day 2'))).toBe(true);
-    expect(screen.getAllByRole('button', { name: /^Day 3$/ }).length).toBeGreaterThanOrEqual(1);
+    const freeDay = screen.getAllByRole('option', { name: /Free Day/ });
+    expect(freeDay.some(option => option.textContent?.includes('Day 2'))).toBe(true);
+    expect(screen.getAllByRole('option', { name: /^Day 3$/ }).length).toBeGreaterThanOrEqual(1);
   });
 
   it('FE-W5DDP-009: a day without a title falls back to its position and hides the pencil', () => {
@@ -1770,20 +1770,20 @@ describe('DayDetailPanel remaining branches, part two', () => {
     const [fromSelect, toSelect] = within(range).getAllByRole('button');
 
     await user.click(fromSelect);
-    await user.click(screen.getAllByRole('button', { name: /Day Two/ })[0]);
+    await user.click(screen.getAllByRole('option', { name: /Day Two/ })[0]);
     expect(within(range).getAllByRole('button')[1]).toHaveTextContent('Day Two');
 
     await user.click(within(range).getAllByRole('button')[1] === toSelect ? toSelect : within(range).getAllByRole('button')[1]);
-    await user.click(screen.getAllByRole('button', { name: /Day in Paris/ })[0]);
+    await user.click(screen.getAllByRole('option', { name: /Day in Paris/ })[0]);
     expect(within(range).getAllByRole('button')[0]).toHaveTextContent('Day in Paris');
 
     // moving each end back inside the range leaves the other one alone
     await user.click(within(range).getAllByRole('button')[1]);
-    await user.click(screen.getAllByRole('button', { name: /Day Two/ })[0]);
+    await user.click(screen.getAllByRole('option', { name: /Day Two/ })[0]);
     expect(within(range).getAllByRole('button')[0]).toHaveTextContent('Day in Paris');
 
     await user.click(within(range).getAllByRole('button')[0]);
-    await user.click(screen.getAllByRole('button', { name: /Day in Paris/ })[0]);
+    await user.click(screen.getAllByRole('option', { name: /Day in Paris/ })[0]);
     expect(within(range).getAllByRole('button')[1]).toHaveTextContent('Day Two');
   });
 

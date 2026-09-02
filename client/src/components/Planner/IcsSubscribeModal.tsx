@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { X, RefreshCw, Calendar, Power } from 'lucide-react'
 import { SubscribeLinks } from './SubscribeLinks'
@@ -31,34 +31,84 @@ export function IcsSubscribeModal({ endpoint, title, description, onClose }: Ics
   const [feedUrl, setFeedUrl] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const mountedRef = useRef(true)
+  const currentTokenUrlRef = useRef(tokenUrl)
+  const mutationControllerRef = useRef<AbortController | null>(null)
+
+  // Update during render so a response from the previous endpoint cannot win
+  // the race before the endpoint-dependent effect cleanup gets a turn.
+  currentTokenUrlRef.current = tokenUrl
 
   const httpsUrl = feedUrl ? absolutize(feedUrl) : ''
   const webcalUrl = httpsUrl ? httpsUrl.replace(/^https?:\/\//, 'webcal://') : ''
 
-  const load = useCallback(async () => {
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      mutationControllerRef.current?.abort()
+    }
+  }, [])
+
+  const load = useCallback(async (signal: AbortSignal) => {
+    mutationControllerRef.current?.abort()
+    mutationControllerRef.current = null
     setLoading(true)
+    setBusy(false)
+    setFeedUrl(null)
+
+    const isCurrent = () => (
+      mountedRef.current
+      && !signal.aborted
+      && currentTokenUrlRef.current === tokenUrl
+    )
+
     try {
-      const res = await fetch(tokenUrl, { credentials: 'include' })
-      if (res.ok) {
+      const res = await fetch(tokenUrl, { credentials: 'include', signal })
+      if (isCurrent() && res.ok) {
         const data = await res.json() as { feed_url: string | null }
-        setFeedUrl(data.feed_url)
+        if (isCurrent()) setFeedUrl(data.feed_url)
       }
     } catch { /* ignore */ }
-    setLoading(false)
+    if (isCurrent()) setLoading(false)
   }, [tokenUrl])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    const controller = new AbortController()
+    void load(controller.signal)
+    return () => controller.abort()
+  }, [load])
 
   const mutate = async (method: 'POST' | 'PUT' | 'DELETE') => {
+    mutationControllerRef.current?.abort()
+    const controller = new AbortController()
+    mutationControllerRef.current = controller
+    const requestTokenUrl = tokenUrl
+    const isCurrent = () => (
+      mountedRef.current
+      && !controller.signal.aborted
+      && currentTokenUrlRef.current === requestTokenUrl
+      && mutationControllerRef.current === controller
+    )
+
     setBusy(true)
     try {
-      const res = await fetch(tokenUrl, { method, credentials: 'include' })
-      if (res.ok) {
+      const res = await fetch(requestTokenUrl, {
+        method,
+        credentials: 'include',
+        signal: controller.signal,
+      })
+      if (isCurrent() && res.ok) {
         const data = await res.json() as { feed_url: string | null }
-        setFeedUrl(data.feed_url)
+        if (isCurrent()) setFeedUrl(data.feed_url)
       }
     } catch { /* ignore */ }
-    setBusy(false)
+    if (mutationControllerRef.current === controller) {
+      mutationControllerRef.current = null
+      if (mountedRef.current && currentTokenUrlRef.current === requestTokenUrl) {
+        setBusy(false)
+      }
+    }
   }
 
   return createPortal(

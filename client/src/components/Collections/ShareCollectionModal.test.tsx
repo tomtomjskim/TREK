@@ -128,7 +128,7 @@ describe('ShareCollectionModal', () => {
     setup({ members: [OWNER, EDITOR] })
     // The select shows the member's current role; open it and pick another.
     fireEvent.click(within(memberRow('julien')).getByRole('button', { name: 'Editor' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Admin' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Admin' }))
     await waitFor(() => expect(actions.setMemberRole).toHaveBeenCalledWith(7, 2, 'admin'))
   })
 
@@ -141,7 +141,7 @@ describe('ShareCollectionModal', () => {
     actions.setMemberRole.mockRejectedValue({ response: { data: { error: 'Not allowed' } } })
     setup({ members: [OWNER, EDITOR] })
     fireEvent.click(within(memberRow('julien')).getByRole('button', { name: 'Editor' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Viewer' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Viewer' }))
     await waitFor(() => expect(addToast).toHaveBeenCalledWith('Not allowed', 'error', undefined))
   })
 
@@ -187,9 +187,9 @@ describe('ShareCollectionModal', () => {
     expect(await screen.findByRole('button', { name: /Send invite/ })).toBeDisabled()
 
     fireEvent.click(screen.getByRole('button', { name: 'Select a user' }))
-    fireEvent.click(screen.getByRole('button', { name: 'omar' }))
+    fireEvent.click(screen.getByRole('option', { name: 'omar' }))
     fireEvent.click(screen.getByRole('button', { name: 'Editor' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Admin' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Admin' }))
     fireEvent.click(screen.getByRole('button', { name: /Send invite/ }))
 
     await waitFor(() => expect(actions.invite).toHaveBeenCalledWith(7, 10, 'admin'))
@@ -201,7 +201,7 @@ describe('ShareCollectionModal', () => {
   it('FE-COMP-COLSHARE-015: editor is the preselected invite role', async () => {
     setup({ members: [OWNER] })
     fireEvent.click(await screen.findByRole('button', { name: 'Select a user' }))
-    fireEvent.click(screen.getByRole('button', { name: 'nina' }))
+    fireEvent.click(screen.getByRole('option', { name: 'nina' }))
     fireEvent.click(screen.getByRole('button', { name: /Send invite/ }))
     await waitFor(() => expect(actions.invite).toHaveBeenCalledWith(7, 9, 'editor'))
   })
@@ -210,7 +210,7 @@ describe('ShareCollectionModal', () => {
     actions.invite.mockRejectedValue(new Error('boom'))
     setup({ members: [OWNER] })
     fireEvent.click(await screen.findByRole('button', { name: 'Select a user' }))
-    fireEvent.click(screen.getByRole('button', { name: 'nina' }))
+    fireEvent.click(screen.getByRole('option', { name: 'nina' }))
     fireEvent.click(screen.getByRole('button', { name: /Send invite/ }))
     await waitFor(() => expect(addToast).toHaveBeenCalledWith('Could not send invite', 'error', undefined))
     expect(screen.getByRole('button', { name: 'nina' })).toBeInTheDocument()

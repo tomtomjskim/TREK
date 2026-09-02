@@ -396,7 +396,7 @@ describe('TripMembersModal', () => {
     await user.click(selectTrigger);
 
     // alice option appears in the portal dropdown
-    const aliceOption = await screen.findByRole('button', { name: 'alice' });
+    const aliceOption = await screen.findByRole('option', { name: 'alice' });
     await user.click(aliceOption);
 
     // Click the member "Invite" button (exact — the Share area also has a
@@ -714,7 +714,7 @@ describe('TripMembersModal', () => {
 
     await screen.findByText('Invite User');
     await user.click(screen.getByText('Select user…'));
-    await user.click(await screen.findByRole('button', { name: 'alice' }));
+    await user.click(await screen.findByRole('option', { name: 'alice' }));
     await user.click(screen.getByRole('button', { name: 'Invite' }));
 
     await waitFor(() => expect(addToast).toHaveBeenCalledWith('User is already a member', 'error', undefined));
@@ -728,7 +728,7 @@ describe('TripMembersModal', () => {
 
     await screen.findByText('Invite User');
     await user.click(screen.getByText('Select user…'));
-    await user.click(await screen.findByRole('button', { name: 'alice' }));
+    await user.click(await screen.findByRole('option', { name: 'alice' }));
     await user.click(screen.getByRole('button', { name: 'Invite' }));
 
     await waitFor(() => expect(onMembersChanged).toHaveBeenCalled());

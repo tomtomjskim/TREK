@@ -455,13 +455,13 @@ describe('AddonManager', () => {
     await waitFor(() => expect(urls).toContain('http://ollama.lan:11434/v1'));
 
     await user.click(screen.getByRole('button', { name: /Local · OpenAI-compatible/ }));
-    await user.click(screen.getByRole('button', { name: 'OpenAI' }));
+    await user.click(screen.getByRole('option', { name: 'OpenAI' }));
     expect(screen.getByPlaceholderText('https://api.openai.com/v1')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('gpt-4o')).toBeInTheDocument();
     expect(screen.queryByText('Installed on the server')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'OpenAI' }));
-    await user.click(screen.getByRole('button', { name: 'Anthropic' }));
+    await user.click(screen.getByRole('option', { name: 'Anthropic' }));
     expect(screen.queryByPlaceholderText('https://api.openai.com/v1')).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText('claude-opus-4-8')).toBeInTheDocument();
     expect(screen.getByText(/Anthropic reads PDFs/)).toBeInTheDocument();
@@ -549,7 +549,7 @@ describe('AddonManager', () => {
     await user.type(screen.getByPlaceholderText('(often not required)'), 'sk-live');
 
     await user.click(screen.getByRole('button', { name: /Local · OpenAI-compatible/ }));
-    await user.click(screen.getByRole('button', { name: 'OpenAI' }));
+    await user.click(screen.getByRole('option', { name: 'OpenAI' }));
     expect(screen.getByPlaceholderText('sk-…')).toHaveValue('sk-live');
 
     await user.click(screen.getByRole('button', { name: 'Save' }));
@@ -576,7 +576,7 @@ describe('AddonManager', () => {
     await screen.findByText('Installed on the server');
 
     await user.click(screen.getByRole('button', { name: /Local · OpenAI-compatible/ }));
-    await user.click(screen.getByRole('button', { name: 'Anthropic' }));
+    await user.click(screen.getByRole('option', { name: 'Anthropic' }));
     await user.type(screen.getByPlaceholderText('claude-opus-4-8'), 'claude-haiku-4-5-20251001');
     await user.type(screen.getByPlaceholderText('sk-…'), 'sk-ant-live');
 

@@ -46,7 +46,7 @@ function multimodalToggle(): HTMLElement {
 
 async function pickProvider(user: ReturnType<typeof userEvent.setup>, current: RegExp, next: string) {
   await user.click(screen.getByRole('button', { name: current }));
-  await user.click(await screen.findByRole('button', { name: next }));
+  await user.click(await screen.findByRole('option', { name: next }));
 }
 
 beforeEach(() => {
@@ -121,7 +121,7 @@ describe('LlmConnectionSection', () => {
 
     await user.click(screen.getByRole('button', { name: /OpenAI/ }));
 
-    expect(await screen.findByRole('button', { name: 'Anthropic' })).toBeInTheDocument();
+    expect(await screen.findByRole('option', { name: 'Anthropic' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Local \(Ollama\)/ })).not.toBeInTheDocument();
   });
 

@@ -71,7 +71,7 @@ function cartoInput(): HTMLInputElement {
 /** Opens a CustomSelect by its trigger label and picks an option from the portal. */
 async function pickFromSelect(user: ReturnType<typeof userEvent.setup>, trigger: string, option: string) {
   await user.click(screen.getByRole('button', { name: trigger }));
-  const choices = await screen.findAllByRole('button', { name: option });
+  const choices = await screen.findAllByRole('option', { name: option });
   await user.click(choices[choices.length - 1]);
 }
 

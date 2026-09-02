@@ -586,7 +586,7 @@ describe('TransportModal', () => {
     const label = screen.getAllByText(labelText)[index];
     const trigger = (label.parentElement as HTMLElement).querySelector('button') as HTMLButtonElement;
     await userEvent.click(trigger);
-    await userEvent.click(screen.getByRole('button', { name: new RegExp(`^${dayTitle}`) }));
+    await userEvent.click(screen.getByRole('option', { name: new RegExp(`^${dayTitle}`) }));
   }
 
   it('FE-PLANNER-TRANSMODAL-032: a flight with an added stop saves per-leg metadata and from/stop/to endpoints', async () => {
@@ -910,7 +910,7 @@ describe('TransportModal', () => {
 
     await userEvent.type(screen.getByPlaceholderText(/e\.g\. Lufthansa/i), 'LH 400');
     await userEvent.click(screen.getByText('Pending'));
-    await userEvent.click(screen.getByRole('button', { name: 'Confirmed' }));
+    await userEvent.click(screen.getByRole('option', { name: 'Confirmed' }));
     await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalled());
@@ -1233,7 +1233,7 @@ describe('TransportModal', () => {
     );
 
     await userEvent.click(screen.getByText('Day one'));
-    await userEvent.click(screen.getByRole('button', { name: /^Day two/ }));
+    await userEvent.click(screen.getByRole('option', { name: /^Day two/ }));
 
     const [fromInput] = screen.getAllByPlaceholderText('Search stop or station…');
     await userEvent.click(fromInput);

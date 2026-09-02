@@ -456,7 +456,7 @@ function dragOverRow(row: Element) {
 /** Pick an option out of the CustomSelect dropdown, which renders into a body portal. */
 function pickOption(label: string | RegExp) {
   const dropdown = document.querySelector('div[style*="z-index: 99999"]') as HTMLElement;
-  fireEvent.click(within(dropdown).getByRole('button', { name: label }));
+  fireEvent.click(within(dropdown).getByRole('option', { name: label }));
 }
 
 /**
@@ -728,7 +728,7 @@ describe('TodoListPanel — detail pane', () => {
     await screen.findByRole('button', { name: 'Unassigned' });
 
     await user.click(screen.getByRole('button', { name: 'Unassigned' }));
-    await user.click(await screen.findByRole('button', { name: /gus · Guest/ }));
+    await user.click(await screen.findByRole('option', { name: /gus · Guest/ }));
     await user.click(screen.getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(put).toBeTruthy());

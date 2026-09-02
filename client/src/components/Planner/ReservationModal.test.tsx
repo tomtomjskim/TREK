@@ -739,12 +739,12 @@ describe('ReservationModal', () => {
     // Open start picker (first "Select day" trigger) and select Day 1 (id=17)
     const startTrigger = () => screen.getAllByRole('button').filter(b => b.textContent?.includes('Select day') || b.textContent?.startsWith('Day '))[0];
     await userEvent.click(startTrigger());
-    await userEvent.click(screen.getAllByRole('button').find(b => b.textContent?.startsWith('Day 1') && !b.textContent?.startsWith('Day 1 ') || b.textContent?.trim() === 'Day 1')!);
+    await userEvent.click(screen.getAllByRole('option').find(option => option.textContent?.startsWith('Day 1') && !option.textContent?.startsWith('Day 1 ') || option.textContent?.trim() === 'Day 1')!);
 
     // Open end picker and select Day 16 (id=7, low ID but last positionally)
     const endTrigger = () => screen.getAllByRole('button').filter(b => b.textContent?.includes('Select day') || /^Day \d+/.test(b.textContent?.trim() ?? ''))[1];
     await userEvent.click(endTrigger());
-    await userEvent.click(screen.getAllByRole('button').find(b => b.textContent?.startsWith('Day 16'))!);
+    await userEvent.click(screen.getAllByRole('option').find(option => option.textContent?.startsWith('Day 16'))!);
 
     await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
 
@@ -767,14 +767,14 @@ describe('ReservationModal', () => {
     // Set end to Day 16 (id=7) first
     const endTrigger = () => screen.getAllByRole('button').filter(b => b.textContent?.includes('Select day') || /^Day \d+/.test(b.textContent?.trim() ?? ''))[1];
     await userEvent.click(endTrigger());
-    await userEvent.click(screen.getAllByRole('button').find(b => b.textContent?.startsWith('Day 16'))!);
+    await userEvent.click(screen.getAllByRole('option').find(option => option.textContent?.startsWith('Day 16'))!);
 
     // Set start to Day 9 (id=25, high ID but earlier by position than Day 16)
     // Old code: Math.max(25, 7) = 25 → end collapses to Day 9.
     // New code: position(id=25)=8 < position(id=7)=15 → end stays id=7.
     const startTrigger = () => screen.getAllByRole('button').filter(b => b.textContent?.includes('Select day') || /^Day \d+/.test(b.textContent?.trim() ?? ''))[0];
     await userEvent.click(startTrigger());
-    await userEvent.click(screen.getAllByRole('button').find(b => b.textContent?.startsWith('Day 9'))!);
+    await userEvent.click(screen.getAllByRole('option').find(option => option.textContent?.startsWith('Day 9'))!);
 
     await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
 
@@ -1105,7 +1105,7 @@ describe('ReservationModal', () => {
     await userEvent.type(screen.getByPlaceholderText(/e\.g\. Lufthansa/i), 'Guided tour');
     await userEvent.click(screen.getByText('No link (standalone)'));
     // Ordered by order_index, so the museum is offered first with its time range.
-    await userEvent.click(screen.getByRole('button', { name: /1\. Museum · 09:00 – 10:00/ }));
+    await userEvent.click(screen.getByRole('option', { name: /1\. Museum · 09:00 – 10:00/ }));
 
     await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
@@ -1121,7 +1121,7 @@ describe('ReservationModal', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /Restaurant/i }));
     await userEvent.click(screen.getByText('—'));
-    await userEvent.click(screen.getByRole('button', { name: 'Le Jules Verne' }));
+    await userEvent.click(screen.getByRole('option', { name: 'Le Jules Verne' }));
 
     expect(screen.getByDisplayValue('Le Jules Verne')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Champ de Mars')).toBeInTheDocument();
@@ -1139,7 +1139,7 @@ describe('ReservationModal', () => {
 
     await userEvent.click(screen.getByRole('button', { name: /^Accommodation$/i }));
     await userEvent.click(screen.getByText('—'));
-    await userEvent.click(screen.getByRole('button', { name: 'Grand Hotel' }));
+    await userEvent.click(screen.getByRole('option', { name: 'Grand Hotel' }));
 
     expect(screen.getByDisplayValue('Grand Hotel')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Bahnhofstrasse 1')).toBeInTheDocument();
@@ -1364,7 +1364,7 @@ describe('ReservationModal', () => {
     await userEvent.type(screen.getByPlaceholderText(/e\.g\. Lufthansa/i), 'Guided tour');
     fireEvent.change(screen.getAllByTestId('date-picker')[0], { target: { value: '2026-05-02' } });
     await userEvent.click(screen.getByText('No link (standalone)'));
-    await userEvent.click(screen.getByRole('button', { name: /1\. Museum/ }));
+    await userEvent.click(screen.getByRole('option', { name: /1\. Museum/ }));
 
     await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
@@ -1377,7 +1377,7 @@ describe('ReservationModal', () => {
 
     await userEvent.type(screen.getByPlaceholderText(/e\.g\. Lufthansa/i), 'Boat trip');
     await userEvent.click(screen.getByText('Pending'));
-    await userEvent.click(screen.getByRole('button', { name: 'Confirmed' }));
+    await userEvent.click(screen.getByRole('option', { name: 'Confirmed' }));
     await userEvent.click(screen.getByRole('button', { name: /^Add$/i }));
 
     await waitFor(() => expect(onSave).toHaveBeenCalled());

@@ -738,7 +738,7 @@ function mount(
 /** CustomSelect renders its options into a body portal. */
 function pickOption(label: string | RegExp) {
   const dropdown = document.querySelector('div[style*="z-index: 99999"]') as HTMLElement
-  fireEvent.click(within(dropdown).getByRole('button', { name: label }))
+  fireEvent.click(within(dropdown).getByRole('option', { name: label }))
 }
 
 // Alice is the signed-in user throughout; the euro display currency keeps FX an identity.

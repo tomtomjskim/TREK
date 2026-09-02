@@ -1,4 +1,4 @@
-// FE-PLANNER-ICS-001 to FE-PLANNER-ICS-012
+// FE-PLANNER-ICS-001 to FE-PLANNER-ICS-016
 import { render, screen, fireEvent, waitFor } from '../../../tests/helpers/render';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../tests/helpers/msw/server';
@@ -6,6 +6,8 @@ import { IcsSubscribeModal } from './IcsSubscribeModal';
 
 const ENDPOINT = '/api/trips/9/feed';
 const TOKEN_URL = `${ENDPOINT}/token`;
+const NEXT_ENDPOINT = '/api/trips/10/feed';
+const NEXT_TOKEN_URL = `${NEXT_ENDPOINT}/token`;
 
 const defaultProps = {
   endpoint: ENDPOINT,
@@ -153,5 +155,85 @@ describe('IcsSubscribeModal', () => {
 
     fireEvent.click(screen.getByText('Keep the itinerary in your own calendar.'));
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('FE-PLANNER-ICS-013: unmounting aborts a pending token read', async () => {
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    let requestSignal: AbortSignal | undefined;
+    server.use(http.get(TOKEN_URL, async ({ request }) => {
+      requestSignal = request.signal;
+      markStarted?.();
+      await new Promise<void>(resolve => request.signal.addEventListener('abort', () => resolve(), { once: true }));
+      return HttpResponse.json({ feed_url: null });
+    }));
+
+    const { unmount } = render(<IcsSubscribeModal {...defaultProps} />);
+    await started;
+    unmount();
+
+    await waitFor(() => expect(requestSignal?.aborted).toBe(true));
+  });
+
+  it('FE-PLANNER-ICS-014: an endpoint switch clears the previous feed even when the new read fails', async () => {
+    server.use(
+      http.get(TOKEN_URL, () => HttpResponse.json({ feed_url: 'https://trek.example/feed/old.ics' })),
+      http.get(NEXT_TOKEN_URL, () => new HttpResponse(null, { status: 500 })),
+    );
+    const { rerender } = render(<IcsSubscribeModal {...defaultProps} />);
+    expect(await screen.findByText('https://trek.example/feed/old.ics')).toBeInTheDocument();
+
+    rerender(<IcsSubscribeModal {...defaultProps} endpoint={NEXT_ENDPOINT} />);
+
+    expect(await screen.findByRole('button', { name: /Enable calendar subscription/i })).toBeInTheDocument();
+    expect(screen.queryByText('https://trek.example/feed/old.ics')).not.toBeInTheDocument();
+  });
+
+  it('FE-PLANNER-ICS-015: a delayed mutation cannot overwrite the next endpoint', async () => {
+    let markPutStarted: (() => void) | undefined;
+    const putStarted = new Promise<void>(resolve => { markPutStarted = resolve; });
+    let releasePut: (() => void) | undefined;
+    const putGate = new Promise<void>(resolve => { releasePut = resolve; });
+    server.use(
+      http.get(TOKEN_URL, () => HttpResponse.json({ feed_url: 'https://trek.example/feed/old.ics' })),
+      http.put(TOKEN_URL, async () => {
+        markPutStarted?.();
+        await putGate;
+        return HttpResponse.json({ feed_url: 'https://trek.example/feed/stale.ics' });
+      }),
+      http.get(NEXT_TOKEN_URL, () => HttpResponse.json({ feed_url: 'https://trek.example/feed/new.ics' })),
+    );
+    const { rerender } = render(<IcsSubscribeModal {...defaultProps} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Regenerate/i }));
+    await putStarted;
+
+    rerender(<IcsSubscribeModal {...defaultProps} endpoint={NEXT_ENDPOINT} />);
+    expect(await screen.findByText('https://trek.example/feed/new.ics')).toBeInTheDocument();
+    releasePut?.();
+
+    await waitFor(() => expect(screen.queryByText('https://trek.example/feed/stale.ics')).not.toBeInTheDocument());
+    expect(screen.getByText('https://trek.example/feed/new.ics')).toBeInTheDocument();
+  });
+
+  it('FE-PLANNER-ICS-016: unmounting aborts a pending mutation', async () => {
+    let markPutStarted: (() => void) | undefined;
+    const putStarted = new Promise<void>(resolve => { markPutStarted = resolve; });
+    let requestSignal: AbortSignal | undefined;
+    server.use(
+      http.get(TOKEN_URL, () => HttpResponse.json({ feed_url: 'https://trek.example/feed/old.ics' })),
+      http.put(TOKEN_URL, async ({ request }) => {
+        requestSignal = request.signal;
+        markPutStarted?.();
+        await new Promise<void>(resolve => request.signal.addEventListener('abort', () => resolve(), { once: true }));
+        return HttpResponse.json({ feed_url: 'https://trek.example/feed/stale.ics' });
+      }),
+    );
+    const { unmount } = render(<IcsSubscribeModal {...defaultProps} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Regenerate/i }));
+    await putStarted;
+
+    unmount();
+
+    await waitFor(() => expect(requestSignal?.aborted).toBe(true));
   });
 });

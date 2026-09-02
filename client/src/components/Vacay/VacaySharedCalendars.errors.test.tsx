@@ -39,7 +39,7 @@ describe('VacaySharedCalendars errors', () => {
 
     fireEvent.click(screen.getByTitle('Share calendar'))
     fireEvent.click(await screen.findByRole('button', { name: 'Select user' }))
-    fireEvent.click(screen.getByRole('button', { name: 'bob' }))
+    fireEvent.click(screen.getByRole('option', { name: 'bob' }))
     fireEvent.click(screen.getByRole('button', { name: 'Share' }))
 
     await waitFor(() => expect(shared).toBe(2))
@@ -54,7 +54,7 @@ describe('VacaySharedCalendars errors', () => {
 
     fireEvent.click(screen.getByTitle('Share calendar'))
     fireEvent.click(await screen.findByRole('button', { name: 'Select user' }))
-    fireEvent.click(screen.getByRole('button', { name: 'bob' }))
+    fireEvent.click(screen.getByRole('option', { name: 'bob' }))
     fireEvent.click(screen.getByRole('button', { name: 'Share' }))
 
     await waitFor(() => expect(toasts).toEqual([{ type: 'error', message: 'Already shared' }]))

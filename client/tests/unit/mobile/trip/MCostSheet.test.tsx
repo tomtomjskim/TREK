@@ -239,7 +239,7 @@ describe('MCostSheet', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'EUR €' }))
     fireEvent.change(screen.getByPlaceholderText('...'), { target: { value: 'USD' } })
-    fireEvent.click(screen.getByRole('button', { name: 'USD $' }))
+    fireEvent.click(screen.getByRole('option', { name: 'USD $' }))
 
     expect(screen.getByText('$100.00')).toBeInTheDocument()
     // 100 USD at 1.25 USD per EUR = 80 EUR.
@@ -251,7 +251,7 @@ describe('MCostSheet', () => {
     renderSheet()
     fillBasics('Tickets', '60')
     fireEvent.click(screen.getByRole('button', { name: 'You' }))
-    fireEvent.click(screen.getByRole('button', { name: 'No one paid yet' }))
+    fireEvent.click(screen.getByRole('option', { name: 'No one paid yet' }))
 
     fireEvent.click(submit())
     await waitFor(() => expect(addBudgetItem).toHaveBeenCalledWith(1, expect.objectContaining({ payers: [] })))

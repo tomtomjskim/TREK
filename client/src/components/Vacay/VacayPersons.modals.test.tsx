@@ -54,7 +54,7 @@ describe('VacayPersons modals', () => {
 
     openInvite()
     fireEvent.click(await screen.findByRole('button', { name: 'Select user' }))
-    fireEvent.click(screen.getByRole('button', { name: 'bob (bob@trek.app)' }))
+    fireEvent.click(screen.getByRole('option', { name: 'bob (bob@trek.app)' }))
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }))
 
     await waitFor(() => expect(invited).toBe(2))
@@ -68,7 +68,7 @@ describe('VacayPersons modals', () => {
 
     openInvite()
     fireEvent.click(await screen.findByRole('button', { name: 'Select user' }))
-    fireEvent.click(screen.getByRole('button', { name: 'bob (bob@trek.app)' }))
+    fireEvent.click(screen.getByRole('option', { name: 'bob (bob@trek.app)' }))
     fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }))
 
     await waitFor(() => expect(toasts).toEqual([{ type: 'error', message: 'Already invited' }]))

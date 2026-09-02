@@ -247,7 +247,7 @@ describe('TripFormModal', () => {
     const selectTrigger = screen.getByText('Add member').closest('button')!;
     await user.click(selectTrigger);
     // alice option appears in portal (document.body)
-    const aliceOption = await screen.findByRole('button', { name: 'alice' });
+    const aliceOption = await screen.findByRole('option', { name: 'alice' });
     await user.click(aliceOption);
     // alice chip should now be in the member chip list
     expect(screen.getByText('alice')).toBeInTheDocument();
@@ -266,7 +266,7 @@ describe('TripFormModal', () => {
     // Select alice
     const selectTrigger = screen.getByText('Add member').closest('button')!;
     await user.click(selectTrigger);
-    const aliceOption = await screen.findByRole('button', { name: 'alice' });
+    const aliceOption = await screen.findByRole('option', { name: 'alice' });
     await user.click(aliceOption);
     // alice chip is present
     const aliceChip = screen.getByText('alice');
@@ -565,7 +565,7 @@ describe('TripFormModal', () => {
 
     await screen.findByText('Travel buddies');
     await user.click(screen.getByText('Add member').closest('button')!);
-    await user.click(await screen.findByRole('button', { name: 'alice' }));
+    await user.click(await screen.findByRole('option', { name: 'alice' }));
     await user.type(screen.getByPlaceholderText(/Summer in Japan/i), 'Group Trip');
     await submitNewTrip(user);
 
@@ -586,7 +586,7 @@ describe('TripFormModal', () => {
 
     await screen.findByText('Travel buddies');
     await user.click(screen.getByText('Add member').closest('button')!);
-    await user.click(await screen.findByRole('button', { name: 'alice' }));
+    await user.click(await screen.findByRole('option', { name: 'alice' }));
     await user.type(screen.getByPlaceholderText(/Summer in Japan/i), 'Group Trip');
     await submitNewTrip(user);
 
@@ -1073,8 +1073,8 @@ describe('TripFormModal', () => {
     await user.click(screen.getByText('Add member').closest('button')!);
     // alice is already a member, so the option list offers only bob (her chip
     // outside the list is a button of its own — that is what removes her).
-    const bobOption = await screen.findByRole('button', { name: 'bob' });
-    expect(within(bobOption.parentElement!).queryByRole('button', { name: 'alice' })).toBeNull();
+    const bobOption = await screen.findByRole('option', { name: 'bob' });
+    expect(within(bobOption.parentElement!).queryByRole('option', { name: 'alice' })).toBeNull();
     await user.click(bobOption);
 
     await waitFor(() => expect(identifier).toBe('bob'));
@@ -1091,7 +1091,7 @@ describe('TripFormModal', () => {
 
     await screen.findByText('alice');
     await user.click(screen.getByText('Add member').closest('button')!);
-    await user.click(await screen.findByRole('button', { name: 'bob' }));
+    await user.click(await screen.findByRole('option', { name: 'bob' }));
 
     await waitFor(() => expect(addToast).toHaveBeenCalledWith('Failed to add', 'error', undefined));
   });

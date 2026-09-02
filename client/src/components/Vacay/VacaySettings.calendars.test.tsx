@@ -46,13 +46,13 @@ function toggleFor(label: string): HTMLElement {
 /** CustomSelect: click the trigger, then the option with that label. */
 function pickOption(triggerName: string | RegExp, optionLabel: string) {
   fireEvent.click(screen.getByRole('button', { name: triggerName }))
-  fireEvent.click(screen.getByRole('button', { name: optionLabel }))
+  fireEvent.click(screen.getByRole('option', { name: optionLabel }))
 }
 
 /** Same, but waits for the option list — countries and regions load asynchronously. */
 async function pickLoadedOption(triggerName: string | RegExp, optionLabel: string) {
   fireEvent.click(await screen.findByRole('button', { name: triggerName }))
-  fireEvent.click(await screen.findByRole('button', { name: optionLabel }))
+  fireEvent.click(await screen.findByRole('option', { name: optionLabel }))
 }
 
 /** The trash icon in a calendar row carries no text of its own. */
@@ -230,9 +230,9 @@ describe('VacaySettings calendars', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add calendar' }))
     // Only countries with OpenHolidays school-holiday coverage are offered.
     fireEvent.click(screen.getByRole('button', { name: 'Select country' }))
-    expect(await screen.findByRole('button', { name: 'Netherlands' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'United States' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Netherlands' }))
+    expect(await screen.findByRole('option', { name: 'Netherlands' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'United States' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: 'Netherlands' }))
 
     await pickLoadedOption('Select region (required)', 'Northern Region')
     fireEvent.click(screen.getByRole('button', { name: 'Add' }))

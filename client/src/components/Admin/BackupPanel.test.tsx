@@ -510,7 +510,7 @@ describe('BackupPanel', () => {
 
     expect(screen.getByText('Server local time (12h format) (Timezone: UTC)')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '12:00 AM' }))
-    await user.click(await screen.findByRole('button', { name: '2:00 PM' }))
+    await user.click(await screen.findByRole('option', { name: '2:00 PM' }))
     await user.click(screen.getByRole('button', { name: /^save$/i }))
 
     await waitFor(() => expect(saved).toMatchObject({ hour: 14 }))
@@ -540,7 +540,7 @@ describe('BackupPanel', () => {
     expect(screen.queryByText('Sun')).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '1' }))
-    await user.click(await screen.findByRole('button', { name: '15' }))
+    await user.click(await screen.findByRole('option', { name: '15' }))
     await user.click(screen.getByRole('button', { name: /^save$/i }))
 
     await waitFor(() => expect(saved).toMatchObject({ day_of_month: 15 }))

@@ -1080,7 +1080,7 @@ describe('PlaceFormModal', () => {
     await user.type(screen.getByPlaceholderText('https://...'), 'https://louvre.fr');
     // Pick the category through the CustomSelect trigger.
     await user.click(screen.getByText(/No category/i));
-    await user.click(screen.getByRole('button', { name: 'Museums' }));
+    await user.click(screen.getByRole('option', { name: 'Museums' }));
 
     await user.click(screen.getByRole('button', { name: /^Add$/i }));
     await waitFor(() => expect(onSave).toHaveBeenCalled());
