@@ -1489,6 +1489,75 @@ export class MapsService {
     return { places, source: 'google' };
   }
 
+  /**
+   * Cost-lean Google lookup used by the batch-enrichment preview.
+   *
+   * The general search requests rating/contact fields and is therefore billed
+   * as Text Search Enterprise. Preview only needs identity and coordinates, so
+   * keep this mask pinned to the Text Search Pro field set.
+   */
+  async searchPlaceCandidates(
+    userId: number,
+    query: string,
+    lang?: string,
+    locationBias?: { lat: number; lng: number; radius?: number },
+  ): Promise<{ places: Record<string, unknown>[]; source: 'google' }> {
+    const { key: apiKey, source: keySource } = this.resolveMapsKey(userId);
+    if (!apiKey) {
+      throw Object.assign(new Error('Google Maps API key not configured'), { status: 400 });
+    }
+
+    const body: Record<string, unknown> = { textQuery: query, languageCode: toApiLang(lang) };
+    if (locationBias) {
+      body.locationBias = {
+        circle: {
+          center: { latitude: locationBias.lat, longitude: locationBias.lng },
+          radius: locationBias.radius ?? 2_000,
+        },
+      };
+    }
+
+    const response = await this.googleRequest(
+      'https://places.googleapis.com/v1/places:searchText',
+      'searchText/enrichmentPreview',
+      'text_search_pro',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': apiKey,
+          'X-Goog-FieldMask':
+            'places.id,places.displayName,places.formattedAddress,places.location,places.types,places.googleMapsUri',
+        },
+        body: JSON.stringify(body),
+      },
+    );
+
+    const data = (await response.json()) as { places?: GooglePlaceResult[]; error?: { message?: string } };
+    if (!response.ok) {
+      logKeyFailure('searchText/enrichmentPreview', response.status, userId, keySource);
+      const error = new Error(data.error?.message || 'Google Places API error') as Error & { status: number };
+      error.status = response.status;
+      throw error;
+    }
+
+    return {
+      source: 'google',
+      places: (data.places ?? [])
+        .map((place) => ({
+          google_place_id: String(place.id ?? '').trim(),
+          google_ftid: googleFtidFromMapsUrl(place.googleMapsUri),
+          name: place.displayName?.text || '',
+          address: place.formattedAddress || '',
+          lat: place.location?.latitude ?? null,
+          lng: place.location?.longitude ?? null,
+          types: place.types || [],
+          source: 'google',
+        }))
+        .filter((place) => place.google_place_id.length > 0),
+    };
+  }
+
   // ── Autocomplete (Google or Nominatim fallback) ────────────────────────────
 
   async autocompletePlaces(
@@ -1586,6 +1655,25 @@ export class MapsService {
     lang?: string,
     sessionToken?: string,
   ): Promise<{ place: Record<string, unknown> | null }> {
+    return this.getPlaceDetailsInternal(userId, placeId, lang, sessionToken, false);
+  }
+
+  /** Fresh provider details for an explicitly confirmed enrichment choice. */
+  async getPlaceDetailsFresh(
+    userId: number,
+    placeId: string,
+    lang?: string,
+  ): Promise<{ place: Record<string, unknown> | null }> {
+    return this.getPlaceDetailsInternal(userId, placeId, lang, undefined, true);
+  }
+
+  private async getPlaceDetailsInternal(
+    userId: number,
+    placeId: string,
+    lang?: string,
+    sessionToken?: string,
+    refresh = false,
+  ): Promise<{ place: Record<string, unknown> | null }> {
     // OSM details: placeId is "node:123456" or "way:123456" etc.
     if (placeId.includes(':')) {
       const [osmType, osmId] = placeId.split(':');
@@ -1634,12 +1722,14 @@ export class MapsService {
 
     // Check DB cache first (lean mask, expanded=0) — 7-day TTL
     const DETAILS_TTL = 7 * 24 * 60 * 60 * 1000;
-    const cached = this.database.get<{ payload_json: string; fetched_at: number }>(
-      'SELECT payload_json, fetched_at FROM place_details_cache WHERE place_id = ? AND lang = ? AND expanded = 0',
-      placeId,
-      langKey,
-    );
-    if (cached && Date.now() - cached.fetched_at < DETAILS_TTL) return { place: JSON.parse(cached.payload_json) };
+    if (!refresh) {
+      const cached = this.database.get<{ payload_json: string; fetched_at: number }>(
+        'SELECT payload_json, fetched_at FROM place_details_cache WHERE place_id = ? AND lang = ? AND expanded = 0',
+        placeId,
+        langKey,
+      );
+      if (cached && Date.now() - cached.fetched_at < DETAILS_TTL) return { place: JSON.parse(cached.payload_json) };
+    }
 
     // Closes the autocomplete session this lookup belongs to, so Google bills
     // the search once instead of per keystroke. A cache hit above never reaches

@@ -335,6 +335,31 @@ describe('ArtikelZeile — category picker', () => {
 })
 
 describe('ArtikelZeile — sharing badges', () => {
+  it('FE-W5ROW-024a: a Shared recipient gets a fully read-only row', async () => {
+    const patched: Record<string, unknown>[] = []
+    server.use(
+      http.put('/api/trips/1/packing/1', async ({ request }) => {
+        patched.push(await request.json() as Record<string, unknown>)
+        return HttpResponse.json({ item: buildPackingItem({ id: 1, name: 'Stove', checked: 1, is_private: 1, owner_id: 2 }) })
+      }),
+    )
+    const { container } = setup({
+      item: buildPackingItem({ id: 1, name: 'Stove', is_private: 1, owner_id: 2, recipients: [{ user_id: 1, username: 'me' }] }),
+      currentUserId: 1,
+      onSetSharing: vi.fn(), onClone: vi.fn(), onJoin: vi.fn(), onLeave: vi.fn(),
+      drag: { isDragging: false, isOver: false, onStart: vi.fn(), onOver: vi.fn(), onEnd: vi.fn(), onDrop: vi.fn() },
+    })
+
+    const checkbox = container.querySelector('svg.lucide-square')!.closest('button')!
+    expect(checkbox).toBeDisabled()
+    fireEvent.click(checkbox)
+    expect(patched).toEqual([])
+    expect(screen.queryByTitle('Rename')).toBeNull()
+    expect(screen.queryByTitle('Delete')).toBeNull()
+    expect(screen.queryByTitle('Sharing')).toBeNull()
+    expect(container.querySelector('div[draggable="true"]')).toBeNull()
+  })
+
   it('FE-W5ROW-018: an item somebody else brings shows their name', () => {
     setup({
       item: buildPackingItem({ id: 1, name: 'Stove', is_private: 1, owner_id: 2, owner_username: 'Bob' } as Partial<PackingItem>),

@@ -79,14 +79,13 @@ afterEach(() => {
 })
 
 describe('VacaySettings calendars', () => {
-  it('FE-COMP-VCYSET-001: the week-start buttons save the other day', () => {
+  it('FE-COMP-VCYSET-001: week start is managed in personal display settings instead of the plan', () => {
     const updatePlan = vi.fn(async (_u: Partial<VacayPlan>) => {})
     useVacayStore.setState({ updatePlan })
     render(<VacaySettings onClose={vi.fn()} />)
 
-    // 'Sun' is also a weekend-day chip; the week-start pair comes second.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Sun' })[1])
-    expect(updatePlan).toHaveBeenCalledWith({ week_start: 0 })
+    expect(screen.queryByText('Week starts on')).not.toBeInTheDocument()
+    expect(updatePlan).not.toHaveBeenCalledWith(expect.objectContaining({ week_start: expect.anything() }))
   })
 
   it('FE-COMP-VCYSET-002: the holiday toggles flip their own plan flag', () => {

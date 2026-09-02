@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { readEnv } from '../../app-config';
 import { DatabaseService } from '../database/database.service';
 
 export const GOOGLE_API_SKUS = [
@@ -55,7 +56,10 @@ export function googleBillingPeriod(at: Date = new Date()): string {
   return `${year}-${month}`;
 }
 
-export function resolveGoogleApiHardCap(sku: GoogleApiSku, env: GoogleApiEnvironment = process.env): number {
+export function resolveGoogleApiHardCap(
+  sku: GoogleApiSku,
+  env: GoogleApiEnvironment = readEnv().googleApiUsage.capOverrides,
+): number {
   const policy = SKU_POLICIES[sku];
   const raw = env[policy.env];
   if (raw === undefined || raw.trim() === '') return policy.defaultHardCap;

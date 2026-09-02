@@ -24,11 +24,31 @@ describe('GoogleApiUsageService', () => {
     delete process.env.TREK_GOOGLE_CAP_TEXT_SEARCH_PRO;
     delete process.env.TREK_GOOGLE_CAP_PLACE_PHOTOS;
     delete process.env.TREK_GOOGLE_CAP_AUTOCOMPLETE;
+    delete process.env.TREK_GOOGLE_CAP_TEXT_SEARCH_ENTERPRISE;
   });
 
   it('GOOG-01: uses the America/Los_Angeles billing boundary', () => {
     expect(googleBillingPeriod(new Date('2026-08-01T06:59:59.999Z'))).toBe('2026-07');
     expect(googleBillingPeriod(new Date('2026-08-01T07:00:00.000Z'))).toBe('2026-08');
+  });
+
+  it('GOOG-01: handles the winter PST boundary', () => {
+    expect(googleBillingPeriod(new Date('2027-01-01T07:59:59.999Z'))).toBe('2026-12');
+    expect(googleBillingPeriod(new Date('2027-01-01T08:00:00.000Z'))).toBe('2027-01');
+  });
+
+  it('GOOG-01: keeps every documented default cap at the 80 percent ceiling', () => {
+    expect(resolveGoogleApiHardCap('autocomplete', {})).toBe(8000);
+    expect(resolveGoogleApiHardCap('text_search_pro', {})).toBe(4000);
+    expect(resolveGoogleApiHardCap('text_search_enterprise', {})).toBe(800);
+    expect(resolveGoogleApiHardCap('place_details_enterprise', {})).toBe(800);
+    expect(resolveGoogleApiHardCap('place_details_atmosphere', {})).toBe(800);
+    expect(resolveGoogleApiHardCap('place_photos', {})).toBe(800);
+  });
+
+  it('GOOG-01: accepts lower and zero cap overrides', () => {
+    expect(resolveGoogleApiHardCap('text_search_pro', { TREK_GOOGLE_CAP_TEXT_SEARCH_PRO: '123' })).toBe(123);
+    expect(resolveGoogleApiHardCap('text_search_pro', { TREK_GOOGLE_CAP_TEXT_SEARCH_PRO: '0' })).toBe(0);
   });
 
   it('GOOG-01: atomically reserves the last slot and rejects the next call', () => {
@@ -49,6 +69,23 @@ describe('GoogleApiUsageService', () => {
     process.env.TREK_GOOGLE_CAP_AUTOCOMPLETE = '2';
     usage.reserve('autocomplete', new Date('2026-07-15T00:00:00Z'));
     expect(usage.snapshot(new Date('2026-07-15T00:00:00Z')).find((row) => row.sku === 'autocomplete')).toMatchObject({ used: 1, cap: 2 });
+  });
+
+  it('GOOG-01: isolates periods and SKUs in snapshots', () => {
+    process.env.TREK_GOOGLE_CAP_TEXT_SEARCH_PRO = '3';
+    usage.reserve('text_search_pro', new Date('2026-07-31T12:00:00-07:00'));
+    usage.reserve('text_search_pro', new Date('2026-08-01T12:00:00-07:00'));
+    usage.reserve('text_search_pro', new Date('2026-08-01T13:00:00-07:00'));
+    expect(usage.snapshot(new Date('2026-07-31T12:00:00-07:00')).find((row) => row.sku === 'text_search_pro')).toMatchObject({ period: '2026-07', used: 1 });
+    expect(usage.snapshot(new Date('2026-08-01T12:00:00-07:00')).find((row) => row.sku === 'text_search_pro')).toMatchObject({ period: '2026-08', used: 2 });
+  });
+
+  it('GOOG-01: exposes the stable quota error envelope', () => {
+    process.env.TREK_GOOGLE_CAP_TEXT_SEARCH_ENTERPRISE = '1';
+    usage.reserve('text_search_enterprise', new Date('2026-07-15T00:00:00Z'));
+    try { usage.reserve('text_search_enterprise', new Date('2026-07-15T00:00:00Z')); throw new Error('expected quota error'); } catch (error) {
+      expect(error).toMatchObject({ status: 429, code: 'GOOGLE_API_MONTHLY_CAP_REACHED', sku: 'text_search_enterprise', usage: { used: 1, cap: 1, remaining: 0 } });
+    }
   });
 
   it('GOOG-01: invalid config falls back and never raises the built-in cap', () => {

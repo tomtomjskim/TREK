@@ -9,6 +9,8 @@ import {
   placeExportGpxRequestSchema,
   placeRatingRequestSchema,
   placeUpdateRequestSchema,
+  placeEnrichmentPreviewRequestSchema,
+  placeEnrichmentApplyRequestSchema,
 } from '@trek/shared';
 
 /**
@@ -34,3 +36,5 @@ export class PlaceImportListDto extends createZodDto(placeImportListRequestSchem
 export class PlaceImportGpxDto extends createZodDto(placeImportGpxRequestSchema) {}
 export class PlaceImportMapDto extends createZodDto(placeImportMapRequestSchema) {}
 export class PlaceExportGpxDto extends createZodDto(placeExportGpxRequestSchema) {}
+export class PlaceEnrichmentPreviewDto extends createZodDto(placeEnrichmentPreviewRequestSchema) {}
+export class PlaceEnrichmentApplyDto extends createZodDto(placeEnrichmentApplyRequestSchema) {}

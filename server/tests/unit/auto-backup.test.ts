@@ -23,6 +23,9 @@ const fsMock = vi.hoisted(() => ({
   unlinkSync: vi.fn(),
   createWriteStream: vi.fn(),
   createReadStream: vi.fn(),
+  openSync: vi.fn(() => 1),
+  readSync: vi.fn(() => 0),
+  closeSync: vi.fn(),
   rmSync: vi.fn(),
   copyFileSync: vi.fn(),
   renameSync: vi.fn(),
@@ -35,6 +38,7 @@ const archiveMock = vi.hoisted(() => ({
   file: vi.fn(),
   directory: vi.fn(),
   glob: vi.fn(),
+  append: vi.fn(),
   finalize: vi.fn(),
   on: vi.fn(),
 }));

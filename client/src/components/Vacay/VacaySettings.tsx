@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { type LucideIcon, CalendarOff, AlertCircle, Building2, Unlink, ArrowRightLeft, Globe, Loader2, Plus, Trash2, CalendarDays, CalendarRange, GraduationCap } from 'lucide-react'
+import { type LucideIcon, CalendarOff, AlertCircle, Building2, Unlink, ArrowRightLeft, Globe, Loader2, Plus, Trash2, CalendarRange, GraduationCap } from 'lucide-react'
 import { useVacayStore } from '../../store/vacayStore'
 import { getIntlLanguage, useTranslation } from '../../i18n'
 import { useToast } from '../shared/Toast'
@@ -95,37 +95,6 @@ export default function VacaySettings({ onClose }: VacaySettingsProps) {
         </div>
       )}
 
-      {/* Week start */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <CalendarDays size={16} className="text-content-muted" style={{ flexShrink: 0 }} />
-          <div style={{ flex: 1 }}>
-            <span className="text-sm font-medium text-content">{t('vacay.weekStart')}</span>
-            <p className="text-xs mt-0.5 text-content-faint">{t('vacay.weekStartHint')}</p>
-          </div>
-        </div>
-        <div style={{ paddingLeft: 36, marginTop: 8 }} className="flex gap-1.5">
-          {[
-            { value: 1, label: t('vacay.mon') },
-            { value: 0, label: t('vacay.sun') },
-          ].map(({ value, label }) => {
-            const active = (plan.week_start ?? 1) === value
-            return (
-              <button type="button" key={value} onClick={() => updatePlan({ week_start: value })}
-                style={{
-                  padding: '4px 10px', borderRadius: 8, fontSize: 'calc(12px * var(--fs-scale-body, 1))', fontWeight: 600, cursor: 'pointer',
-                  fontFamily: 'inherit', border: '1px solid', transition: 'all 0.12s',
-                  background: active ? 'var(--text-primary)' : 'var(--bg-card)',
-                  borderColor: active ? 'var(--text-primary)' : 'var(--border-primary)',
-                  color: active ? 'var(--bg-primary)' : 'var(--text-muted)',
-                }}>
-                {label}
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
       {/* Carry-over */}
       <SettingToggle
         icon={ArrowRightLeft}
@@ -148,8 +117,11 @@ export default function VacaySettings({ onClose }: VacaySettingsProps) {
           label={t('vacay.companyHolidays')}
           hint={t('vacay.companyHolidaysHint')}
           value={plan.company_holidays_enabled}
+          disabled={isFused}
+          title={isFused ? t('shared.readOnly') : undefined}
           onChange={() => toggle('company_holidays_enabled')}
         />
+        {isFused && <p className="text-[11px] mt-1 ml-7 text-content-faint">{t('shared.readOnly')}</p>}
         {plan.company_holidays_enabled && (
           <div className="ml-7 mt-2">
             <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-md" style={{ background: 'var(--vg-surf)', border: '1px solid var(--vg-line)' }}>
@@ -413,9 +385,11 @@ interface SettingToggleProps {
   hint: string
   value: boolean
   onChange: () => void
+  disabled?: boolean
+  title?: string
 }
 
-function SettingToggle({ icon: Icon, label, hint, value, onChange }: SettingToggleProps) {
+function SettingToggle({ icon: Icon, label, hint, value, onChange, disabled, title }: SettingToggleProps) {
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-2 min-w-0">
@@ -425,7 +399,7 @@ function SettingToggle({ icon: Icon, label, hint, value, onChange }: SettingTogg
           <p className="text-[11px] text-content-faint">{hint}</p>
         </div>
       </div>
-      <button type="button" onClick={onChange}
+      <button type="button" disabled={disabled} title={title} onClick={onChange}
         className={`relative shrink-0 inline-flex h-6 w-11 items-center rounded-full transition-colors ${value ? 'bg-content' : 'bg-edge'}`}>
         <span className="absolute left-1 h-4 w-4 rounded-full transition-transform duration-200 bg-surface-card"
           style={{ transform: value ? 'translateX(20px)' : 'translateX(0)' }} />

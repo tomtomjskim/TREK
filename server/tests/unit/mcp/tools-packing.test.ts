@@ -329,6 +329,26 @@ describe('Tool: update_packing_item', () => {
       );
     });
   });
+
+  it('does not update a Shared item for its recipient', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: recipient } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, recipient.id);
+    const item = createPackingItem(testDb, trip.id, { name: 'Shared medication' });
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ? WHERE id = ?').run(owner.id, item.id);
+    testDb.prepare('INSERT INTO packing_item_recipients (item_id, user_id) VALUES (?, ?)').run(item.id, recipient.id);
+
+    await withHarness(recipient.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'update_packing_item',
+        arguments: { tripId: trip.id, itemId: item.id, checked: true },
+      });
+      expect(result.isError).toBe(true);
+    });
+
+    expect(testDb.prepare('SELECT checked FROM packing_items WHERE id = ?').get(item.id)).toEqual({ checked: 0 });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -858,6 +878,37 @@ describe('Tool: delete_packing_item', () => {
       expect(testDb.prepare('SELECT id FROM packing_items WHERE id = ?').get(item.id))
         .toEqual({ id: item.id });
     });
+  });
+
+  it('fans out a Shared deletion to its owner and recipient only', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: recipient } = createUser(testDb);
+    const { user: bystander } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, recipient.id);
+    addTripMember(testDb, trip.id, bystander.id);
+    const item = createPackingItem(testDb, trip.id, { name: 'Shared medication' });
+    testDb.prepare('UPDATE packing_items SET is_private = 1, owner_id = ? WHERE id = ?').run(owner.id, item.id);
+    testDb.prepare('INSERT INTO packing_item_recipients (item_id, user_id) VALUES (?, ?)').run(item.id, recipient.id);
+
+    await withHarness(owner.id, async (h) => {
+      const result = await h.client.callTool({
+        name: 'delete_packing_item',
+        arguments: { tripId: trip.id, itemId: item.id },
+      });
+      expect(result.isError).not.toBe(true);
+    });
+
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    expect(broadcastMock).toHaveBeenCalledWith(
+      trip.id, 'packing:deleted', expect.objectContaining({ itemId: item.id }), undefined, owner.id,
+    );
+    expect(broadcastMock).toHaveBeenCalledWith(
+      trip.id, 'packing:deleted', expect.objectContaining({ itemId: item.id }), undefined, recipient.id,
+    );
+    expect(broadcastMock).not.toHaveBeenCalledWith(
+      trip.id, 'packing:deleted', expect.objectContaining({ itemId: item.id }), undefined, bystander.id,
+    );
   });
 });
 

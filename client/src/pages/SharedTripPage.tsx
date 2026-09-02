@@ -43,10 +43,6 @@ function displayPlaceNote(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
-function isPopupCloseControl(target: EventTarget | null) {
-  return target instanceof Element && Boolean(target.closest('.leaflet-popup-close-button'));
-}
-
 // Injected into Leaflet's marker HTML, where CSS variables cannot reach - the same
 // reason MapView.tsx is exempt from theme:lint outright.
 const ORDER_BADGE_STYLE = 'position:absolute;bottom:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;padding:0 3px;background:rgba(255,255,255,0.94);border:1.5px solid rgba(0,0,0,0.15);box-shadow:0 1px 4px rgba(0,0,0,0.18);display:flex;align-items:center;justify-content:center;font-weight:800;color:#111827;line-height:1;box-sizing:border-box;white-space:nowrap;'; // theme-lint-disable
@@ -111,81 +107,12 @@ export default function SharedTripPage() {
     setActiveTab,
     showLangPicker,
     setShowLangPicker,
+    markerRefs,
+    clearKeyboardOpener,
+    recordKeyboardOpener,
+    onMarkerPopupOpen,
+    onMarkerPopupClose,
   } = useSharedTrip();
-  // `Map` is also the icon import used by the tab button below.
-  const markerRefs = useRef(new globalThis.Map<string, any>());
-  const keyboardOpenerRef = useRef<{ key: string; element: HTMLElement } | null>(null);
-  const shouldRestoreFocusRef = useRef(false);
-  const popupListenerCleanupRef = useRef<(() => void) | null>(null);
-
-  const clearKeyboardOpener = () => {
-    popupListenerCleanupRef.current?.();
-    popupListenerCleanupRef.current = null;
-    keyboardOpenerRef.current = null;
-    shouldRestoreFocusRef.current = false;
-  };
-
-  const recordKeyboardOpener = (key: string, marker: any) => {
-    const markerElement = marker?.getElement?.() ?? markerRefs.current.get(key)?.getElement?.();
-    if (!markerElement) return;
-    popupListenerCleanupRef.current?.();
-    popupListenerCleanupRef.current = null;
-    keyboardOpenerRef.current = { key, element: markerElement };
-    shouldRestoreFocusRef.current = false;
-  };
-
-  // Leaflet creates the close control outside React's Popup children. These listeners
-  // are deliberately attached only to the opened Popup so a share page never reaches
-  // into another map instance (or the rest of the document) to restore focus.
-  const onMarkerPopupOpen = (key: string, event: any) => {
-    const marker = event.target;
-    const markerElement = marker?.getElement?.();
-    const opener = keyboardOpenerRef.current;
-    if (!markerElement || opener?.key !== key || opener.element !== markerElement) {
-      clearKeyboardOpener();
-    }
-
-    const popupElement = marker?.getPopup?.()?.getElement?.();
-    if (!popupElement) return;
-    popupListenerCleanupRef.current?.();
-    const onKeyDown = (keyboardEvent: KeyboardEvent) => {
-      if (keyboardEvent.key === 'Escape') {
-        keyboardEvent.preventDefault();
-        keyboardEvent.stopPropagation();
-        shouldRestoreFocusRef.current = true;
-        marker.closePopup?.();
-      } else if (
-        (keyboardEvent.key === 'Enter' || keyboardEvent.key === ' ') &&
-        isPopupCloseControl(keyboardEvent.target)
-      ) {
-        shouldRestoreFocusRef.current = true;
-      }
-    };
-    const onPointerDown = (pointerEvent: Event) => {
-      if (isPopupCloseControl(pointerEvent.target)) shouldRestoreFocusRef.current = false;
-    };
-    popupElement.addEventListener('keydown', onKeyDown, true);
-    popupElement.addEventListener('pointerdown', onPointerDown, true);
-    popupElement.addEventListener('touchstart', onPointerDown, true);
-    popupListenerCleanupRef.current = () => {
-      popupElement.removeEventListener('keydown', onKeyDown, true);
-      popupElement.removeEventListener('pointerdown', onPointerDown, true);
-      popupElement.removeEventListener('touchstart', onPointerDown, true);
-    };
-  };
-
-  const onMarkerPopupClose = (key: string, event: any) => {
-    popupListenerCleanupRef.current?.();
-    popupListenerCleanupRef.current = null;
-    const opener = keyboardOpenerRef.current;
-    const markerElement = event.target?.getElement?.();
-    if (opener?.key === key && opener.element === markerElement && shouldRestoreFocusRef.current) {
-      queueMicrotask(() => opener.element.focus());
-    }
-    if (opener?.key === key) clearKeyboardOpener();
-  };
-
-  useEffect(() => () => popupListenerCleanupRef.current?.(), []);
 
   if (error)
     return (

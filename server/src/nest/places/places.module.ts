@@ -20,6 +20,9 @@ import { StorageModule } from '../storage/storage.module';
 import { StorageService } from '../storage/storage.service';
 import { buildStorageUploadOptions } from '../storage/storage-upload.factory';
 import { MAX_PLACE_IMAGE_SIZE } from '../common/place-image-upload';
+import { GoogleApiUsageModule } from '../google-api-usage/google-api-usage.module';
+import { PlaceBatchEnrichmentController } from './place-batch-enrichment.controller';
+import { PlaceBatchEnrichmentService } from './place-batch-enrichment.service';
 
 /**
  * Places domain (S8 — Phase 2 trip sub-domain). Depends on L4 Categories + L5
@@ -42,9 +45,9 @@ import { MAX_PLACE_IMAGE_SIZE } from '../common/place-image-upload';
         buildStorageUploadOptions(storage, { category: 'places', maxSize: MAX_PLACE_IMAGE_SIZE }),
     }),
     StorageModule,
-    McpSharedModule, PermissionsModule, QueryHelpersModule, MapsModule, AuthModule, AppConfigModule, UnsplashModule, PlacePhotosModule, JourneyDomainModule, RealtimeModule, PluginGuardsModule, AssignmentsDomainModule],
-  controllers: [PlacesController],
-  providers: [PlacesService, PlacesMcp, PlacesRpc],
+    McpSharedModule, PermissionsModule, QueryHelpersModule, MapsModule, GoogleApiUsageModule, AuthModule, AppConfigModule, UnsplashModule, PlacePhotosModule, JourneyDomainModule, RealtimeModule, PluginGuardsModule, AssignmentsDomainModule],
+  controllers: [PlacesController, PlaceBatchEnrichmentController],
+  providers: [PlacesService, PlaceBatchEnrichmentService, PlacesMcp, PlacesRpc],
   exports: [PlacesService],
 })
 export class PlacesModule {}

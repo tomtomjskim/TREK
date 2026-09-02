@@ -9,7 +9,7 @@ const wikiMocks = vi.hoisted(() => ({
   getWikiAsset: vi.fn(),
 }));
 
-vi.mock('../../../src/services/wikiService', () => ({
+vi.mock('../../../src/nest/help/wiki', () => ({
   getWikiIndex: vi.fn(),
   getWikiPage: vi.fn(),
   getWikiAsset: wikiMocks.getWikiAsset,

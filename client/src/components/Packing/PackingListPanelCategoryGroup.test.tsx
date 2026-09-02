@@ -10,6 +10,7 @@ import { useAuthStore } from '../../store/authStore'
 import { useTripStore } from '../../store/tripStore'
 import { KategorieGruppe } from './PackingListPanelCategoryGroup'
 import type { TripMember } from './usePackingListPanel'
+import type { PackingItem } from '../../types'
 
 type Props = ComponentProps<typeof KategorieGruppe>
 
@@ -176,17 +177,63 @@ describe('KategorieGruppe — rename', () => {
     await waitFor(() => expect(toastSpy).toHaveBeenCalledWith('Failed to rename', 'error', undefined))
   })
 
-  it('FE-W5CAT-009: a read-only category offers no rename entry', () => {
+  it('FE-W5CAT-009: a read-only category hides its action menu', () => {
     const { container } = setup({ canEdit: false })
-    openCategoryMenu(container)
 
-    expect(screen.queryByText('Rename')).toBeNull()
-    expect(screen.queryByText('Delete List')).toBeNull()
-    expect(screen.getByText('Check All')).toBeInTheDocument()
+    expect(container.querySelector('svg.lucide-more-horizontal')).toBeNull()
+  })
+
+  it('FE-W5CAT-009a: a shared-only category hides no-op owner actions', () => {
+    const sharedItem = buildPackingItem({
+      id: 2,
+      is_private: 1,
+      owner_id: 2,
+      recipients: [{ user_id: 1, username: 'me' }],
+    })
+    const { container } = setup({
+      items: [sharedItem],
+      allItems: [sharedItem],
+      currentUserId: 1,
+      canEdit: true,
+      canManage: false,
+    })
+
+    expect(container.querySelector('svg.lucide-more-horizontal')).toBeNull()
   })
 })
 
 describe('KategorieGruppe — bulk actions', () => {
+  it('FE-W5CAT-010b: read-only users cannot trigger bulk item updates', () => {
+    const togglePackingItem = vi.fn(async () => {})
+    useTripStore.setState({ togglePackingItem })
+    const { container } = setup({ canEdit: false })
+
+    expect(container.querySelector('svg.lucide-more-horizontal')).toBeNull()
+    expect(togglePackingItem).not.toHaveBeenCalled()
+  })
+
+  it('FE-W5CAT-010a: bulk actions skip a Shared recipient and stay owner-scoped', async () => {
+    const puts: number[] = []
+    const onDeleteAll = vi.fn(async (_items: PackingItem[]) => {})
+    server.use(
+      http.put('/api/trips/1/packing/:itemId', ({ params }) => {
+        puts.push(Number(params.itemId))
+        return HttpResponse.json({ item: buildPackingItem({ id: Number(params.itemId), checked: 1 }) })
+      }),
+    )
+    const items = [
+      buildPackingItem({ id: 1, checked: 0, is_private: 1, owner_id: 1 }),
+      buildPackingItem({ id: 2, checked: 0, is_private: 1, owner_id: 2, recipients: [{ user_id: 1, username: 'me' }] }),
+    ]
+    const { container } = setup({ items, onDeleteAll, currentUserId: 1 })
+    openCategoryMenu(container)
+    fireEvent.click(screen.getByText('Check All'))
+    await waitFor(() => expect(puts).toEqual([1]))
+    fireEvent.click(container.querySelectorAll('svg.lucide-more-horizontal')[0].closest('button')!)
+    fireEvent.click(screen.getByText('Delete List'))
+    await waitFor(() => expect(onDeleteAll).toHaveBeenCalledWith([items[0]]))
+  })
+
   it('FE-W5CAT-010: Check All only touches the unchecked items', async () => {
     const puts: number[] = []
     server.use(

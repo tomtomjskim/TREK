@@ -168,25 +168,12 @@ describe('PlacesController (parity with the legacy /api/trips/:tripId/places rou
       expect(importGoogleList).toHaveBeenCalledWith('5', 'http://x', { enrich: true, userId: 1 });
       expect(broadcast).toHaveBeenCalledTimes(2);
     });
-    it('blocks only the paid enrichment part when the administrator switch is off', async () => {
-      const importGoogleList = vi.fn();
-      const blocked = new PlacesController(svc({
-        isEnrichmentEnabled: vi.fn().mockReturnValue(false),
-        importGoogleList,
-      } as Partial<PlacesService>));
-      expect(await thrownAsync(() => blocked.importGoogle(user, '5', 'http://x', true))).toEqual({
-        status: 403,
-        body: { error: 'Place enrichment is disabled by an administrator', code: 'PLACE_ENRICHMENT_DISABLED' },
-      });
-      expect(importGoogleList).not.toHaveBeenCalled();
+    it('forwards the enrichment flag through the current request DTO', async () => {
+      const importGoogleList = vi.fn().mockResolvedValue({ places: [], listName: 'L', skipped: 0 });
+      const controller = new PlacesController(svc({ importGoogleList } as Partial<PlacesService>), new RuntimeEnvService(), storageStub);
 
-      const plainImport = vi.fn().mockResolvedValue({ places: [], listName: 'L', skipped: 0 });
-      const allowed = new PlacesController(svc({
-        isEnrichmentEnabled: vi.fn().mockReturnValue(false),
-        importGoogleList: plainImport,
-      } as Partial<PlacesService>));
-      await allowed.importGoogle(user, '5', 'http://x', false);
-      expect(plainImport).toHaveBeenCalledWith('5', 'http://x', { enrich: false, userId: 1 });
+      await controller.importGoogle(user, '5', { url: 'http://x', enrich: true });
+      expect(importGoogleList).toHaveBeenCalledWith('5', 'http://x', { enrich: true, userId: 1 });
     });
     it('wraps a thrown Error in the provider-specific 400 (Google)', async () => {
       const s = svc({ importGoogleList: vi.fn().mockRejectedValue(new Error('network down')) } as Partial<PlacesService>);
@@ -277,74 +264,6 @@ describe('PlacesController (parity with the legacy /api/trips/:tripId/places rou
       const s = svc({ updateMany } as Partial<PlacesService>);
       expect(await new PlacesController(s, new RuntimeEnvService(), storageStub).bulkUpdate(user, '5', { ids: [1], category_id: null })).toEqual({ updated: [1], count: 1 });
       expect(updateMany).toHaveBeenCalledWith('5', [1], { category_id: null });
-    });
-  });
-
-  describe('POST /enrichment/preview + /enrichment/apply', () => {
-    it('404s inaccessible trips and 403s users without place_edit before provider work', async () => {
-      const previewEnrichment = vi.fn();
-      expect(await thrownAsync(() => new PlacesController(svc({
-        verifyTripAccess: vi.fn().mockReturnValue(undefined), previewEnrichment,
-      } as Partial<PlacesService>)).previewEnrichment(user, '5', {}))).toEqual({ status: 404, body: { error: 'Trip not found' } });
-      expect(await thrownAsync(() => new PlacesController(svc({
-        canEdit: vi.fn().mockReturnValue(false), previewEnrichment,
-      } as Partial<PlacesService>)).previewEnrichment(user, '5', {}))).toEqual({ status: 403, body: { error: 'No permission' } });
-      expect(previewEnrichment).not.toHaveBeenCalled();
-    });
-
-    it('403s preview and apply with a stable code when enrichment is disabled', async () => {
-      const previewEnrichment = vi.fn();
-      const applyEnrichment = vi.fn();
-      const controller = new PlacesController(svc({
-        isEnrichmentEnabled: vi.fn().mockReturnValue(false),
-        previewEnrichment,
-        applyEnrichment,
-      } as Partial<PlacesService>));
-
-      expect(await thrownAsync(() => controller.previewEnrichment(user, '5', {}))).toEqual({
-        status: 403,
-        body: { error: 'Place enrichment is disabled by an administrator', code: 'PLACE_ENRICHMENT_DISABLED' },
-      });
-      expect(await thrownAsync(() => controller.applyEnrichment(user, '5', { matches: [] }))).toEqual({
-        status: 403,
-        body: { error: 'Place enrichment is disabled by an administrator', code: 'PLACE_ENRICHMENT_DISABLED' },
-      });
-      expect(previewEnrichment).not.toHaveBeenCalled();
-      expect(applyEnrichment).not.toHaveBeenCalled();
-    });
-
-    it('returns preview data and maps a zero-progress safety stop to stable 429', async () => {
-      const ok = { entries: [], errors: [], processed: 2, stopped: null, usage: [] };
-      const previewEnrichment = vi.fn().mockResolvedValue(ok);
-      expect(await new PlacesController(svc({ previewEnrichment } as Partial<PlacesService>))
-        .previewEnrichment(user, '5', { lang: 'ko' })).toBe(ok);
-
-      const stopped = {
-        entries: [], errors: [], processed: 0,
-        stopped: { code: 'GOOGLE_API_MONTHLY_CAP_REACHED', error: 'cap reached', sku: 'text_search_pro', usage: { used: 4000, cap: 4000 } },
-        usage: [],
-      };
-      const blocked = svc({ previewEnrichment: vi.fn().mockResolvedValue(stopped) } as Partial<PlacesService>);
-      expect(await thrownAsync(() => new PlacesController(blocked).previewEnrichment(user, '5', {}))).toEqual({
-        status: 429,
-        body: expect.objectContaining({ error: 'cap reached', code: 'GOOGLE_API_MONTHLY_CAP_REACHED' }),
-      });
-    });
-
-    it('applies selected matches, fires hooks, and broadcasts each updated place', async () => {
-      const updated = [{ id: 3 }, { id: 4 }];
-      const applyEnrichment = vi.fn().mockResolvedValue({ updated, errors: [], skipped: 0, processed: 2, stopped: null, usage: [] });
-      const broadcast = vi.fn();
-      const onUpdated = vi.fn();
-      const controller = new PlacesController(svc({ applyEnrichment, broadcast, onUpdated } as Partial<PlacesService>));
-      const body = { matches: [{ place_id: 3, google_place_id: 'g3' }] };
-
-      const result = await controller.applyEnrichment(user, '5', body, 'socket');
-
-      expect(result.updated).toEqual(updated);
-      expect(applyEnrichment).toHaveBeenCalledWith('5', user.id, body.matches, undefined);
-      expect(onUpdated).toHaveBeenCalledTimes(2);
-      expect(broadcast).toHaveBeenCalledWith('5', 'place:updated', { place: { id: 3 } }, 'socket');
     });
   });
 

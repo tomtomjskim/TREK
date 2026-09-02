@@ -1632,6 +1632,13 @@ describe('PackingListPanel', () => {
     const items = [
       buildPackingItem({ name: 'Medication', is_private: 1, owner_id: 2, recipients: [{ user_id: 1, username: 'me' }] }),
     ];
+    const patched: Record<string, unknown>[] = []
+    server.use(
+      http.put('/api/trips/1/packing/:itemId', async ({ request }) => {
+        patched.push(await request.json() as Record<string, unknown>)
+        return HttpResponse.json({ item: buildPackingItem({ name: 'Medication', checked: 1, is_private: 1, owner_id: 2 }) })
+      }),
+    )
     const { container } = render(<PackingListPanel tripId={1} items={items} />);
     await userEvent.click(screen.getByText('My list'));
     await screen.findByText('Medication');
@@ -1640,6 +1647,12 @@ describe('PackingListPanel', () => {
     expect(screen.queryByTitle('Delete')).not.toBeInTheDocument();
     const checkbox = container.querySelector('svg.lucide-square')?.closest('button');
     expect(checkbox).toBeDisabled();
+    await userEvent.click(checkbox!);
+    expect(patched).toEqual([]);
+
+    // The recipient has no reorder grip or sharing affordance.
+    expect(container.querySelector('div[draggable="true"]')).toBeNull();
+    expect(screen.queryByTitle('Sharing')).not.toBeInTheDocument();
   });
 
   it('FE-COMP-PACKING-083: category bulk check skips Shared-to-me rows', async () => {

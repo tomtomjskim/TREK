@@ -481,6 +481,25 @@ describe('private items (#858)', () => {
     expect(svc.deleteItem(trip.id, item.id, user.id)).toBeNull();
   });
 
+  it('PACK-SVC-017a: deleteItem returns an enriched Shared snapshot with recipients', () => {
+    const { user: owner } = createUser(testDb);
+    const { user: recipient } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, recipient.id);
+    const item = svc.createItem(trip.id, {
+      name: 'Shared medication',
+      visibility: 'shared',
+      recipient_ids: [recipient.id],
+    }, owner.id) as any;
+
+    const deleted = svc.deleteItem(trip.id, item.id, owner.id) as any;
+
+    expect(deleted).toMatchObject({ id: item.id, is_private: 1, owner_id: owner.id });
+    expect(deleted.recipients).toEqual([
+      expect.objectContaining({ user_id: recipient.id }),
+    ]);
+  });
+
   it('PACK-SVC-018: bulkImport stamps the owner on every item', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id);
@@ -1104,10 +1123,11 @@ describe('packing item object-level authorization', () => {
     expect(svc.deleteItem(trip.id, personal.id)).toBeNull();
   });
 
-  it('PACK-SVC-107: the owner and the recipients keep working', () => {
+  it('PACK-SVC-107: the owner keeps working while a Shared recipient is read-only', () => {
     const { trip, personal, shared, common, owner, friend, intruder } = restrictedTrip();
     expect(svc.updateItem(trip.id, personal.id, { name: 'Diary v2' }, ['name'], undefined, owner.id)).toBeTruthy();
-    expect(svc.updateItem(trip.id, shared.id, { checked: 1 }, ['checked'], undefined, friend.id)).toBeTruthy();
+    expect(svc.updateItem(trip.id, shared.id, { checked: 1 }, ['checked'], undefined, friend.id)).toBeNull();
+    expect(testDb.prepare('SELECT checked FROM packing_items WHERE id = ?').get(shared.id)).toEqual({ checked: 0 });
     expect(svc.updateItem(trip.id, common.id, { checked: 1 }, ['checked'], undefined, intruder.id)).toBeTruthy();
     expect(svc.cloneItem(trip.id, common.id, intruder.id)).toBeTruthy();
     expect(svc.deleteItem(trip.id, personal.id, owner.id)).toBeTruthy();
@@ -1123,9 +1143,17 @@ describe('packing item object-level authorization', () => {
       ['is_private'],
       undefined,
       friend.id,
-    )).toEqual({ forbidden: true });
+    )).toBeNull();
     expect(testDb.prepare('SELECT is_private, owner_id FROM packing_items WHERE id = ?').get(shared.id))
       .toEqual({ is_private: 1, owner_id: expect.any(Number) });
+  });
+
+  it('PACK-SVC-107b: a Shared recipient cannot delete the owner\'s restricted item', () => {
+    const { trip, shared, friend } = restrictedTrip();
+
+    expect(svc.deleteItem(trip.id, shared.id, friend.id)).toBeNull();
+    expect(testDb.prepare('SELECT name FROM packing_items WHERE id = ?').get(shared.id))
+      .toEqual({ name: 'Power bank' });
   });
 
   it('PACK-SVC-108: an instance template captures only Common items, never the actor\'s personal rows', () => {
@@ -1153,6 +1181,8 @@ describe('packing item object-level authorization', () => {
 
     expect(testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(hidden.id)).toEqual(hiddenBefore);
     expect(testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(personal.id)).toEqual({ sort_order: 0 });
-    expect(testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(common.id)).toEqual({ sort_order: 1 });
+    // Writable rows exchange only the slots they already occupied. The hidden
+    // row keeps slot 1, so a recipient never sees it jump after a refresh.
+    expect(testDb.prepare('SELECT sort_order FROM packing_items WHERE id = ?').get(common.id)).toEqual({ sort_order: 2 });
   });
 });

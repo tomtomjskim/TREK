@@ -283,9 +283,35 @@ describe('Three-tier packing sharing (#858)', () => {
       .set('Cookie', authCookie(recipient.id))
       .send({ is_private: false });
 
-    expect(denied.status).toBe(403);
+    expect(denied.status).toBe(404);
     expect(testDb.prepare('SELECT is_private, owner_id FROM packing_items WHERE id = ?').get(shared.body.item.id))
       .toEqual({ is_private: 1, owner_id: owner.id });
+  });
+
+  it('PACK-3T-005c — a Shared recipient cannot edit or delete the owner\'s item', async () => {
+    const { user: owner } = createUser(testDb);
+    const { user: recipient } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addTripMember(testDb, trip.id, recipient.id);
+    const shared = await request(app)
+      .post(`/api/trips/${trip.id}/packing`)
+      .set('Cookie', authCookie(owner.id))
+      .send({ name: 'Medication', visibility: 'shared', recipient_ids: [recipient.id] });
+
+    const deniedUpdate = await request(app)
+      .put(`/api/trips/${trip.id}/packing/${shared.body.item.id}`)
+      .set('Cookie', authCookie(recipient.id))
+      .send({ checked: true, quantity: 2 });
+    expect(deniedUpdate.status).toBe(404);
+    expect(testDb.prepare('SELECT checked, quantity FROM packing_items WHERE id = ?').get(shared.body.item.id))
+      .toMatchObject({ checked: 0, quantity: 1 });
+
+    const deniedDelete = await request(app)
+      .delete(`/api/trips/${trip.id}/packing/${shared.body.item.id}`)
+      .set('Cookie', authCookie(recipient.id));
+    expect(deniedDelete.status).toBe(404);
+    expect(testDb.prepare('SELECT checked, quantity FROM packing_items WHERE id = ?').get(shared.body.item.id))
+      .toEqual({ checked: 0, quantity: 1 });
   });
 });
 

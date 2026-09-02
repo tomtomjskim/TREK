@@ -1,6 +1,7 @@
 import type express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readEnv } from '../../app-config';
 
 const ANDROID_PACKAGE_ID = 'com.jsnetworkcorp.trek';
 const ANDROID_RELEASE_FINGERPRINT =
@@ -63,7 +64,7 @@ function isValidAssetLinksDocument(value: unknown): value is AssetLinksStatement
  */
 export function applyAndroidReleaseRoutes(
   app: express.Application,
-  releaseDir = process.env.TREK_ANDROID_RELEASE_DIR || DEFAULT_ANDROID_RELEASE_DIR,
+  releaseDir = readEnv().paths.androidReleaseDir || DEFAULT_ANDROID_RELEASE_DIR,
 ): void {
   app.get('/.well-known/assetlinks.json', (_req, res) => {
     const file = resolveFixedReleaseFile(releaseDir, 'assetlinks.json');

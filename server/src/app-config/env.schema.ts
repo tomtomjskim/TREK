@@ -130,6 +130,7 @@ export const envSchema = z.object({
   TREK_DB_SYNCHRONOUS: anyString,
   TREK_WIKI_DIR: anyString,
   TREK_PLACE_PHOTO_DIR: anyString,
+  TREK_ANDROID_RELEASE_DIR: anyString,
   BACKUP_UPLOAD_LIMIT_MB: positiveNumber,
   BACKUP_MAX_DECOMPRESSED_MB: positiveNumber,
 
@@ -141,6 +142,16 @@ export const envSchema = z.object({
   PLACES_API_KEY: anyString,
   MAPBOX_ACCESS_TOKEN: anyString,
   CARTO_API_KEY: anyString,
+  // Quota parsing deliberately remains at the SKU owner: invalid strings fall
+  // back and a literal zero disables that paid call path.
+  TREK_GOOGLE_CAP_AUTOCOMPLETE: anyString,
+  TREK_GOOGLE_CAP_TEXT_SEARCH_IDS_ONLY: anyString,
+  TREK_GOOGLE_CAP_TEXT_SEARCH_PRO: anyString,
+  TREK_GOOGLE_CAP_TEXT_SEARCH_ENTERPRISE: anyString,
+  TREK_GOOGLE_CAP_PLACE_DETAILS_IDS_ONLY: anyString,
+  TREK_GOOGLE_CAP_PLACE_DETAILS_ENTERPRISE: anyString,
+  TREK_GOOGLE_CAP_PLACE_DETAILS_ATMOSPHERE: anyString,
+  TREK_GOOGLE_CAP_PLACE_PHOTOS: anyString,
   DEMO_MODE: boolStr,
   DEMO_ADMIN_USER: anyString,
   DEMO_ADMIN_EMAIL: anyString,

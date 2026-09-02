@@ -1,5 +1,5 @@
 // FE-STORE-PACKING-001 to FE-STORE-PACKING-002 (reorder, #969)
-// FE-STORE-PACKING-003 to FE-STORE-PACKING-015 (three-tier sharing #858, mutation and error paths)
+// FE-STORE-PACKING-003 to FE-STORE-PACKING-017 (three-tier sharing #858, mutation and error paths)
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../tests/helpers/msw/server';
 import { resetAllStores, seedStore } from '../../../tests/helpers/store';
@@ -250,7 +250,7 @@ describe('packingSlice', () => {
     expect(items[1].checked).toBe(0);
   });
 
-  it('FE-STORE-PACKING-015: reorderPackingItems drops unknown ids and keeps unlisted items at the end', async () => {
+  it('FE-STORE-PACKING-015: reorderPackingItems drops unknown ids and preserves an unlisted trailing slot', async () => {
     const a = buildPackingItem({ id: 1, trip_id: 1, sort_order: 0 });
     const b = buildPackingItem({ id: 2, trip_id: 1, sort_order: 1 });
     const untouched = buildPackingItem({ id: 3, trip_id: 1, sort_order: 2 });
@@ -266,6 +266,36 @@ describe('packingSlice', () => {
     // The unknown id is dropped before reindexing, so the reordered items get a
     // gapless sequence; the unlisted item keeps its own sort_order.
     expect(items.map(i => i.sort_order)).toEqual([0, 1, 2]);
+  });
+
+  it('FE-STORE-PACKING-016: reorderPackingItems preserves an unlisted shared item in its existing slot', async () => {
+    const a = buildPackingItem({ id: 1, trip_id: 1, sort_order: 0 });
+    const sharedToMe = buildPackingItem({ id: 3, trip_id: 1, sort_order: 1, is_private: 1, owner_id: 9 });
+    const b = buildPackingItem({ id: 2, trip_id: 1, sort_order: 2 });
+    seedStore(useTripStore, { packingItems: [a, sharedToMe, b] });
+
+    server.use(
+      http.put('/api/trips/1/packing/reorder', () => HttpResponse.json({ success: true }))
+    );
+    await useTripStore.getState().reorderPackingItems(1, [2, 1]);
+
+    const items = useTripStore.getState().packingItems;
+    expect(items.map(i => i.id)).toEqual([2, 3, 1]);
+    expect(items.map(i => i.sort_order)).toEqual([0, 1, 2]);
+  });
+
+  it('FE-STORE-PACKING-017: reorderPackingItems normalizes duplicate legacy slots', async () => {
+    const a = buildPackingItem({ id: 1, trip_id: 1, sort_order: 0 });
+    const b = buildPackingItem({ id: 2, trip_id: 1, sort_order: 0 });
+    seedStore(useTripStore, { packingItems: [a, b] });
+    server.use(
+      http.put('/api/trips/1/packing/reorder', () => HttpResponse.json({ success: true }))
+    );
+
+    await useTripStore.getState().reorderPackingItems(1, [2, 1]);
+
+    expect(useTripStore.getState().packingItems.map(i => [i.id, i.sort_order]))
+      .toEqual([[2, 0], [1, 1]]);
   });
 
   it('FE-STORE-PACKING-013: togglePackingItem rolls the checkbox back and notifies on failure', async () => {

@@ -53,6 +53,13 @@ const { db } = vi.hoisted(() => {
   // StorageRegistryService (behind StorageModule, now in this module chain) reads
   // this at onModuleInit.
   tmp.exec('CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT);');
+  tmp.exec(`CREATE TABLE google_api_usage (
+    period TEXT NOT NULL, sku TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL, PRIMARY KEY (period, sku));`);
+  tmp.exec(`CREATE TABLE place_details_cache (
+    place_id TEXT NOT NULL, lang TEXT NOT NULL DEFAULT '', expanded INTEGER NOT NULL DEFAULT 0,
+    payload_json TEXT NOT NULL, fetched_at INTEGER NOT NULL,
+    PRIMARY KEY (place_id, lang, expanded));`);
   return { db: tmp };
 });
 
@@ -76,9 +83,11 @@ import { PermissionsService } from '../../src/nest/permissions/permissions.servi
 let checkPermission: MockInstance;
 
 import { PlacesModule } from '../../src/nest/places/places.module';
+import { PlaceBatchEnrichmentService } from '../../src/nest/places/place-batch-enrichment.service';
 import { PlacesService } from '../../src/nest/places/places.service';
 import { TrekExceptionFilter } from '../../src/nest/common/trek-exception.filter';
 import { ZodValidationPipe } from '../../src/nest/common/zod-validation.pipe';
+import { googleBillingPeriod } from '../../src/nest/google-api-usage/google-api-usage.service';
 
 describe('Places e2e (real auth guard + temp SQLite)', () => {
   let server: Server;
@@ -115,6 +124,7 @@ describe('Places e2e (real auth guard + temp SQLite)', () => {
 
   beforeEach(() => {
     db.exec('DELETE FROM trips; DELETE FROM places; DELETE FROM place_tags; DELETE FROM place_ratings; DELETE FROM day_assignments; DELETE FROM days;');
+    db.exec('DELETE FROM app_settings; DELETE FROM google_api_usage; DELETE FROM place_details_cache;');
     canAccessTrip.mockReturnValue({ id: 5, user_id: 1 });
     checkPermission.mockReturnValue(true);
   });
@@ -210,6 +220,141 @@ describe('Places e2e (real auth guard + temp SQLite)', () => {
     expect(res.status).toBe(201);
     expect(spy).toHaveBeenCalledWith('5', 'https://maps.app.goo.gl/x', { enrich: true, userId: 1 });
     spy.mockRestore();
+  });
+
+  it('batch enrichment routes enforce auth, place_edit, DTO validation, and the 200 contract', async () => {
+    const batch = app.get(PlaceBatchEnrichmentService);
+    const preview = vi.spyOn(batch, 'preview').mockResolvedValue({
+      entries: [], errors: [], requested: 1, processed: 1, skipped: 0, stopped: null, usage: [],
+    });
+    const apply = vi.spyOn(batch, 'apply').mockResolvedValue({
+      updated: [{ id: 9 } as never], errors: [], requested: 1, processed: 1, skipped: 0, stopped: null, usage: [],
+    });
+
+    expect((await request(server).post('/api/trips/5/places/enrichment/preview').send({ place_ids: [9] })).status).toBe(401);
+
+    const previewResponse = await request(server)
+      .post('/api/trips/5/places/enrichment/preview')
+      .set('Cookie', sessionCookie(1))
+      .send({ place_ids: [9], lang: 'ko' });
+    expect(previewResponse.status).toBe(200);
+    expect(preview).toHaveBeenCalledWith('5', 1, { place_ids: [9], lang: 'ko' });
+
+    const applyResponse = await request(server)
+      .post('/api/trips/5/places/enrichment/apply')
+      .set('Cookie', sessionCookie(1))
+      .set('X-Socket-Id', 'socket-1')
+      .send({ matches: [{ place_id: 9, google_place_id: 'ChIJ_9' }] });
+    expect(applyResponse.status).toBe(200);
+    expect(apply).toHaveBeenCalledWith('5', 1, { matches: [{ place_id: 9, google_place_id: 'ChIJ_9' }] }, 'socket-1');
+
+    const callsBeforeBadBody = apply.mock.calls.length;
+    const badBody = await request(server)
+      .post('/api/trips/5/places/enrichment/apply')
+      .set('Cookie', sessionCookie(1))
+      .send({ matches: [{ place_id: 9, google_place_id: '   ' }] });
+    expect(badBody.status).toBe(400);
+    expect(apply).toHaveBeenCalledTimes(callsBeforeBadBody);
+
+    checkPermission.mockReturnValue(false);
+    const denied = await request(server)
+      .post('/api/trips/5/places/enrichment/preview')
+      .set('Cookie', sessionCookie(1))
+      .send({});
+    expect(denied.status).toBe(403);
+    expect(denied.body).toEqual({ error: 'No permission' });
+    expect(checkPermission).toHaveBeenLastCalledWith('place_edit', 'user', 1, 1, false);
+
+    preview.mockRestore();
+    apply.mockRestore();
+  });
+
+  it('runs preview through the real batch, Maps, transport, and quota ledger without network', async () => {
+    db.prepare("INSERT INTO app_settings (key, value) VALUES ('maps_api_key', 'test-google-key')").run();
+    db.prepare("INSERT INTO places (id, trip_id, name, lat, lng) VALUES (9, 5, 'Cafe Fuji', 35, 138)").run();
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ places: [{
+      id: 'ChIJ_test', displayName: { text: 'Cafe Fuji' }, formattedAddress: 'Shizuoka',
+      location: { latitude: 35, longitude: 138 }, types: ['cafe'],
+    }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetch);
+
+    try {
+      const res = await request(server)
+        .post('/api/trips/5/places/enrichment/preview')
+        .set('Cookie', sessionCookie(1))
+        .send({ place_ids: [9], lang: 'en' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.entries[0].candidates[0]).toMatchObject({ google_place_id: 'ChIJ_test', name: 'Cafe Fuji' });
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(db.prepare('SELECT attempts FROM google_api_usage WHERE period = ? AND sku = ?').get(googleBillingPeriod(), 'text_search_pro'))
+        .toEqual({ attempts: 1 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('returns a stable 429 and never fetches when the preview SKU cap is exhausted', async () => {
+    db.prepare("INSERT INTO app_settings (key, value) VALUES ('maps_api_key', 'test-google-key')").run();
+    db.prepare("INSERT INTO places (id, trip_id, name, lat, lng) VALUES (9, 5, 'Cafe Fuji', 35, 138)").run();
+    db.prepare('INSERT INTO google_api_usage (period, sku, attempts, updated_at) VALUES (?, ?, ?, ?)').run(googleBillingPeriod(), 'text_search_pro', 4000, Date.now());
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+
+    try {
+      const res = await request(server)
+        .post('/api/trips/5/places/enrichment/preview')
+        .set('Cookie', sessionCookie(1))
+        .send({ place_ids: [9] });
+
+      expect(res.status).toBe(429);
+      expect(res.body).toMatchObject({ code: 'GOOGLE_API_MONTHLY_CAP_REACHED' });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('runs apply through the real batch, Maps, transport, and quota ledger while preserving user fields', async () => {
+    db.prepare("INSERT INTO app_settings (key, value) VALUES ('maps_api_key', 'test-google-key')").run();
+    db.prepare(`INSERT INTO places (
+      id, trip_id, name, lat, lng, address, notes, website, phone
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(9, 5, 'Cafe Fuji', 35, 138, 'User address', 'Keep this shared note', null, null);
+    const fetch = vi.fn(async (..._args: Parameters<typeof globalThis.fetch>) => new Response(JSON.stringify({
+      id: 'ChIJ_apply',
+      displayName: { text: 'Provider Cafe' },
+      formattedAddress: 'Provider address',
+      location: { latitude: 35, longitude: 138 },
+      websiteUri: 'https://provider.example',
+      nationalPhoneNumber: '+81 1',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetch);
+
+    try {
+      const res = await request(server)
+        .post('/api/trips/5/places/enrichment/apply')
+        .set('Cookie', sessionCookie(1))
+        .send({ matches: [{ place_id: 9, google_place_id: 'ChIJ_apply' }], lang: 'en' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.updated).toHaveLength(1);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(fetch.mock.calls[0]?.[0]).toContain('/v1/places/ChIJ_apply?');
+      expect(fetch.mock.calls[0]?.[1]).toMatchObject({ method: 'GET' });
+      expect(db.prepare(`SELECT google_place_id, address, notes, website, phone
+        FROM places WHERE id = ?`).get(9)).toEqual({
+        google_place_id: 'ChIJ_apply',
+        address: 'User address',
+        notes: 'Keep this shared note',
+        website: 'https://provider.example',
+        phone: '+81 1',
+      });
+      expect(db.prepare('SELECT attempts FROM google_api_usage WHERE period = ? AND sku = ?')
+        .get(googleBillingPeriod(), 'place_details_enterprise')).toEqual({ attempts: 1 });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('PUT route_color: hex through, null through, garbage rejected (#776)', async () => {

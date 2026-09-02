@@ -1074,7 +1074,7 @@ describe('PlaceFormModal', () => {
     render(<PlaceFormModal {...defaultProps} onSave={onSave} categories={[cat]} />);
     await user.type(screen.getByPlaceholderText(/e\.g\. Eiffel Tower/i), 'Louvre');
     await user.type(screen.getByPlaceholderText(/Short description/i), 'Glass pyramid');
-    await user.type(screen.getByPlaceholderText(/Personal notes/i), 'Book ahead');
+    await user.type(screen.getByPlaceholderText(/Place notes/i), 'Book ahead');
     await user.type(screen.getByPlaceholderText(/Street, City, Country/i), 'Rue de Rivoli');
     await user.type(screen.getByPlaceholderText(/Longitude/i), '2.3376');
     await user.type(screen.getByPlaceholderText('https://...'), 'https://louvre.fr');

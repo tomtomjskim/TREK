@@ -78,18 +78,31 @@ export const createPackingSlice = (set: SetState, get: GetState): PackingSlice =
 
   reorderPackingItems: async (tripId, orderedIds) => {
     const prev = get().packingItems
-    // Optimistic reorder: rebuild the array in the requested order, reindexing
-    // sort_order; any items not in orderedIds keep their place at the end.
-    // Unknown ids are dropped first so a stale id can't leave a gap in the
-    // local sort_order sequence.
+    // Optimistic reorder: exchange only the slots occupied by requested items.
+    // Items omitted from orderedIds (notably Shared items owned by somebody
+    // else) remain exactly where the server will leave them after refresh.
+    // Unknown and duplicate ids are discarded before filling those slots.
     set(state => {
       const byId = new Map(state.packingItems.map(i => [i.id, i]))
-      const reordered = orderedIds
+      const uniqueIds = [...new Set(orderedIds)]
+      const reordered = uniqueIds
         .map(id => byId.get(id))
         .filter((i): i is PackingItem => i !== undefined)
-        .map((item, idx): PackingItem => ({ ...item, sort_order: idx }))
-      const remaining = state.packingItems.filter(i => !orderedIds.includes(i.id))
-      return { packingItems: [...reordered, ...remaining] }
+      const reorderedIds = new Set(reordered.map(item => item.id))
+      const occupiedSlots = state.packingItems
+        .filter(item => reorderedIds.has(item.id))
+        .map(item => item.sort_order)
+      const preserveSlots = new Set(occupiedSlots).size === occupiedSlots.length
+      let nextIndex = 0
+      return {
+        packingItems: state.packingItems.map(slot => {
+          if (!reorderedIds.has(slot.id)) return slot
+          const item = reordered[nextIndex]
+          const sortOrder = preserveSlots ? slot.sort_order : nextIndex
+          nextIndex += 1
+          return { ...item, sort_order: sortOrder }
+        }),
+      }
     })
     try {
       await packingApi.reorder(tripId, orderedIds)

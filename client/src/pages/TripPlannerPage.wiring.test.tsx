@@ -44,10 +44,11 @@ function props(name: string): Record<string, AnyProp> {
 
 vi.mock('../components/Map/MapViewAuto', () => ({ MapViewAuto: stub('map', 'map-view') }))
 vi.mock('../components/Map/MapCompassPill', () => ({ MapCompassPill: stub('compass', 'compass-pill') }))
+vi.mock('../components/Map/AdaptiveMapControls', () => ({ default: stub('adaptiveControls', 'adaptive-map-controls') }))
 vi.mock('../components/Map/PoiCategoryPill', () => ({ default: stub('poiPill', 'poi-pill') }))
 vi.mock('../components/Map/usePoiExplore', () => ({
   usePoiExplore: () => ({
-    active: [], pois: [], loadingKeys: [], errorKeys: [], moved: false,
+    active: new Set(), pois: [], loadingKeys: new Set(), errorKeys: new Set(), moved: false,
     toggle: vi.fn(), searchArea: vi.fn(), onViewportChange: vi.fn(),
   }),
 }))

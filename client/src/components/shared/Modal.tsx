@@ -1,7 +1,51 @@
-import React, { useEffect, useCallback, useRef } from 'react'
+import React, { useEffect, useCallback, useId, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { lockBodyScroll } from '../../utils/bodyScrollLock'
+import { useTranslation } from '../../i18n'
+
+export const ModalFocusScopeContext = React.createContext<string | null>(null)
+
+const FOCUSABLE_SELECTOR = [
+  'button:not([disabled])',
+  '[href]',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ')
+
+export function isTopmostModal(dialog: HTMLElement | null): boolean {
+  if (!dialog) return false
+  const openModals = Array.from(document.querySelectorAll<HTMLElement>('[data-trek-modal="true"]'))
+  const parentScopes = new Set(openModals
+    .map(modal => modal.dataset.trekModalParentFocusScope)
+    .filter((scope): scope is string => Boolean(scope)))
+  const topmostCandidates = openModals.filter(modal => {
+    const scope = modal.dataset.trekModalFocusScope
+    return !scope || !parentScopes.has(scope)
+  })
+  const highestZIndex = Math.max(...topmostCandidates.map(modal => {
+    const value = Number(modal.dataset.trekModalZIndex)
+    return Number.isFinite(value) ? value : 10000
+  }))
+  const highestZCandidates = topmostCandidates.filter(modal => {
+    const value = Number(modal.dataset.trekModalZIndex)
+    return (Number.isFinite(value) ? value : 10000) === highestZIndex
+  })
+  return highestZCandidates[highestZCandidates.length - 1] === dialog
+}
+
+export function focusableElementsInScope(scopeId: string): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(element => {
+    if (element.getAttribute('aria-hidden') === 'true') return false
+    // Element-type selectors (for example, button:not([disabled])) also match
+    // controls that explicitly opt out of sequential keyboard navigation.
+    if (element.tabIndex < 0) return false
+    const scope = element.closest<HTMLElement>('[data-trek-modal-focus-scope]')
+    return scope?.dataset.trekModalFocusScope === scopeId
+  })
+}
 
 const sizeClasses: Record<string, string> = {
   sm: 'max-w-sm',
@@ -24,6 +68,11 @@ interface ModalProps {
   size?: string
   footer?: React.ReactNode
   hideCloseButton?: boolean
+  dialogRole?: 'dialog' | 'alertdialog'
+  ariaDescribedBy?: string
+  closeLabel?: string
+  initialFocusRef?: React.RefObject<HTMLElement | null>
+  zIndex?: number
 }
 
 export default function Modal({
@@ -34,9 +83,23 @@ export default function Modal({
   size = 'md',
   footer,
   hideCloseButton = false,
+  dialogRole = 'dialog',
+  ariaDescribedBy,
+  closeLabel,
+  initialFocusRef,
+  zIndex,
 }: ModalProps) {
+  const { t } = useTranslation()
+  const parentFocusScopeId = React.useContext(ModalFocusScopeContext)
+  const resolvedCloseLabel = closeLabel ?? t('common.close')
+  const titleId = useId()
+  const focusScopeId = useId()
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const openerRef = useRef<HTMLElement | null>(null)
   const handleEsc = useCallback((e: KeyboardEvent) => {
-    if (e.key === 'Escape') onClose()
+    if (e.key !== 'Escape' || !isTopmostModal(dialogRef.current)) return
+    e.preventDefault()
+    onClose()
   }, [onClose])
 
   useEffect(() => {
@@ -53,62 +116,111 @@ export default function Modal({
     return lockBodyScroll()
   }, [isOpen])
 
+  useEffect(() => {
+    if (!isOpen) return
+    openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const dialog = dialogRef.current
+    if (!dialog) return
+    const focusable = () => focusableElementsInScope(focusScopeId)
+    const controls = focusable()
+    const explicitInitialFocus = initialFocusRef?.current
+      && initialFocusRef.current.closest<HTMLElement>('[data-trek-modal-focus-scope]')?.dataset.trekModalFocusScope === focusScopeId
+      ? initialFocusRef.current
+      : null
+    if (isTopmostModal(dialog)) (explicitInitialFocus ?? controls[0] ?? dialog).focus()
+    const handleTab = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab' || !isTopmostModal(dialog)) return
+      const controls = focusable()
+      if (controls.length === 0) {
+        event.preventDefault()
+        dialog.focus()
+        return
+      }
+      const first = controls[0]
+      const last = controls[controls.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', handleTab)
+    return () => {
+      document.removeEventListener('keydown', handleTab)
+      if (openerRef.current?.isConnected) openerRef.current.focus()
+      openerRef.current = null
+    }
+  }, [focusScopeId, initialFocusRef, isOpen])
+
   const mouseDownTarget = useRef<EventTarget | null>(null)
 
   if (!isOpen) return null
 
   return createPortal(
-    <div
-      // Backdrop and panel are plain boxes: the backdrop only catches the
-      // click-away, the panel only keeps that click from reaching it. Escape
-      // and the header's close button are the keyboard route out.
-      role="presentation"
-      className="fixed inset-0 z-[10000] flex items-start sm:items-center justify-center px-4 trek-modal-backdrop trek-backdrop-enter bg-[rgba(15,23,42,0.5)]"
-      style={{ paddingTop: 70, paddingBottom: 'calc(20px + var(--bottom-nav-h))', overflow: 'hidden' }}
-      onMouseDown={e => { mouseDownTarget.current = e.target }}
-      onClick={e => {
-        if (e.target === e.currentTarget && mouseDownTarget.current === e.currentTarget) onClose()
-        mouseDownTarget.current = null
-      }}
-    >
+    <ModalFocusScopeContext.Provider value={focusScopeId}>
       <div
+        // Backdrop and panel are plain boxes: the backdrop only catches the
+        // click-away, the panel only keeps that click from reaching it. Escape
+        // and the header's close button are the keyboard route out.
         role="presentation"
-        className={`
-          trek-modal-enter
-          rounded-2xl overflow-hidden shadow-2xl w-full ${sizeClasses[size] || sizeClasses.md}
-          flex flex-col
-          max-h-[calc(100dvh-var(--bottom-nav-h)-90px)] sm:max-h-[calc(100dvh-90px)]
-          bg-surface-card
-        `}
-        onClick={e => e.stopPropagation()}
+        className="fixed inset-0 z-[10000] flex items-start sm:items-center justify-center px-4 trek-modal-backdrop trek-backdrop-enter bg-[rgba(15,23,42,0.5)]"
+        style={{ paddingTop: 70, paddingBottom: 'calc(20px + var(--bottom-nav-h))', overflow: 'hidden', zIndex }}
+        onMouseDown={e => { mouseDownTarget.current = e.target }}
+        onClick={e => {
+          if (e.target === e.currentTarget && mouseDownTarget.current === e.currentTarget) onClose()
+          mouseDownTarget.current = null
+        }}
       >
-        {/* Header — stays put even while the body scrolls */}
-        <div className="flex items-center justify-between p-6 flex-shrink-0 border-b border-edge-secondary">
-          <h2 className="text-lg font-semibold text-content">{title}</h2>
-          {!hideCloseButton && (
-            <button type="button"
-              onClick={onClose}
-              className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-            >
-              <X className="w-5 h-5" />
-            </button>
+        <div
+          ref={dialogRef}
+          data-trek-modal="true"
+          data-trek-modal-z-index={zIndex ?? 10000}
+          data-trek-modal-focus-scope={focusScopeId}
+          data-trek-modal-parent-focus-scope={parentFocusScopeId ?? undefined}
+          role={dialogRole}
+          tabIndex={-1}
+          aria-modal="true"
+          aria-labelledby={title ? titleId : undefined}
+          aria-describedby={ariaDescribedBy}
+          className={`
+            trek-modal-enter
+            rounded-2xl overflow-hidden shadow-2xl w-full ${sizeClasses[size] || sizeClasses.md}
+            flex flex-col
+            max-h-[calc(100dvh-var(--bottom-nav-h)-90px)] sm:max-h-[calc(100dvh-90px)]
+            bg-surface-card
+          `}
+          onClick={e => e.stopPropagation()}
+        >
+          {/* Header — stays put even while the body scrolls */}
+          <div className="flex items-center justify-between p-6 flex-shrink-0 border-b border-edge-secondary">
+            <h2 id={title ? titleId : undefined} className="text-lg font-semibold text-content">{title}</h2>
+            {!hideCloseButton && (
+              <button type="button"
+                onClick={onClose}
+                aria-label={resolvedCloseLabel}
+                className="p-2 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            )}
+          </div>
+
+          {/* Body — scrolls when content overflows. min-h-0 lets the flex child shrink below its intrinsic height. */}
+          <div className="flex-1 overflow-y-auto p-6 min-h-0">
+            {children}
+          </div>
+
+          {/* Footer — sticky at the bottom of the modal, never compressed */}
+          {footer && (
+            <div className="p-6 flex-shrink-0 border-t border-edge-secondary">
+              {footer}
+            </div>
           )}
         </div>
-
-        {/* Body — scrolls when content overflows. min-h-0 lets the flex child shrink below its intrinsic height. */}
-        <div className="flex-1 overflow-y-auto p-6 min-h-0">
-          {children}
-        </div>
-
-        {/* Footer — sticky at the bottom of the modal, never compressed */}
-        {footer && (
-          <div className="p-6 flex-shrink-0 border-t border-edge-secondary">
-            {footer}
-          </div>
-        )}
       </div>
-
-    </div>,
+    </ModalFocusScopeContext.Provider>,
     document.body
   )
 }

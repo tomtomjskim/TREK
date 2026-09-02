@@ -7,6 +7,7 @@ import { useAuthStore } from '../store/authStore';
 import { useVacayStore } from '../store/vacayStore';
 import VacayPage from './VacayPage';
 import * as websocket from '../api/websocket';
+import { resetBodyScrollLock } from '../utils/bodyScrollLock';
 
 vi.mock('../components/Vacay/VacayCalendar', () => ({
   default: () => <div data-testid="vacay-calendar" />,
@@ -70,6 +71,8 @@ const makeVacayState = (overrides = {}) => ({
 describe('VacayPage', () => {
   beforeEach(() => {
     resetAllStores();
+    resetBodyScrollLock();
+    document.body.style.overflow = '';
     vi.clearAllMocks();
     seedStore(useAuthStore, { isAuthenticated: true, user: buildUser() });
     seedStore(useVacayStore, makeVacayState() as any);
@@ -162,6 +165,32 @@ describe('VacayPage', () => {
       expect(screen.getByRole('button', { name: /accept/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /decline/i })).toBeInTheDocument();
     });
+  });
+
+  it('keeps incoming invites explicit while applying the shared modal focus contract', async () => {
+    seedStore(useVacayStore, makeVacayState({
+      incomingInvites: [{ plan_id: 99, owner_username: 'bob' }],
+    }) as any);
+    render(<VacayPage />);
+
+    const dialog = await screen.findByRole('dialog', { name: /fusion/i });
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(dialog).toHaveAttribute('data-trek-modal', 'true');
+    expect(document.body.style.overflow).toBe('hidden');
+
+    const actions = within(dialog).getAllByRole('button');
+    await waitFor(() => expect(actions[0]).toHaveFocus());
+    actions[actions.length - 1].focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(actions[0]).toHaveFocus();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: /fusion/i })).toBeInTheDocument();
+
+    const backdrop = dialog.parentElement as HTMLElement;
+    fireEvent.mouseDown(backdrop);
+    fireEvent.click(backdrop);
+    expect(screen.getByRole('dialog', { name: /fusion/i })).toBeInTheDocument();
   });
 
   // FE-PAGE-VACAY-010
@@ -354,11 +383,13 @@ describe('VacayPage', () => {
     const drawer = await screen.findByRole('dialog', { name: /year settings/i });
     const close = within(drawer).getByRole('button', { name: /close/i });
     await waitFor(() => expect(close).toHaveFocus());
+    expect(document.body.style.overflow).toBe('hidden');
 
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => {
       expect(screen.queryByRole('dialog', { name: /year settings/i })).not.toBeInTheDocument();
       expect(mobileToggle).toHaveFocus();
+      expect(document.body.style.overflow).toBe('');
     });
   });
 

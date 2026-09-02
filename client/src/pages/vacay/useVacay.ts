@@ -1,23 +1,109 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
+import type { MouseEvent } from 'react'
 import { useVacayStore } from '../../store/vacayStore'
 import { addListener, removeListener } from '../../api/websocket'
+import { getApiErrorMessage } from '../../utils/apiError'
+import { lockBodyScroll } from '../../utils/bodyScrollLock'
 
 /**
- * Vacay page logic — pulls the vacay store, owns the page-local UI state
- * (settings modal, delete-year prompt, mobile drawer), wires the WebSocket live
- * sync and the per-year (re)loads, and exposes the add-prev/next-year helpers.
- * VacayPage stays a wiring container around its sidebar/calendar JSX.
- * Behaviour is identical to the previous in-component logic.
+ * Vacay page logic — owns the page-local destructive-state and focus contracts
+ * while preserving v4's shared-calendar reload paths.
  */
 export function useVacay() {
-  const { years, selectedYear, setSelectedYear, addYear, removeYear, loadAll, loadPlan, loadEntries, loadStats, loadHolidays, loadShares, loadSharedCalendars, loading, incomingInvites, acceptInvite, declineInvite, plan, sharedCalendars } = useVacayStore()
-  const [showSettings, setShowSettings] = useState<boolean>(false)
+  const {
+    years, selectedYear, setSelectedYear, addYear, removeYear,
+    loadAll, loadPlan, loadEntries, loadStats, loadHolidays,
+    loadShares, loadSharedCalendars, sharedCalendars,
+    loading, incomingInvites, pendingInvites,
+    acceptInvite: acceptInviteRequest, declineInvite,
+    plan, isFused,
+  } = useVacayStore()
+  const [showSettings, setShowSettings] = useState(false)
   const [deleteYear, setDeleteYear] = useState<number | null>(null)
-  const [showMobileSidebar, setShowMobileSidebar] = useState<boolean>(false)
+  const [isRemovingYear, setIsRemovingYear] = useState(false)
+  const [deleteYearError, setDeleteYearError] = useState(false)
+  const [yearRemovalNotice, setYearRemovalNotice] = useState<'fused' | 'pending' | null>(null)
+  const [inviteAcceptError, setInviteAcceptError] = useState<{ planId: number; message: string } | null>(null)
+  const [showMobileSidebar, setShowMobileSidebar] = useState(false)
+  const mobileSidebarButtonRef = useRef<HTMLButtonElement | null>(null)
+  const mobileDrawerCloseButtonRef = useRef<HTMLButtonElement | null>(null)
+  const returnFocusRef = useRef<HTMLButtonElement | null>(null)
+  const previousDeleteYearRef = useRef<number | null>(deleteYear)
+  const yearRemovalReadOnlyReason: 'fused' | 'pending' | null = isFused
+    ? 'fused'
+    : pendingInvites.length > 0
+      ? 'pending'
+      : null
 
   useEffect(() => { loadAll() }, [])
 
-  // Live sync via WebSocket
+  // A live fusion/invitation transition invalidates an already-open destructive
+  // prompt. The server repeats this check atomically when the request arrives.
+  useEffect(() => {
+    if (yearRemovalReadOnlyReason === null || deleteYear === null) return
+    setDeleteYear(null)
+    setDeleteYearError(false)
+    setYearRemovalNotice(yearRemovalReadOnlyReason)
+  }, [deleteYear, yearRemovalReadOnlyReason])
+
+  useEffect(() => {
+    const wasOpen = previousDeleteYearRef.current !== null
+    previousDeleteYearRef.current = deleteYear
+    if (!wasOpen || deleteYear !== null) return
+
+    const frame = window.requestAnimationFrame(() => returnFocusRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [deleteYear])
+
+  const closeMobileSidebar = useCallback(() => {
+    setShowMobileSidebar(false)
+    window.requestAnimationFrame(() => mobileSidebarButtonRef.current?.focus())
+  }, [])
+
+  useEffect(() => {
+    if (!showMobileSidebar) return
+
+    const releaseBodyScroll = lockBodyScroll()
+    const frame = window.requestAnimationFrame(
+      () => mobileDrawerCloseButtonRef.current?.focus()
+    )
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const dialog = mobileDrawerCloseButtonRef.current?.closest('[role="dialog"]')
+      if (!dialog) return
+      if (event.key === 'Escape') {
+        const nestedModal = Array.from(document.querySelectorAll<HTMLElement>('[data-trek-modal="true"]'))
+          .some(modal => !dialog.contains(modal))
+        if (nestedModal) return
+        event.preventDefault()
+        closeMobileSidebar()
+        return
+      }
+      if (event.key !== 'Tab') return
+      const nestedModal = Array.from(document.querySelectorAll<HTMLElement>('[data-trek-modal="true"]'))
+        .some(modal => !dialog.contains(modal))
+      if (nestedModal) return
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )).filter(el => el.getAttribute('aria-hidden') !== 'true')
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first.focus()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => {
+      releaseBodyScroll()
+      window.cancelAnimationFrame(frame)
+      document.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [closeMobileSidebar, showMobileSidebar])
+
   const handleWsMessage = useCallback((msg: { type: string }) => {
     if (msg.type === 'vacay:update' || msg.type === 'vacay:settings') {
       loadPlan()
@@ -38,8 +124,13 @@ export function useVacay() {
     addListener(handleWsMessage)
     return () => removeListener(handleWsMessage)
   }, [handleWsMessage])
+
   useEffect(() => {
-    if (selectedYear) { loadEntries(selectedYear); loadStats(selectedYear); loadHolidays(selectedYear); loadSharedCalendars(selectedYear) }
+    if (!selectedYear) return
+    loadEntries(selectedYear)
+    loadStats(selectedYear)
+    loadHolidays(selectedYear)
+    loadSharedCalendars(selectedYear)
   }, [selectedYear])
 
   const handleAddNextYear = () => {
@@ -52,11 +143,70 @@ export function useVacay() {
     addYear(prevYear)
   }
 
+  const requestYearRemoval = (year: number) => {
+    if (yearRemovalReadOnlyReason !== null || isRemovingYear) return
+    setDeleteYearError(false)
+    setYearRemovalNotice(null)
+    setDeleteYear(year)
+    setShowMobileSidebar(false)
+  }
+
+  const openYearRemoval = (event: MouseEvent<HTMLButtonElement>) => {
+    returnFocusRef.current = showMobileSidebar
+      ? mobileSidebarButtonRef.current
+      : event.currentTarget
+    requestYearRemoval(selectedYear)
+  }
+
+  const cancelYearRemoval = () => {
+    if (isRemovingYear) return
+    setDeleteYearError(false)
+    setDeleteYear(null)
+  }
+
+  const confirmYearRemoval = async () => {
+    if (deleteYear === null || yearRemovalReadOnlyReason !== null || isRemovingYear) return
+
+    setIsRemovingYear(true)
+    setDeleteYearError(false)
+    try {
+      await removeYear(deleteYear)
+      setDeleteYear(null)
+    } catch {
+      setDeleteYearError(true)
+      try {
+        await loadPlan()
+      } catch {
+        // Keep the destructive prompt retryable even if state refresh also fails.
+      }
+    } finally {
+      setIsRemovingYear(false)
+    }
+  }
+
+  const acceptInvite = async (planId: number) => {
+    setInviteAcceptError(null)
+    try {
+      await acceptInviteRequest(planId)
+    } catch (error) {
+      setInviteAcceptError({
+        planId,
+        message: getApiErrorMessage(error, 'Unable to accept invitation'),
+      })
+    }
+  }
+
   return {
-    years, selectedYear, setSelectedYear, removeYear, loading,
-    incomingInvites, acceptInvite, declineInvite, plan, sharedCalendars,
-    showSettings, setShowSettings, deleteYear, setDeleteYear,
-    showMobileSidebar, setShowMobileSidebar,
+    years, selectedYear, setSelectedYear, loading,
+    incomingInvites, acceptInvite, declineInvite, inviteAcceptError, plan, sharedCalendars,
+    showSettings, setShowSettings,
+    deleteYear, isRemovingYear, deleteYearError,
+    yearRemovalReadOnlyReason, yearRemovalNotice,
+    showMobileSidebar,
+    mobileSidebarButtonRef, mobileDrawerCloseButtonRef,
+    openMobileSidebar: () => setShowMobileSidebar(true),
+    closeMobileSidebar, openYearRemoval,
     handleAddNextYear, handleAddPrevYear,
+    requestYearRemoval, cancelYearRemoval, confirmYearRemoval,
   }
 }

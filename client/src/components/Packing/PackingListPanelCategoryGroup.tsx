@@ -29,6 +29,7 @@ interface KategorieGruppeProps {
   bags?: PackingBag[]
   onCreateBag: (name: string) => Promise<PackingBag | undefined>
   canEdit?: boolean
+  canManage?: boolean
   // Drag-to-reorder (#969): the full ordered item list + a persist callback. The
   // order is global, so a within-category drag is mapped back onto the full list.
   allItems: PackingItem[]
@@ -41,17 +42,20 @@ interface KategorieGruppeProps {
   onLeave?: (id: number, userId: number) => void
 }
 
-export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRename, onDeleteAll, onDeleteItem, onAddItem, assignees, tripMembers, onSetAssignees, bagTrackingEnabled, bags, onCreateBag, canEdit = true, allItems, onReorder, currentUserId, onSetSharing, onClone, onJoin, onLeave }: KategorieGruppeProps) {
+export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRename, onDeleteAll, onDeleteItem, onAddItem, assignees, tripMembers, onSetAssignees, bagTrackingEnabled, bags, onCreateBag, canEdit = true, canManage = canEdit, allItems, onReorder, currentUserId, onSetSharing, onClone, onJoin, onLeave }: KategorieGruppeProps) {
   const [offen, setOffen] = useState(true)
   const [dragId, setDragId] = useState<number | null>(null)
   const [overId, setOverId] = useState<number | null>(null)
   const contribFor = usePluginViewContributions('packing', tripId)
+  const mutableItems = items.filter(item => !item.is_private || item.owner_id === currentUserId)
+  const mutableAllItems = allItems.filter(item => !item.is_private || item.owner_id === currentUserId)
+  const editableItems = canEdit ? mutableItems : []
 
   const handleReorderDrop = (targetId: number) => {
     const from = dragId
     setDragId(null); setOverId(null)
     if (from == null || from === targetId) return
-    const catOrder = items.map(i => i.id)
+    const catOrder = mutableItems.map(i => i.id)
     const fi = catOrder.indexOf(from)
     const ti = catOrder.indexOf(targetId)
     if (fi < 0 || ti < 0) return
@@ -59,9 +63,9 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
     catOrder.splice(ti, 0, from)
     // Slot the reordered category ids back into the positions this category's
     // items occupy in the global list, leaving every other category untouched.
-    const catIds = new Set(items.map(i => i.id))
+    const catIds = new Set(mutableItems.map(i => i.id))
     let ci = 0
-    const globalIds = allItems.map(i => (catIds.has(i.id) ? catOrder[ci++] : i.id))
+    const globalIds = mutableAllItems.map(i => (catIds.has(i.id) ? catOrder[ci++] : i.id))
     onReorder(globalIds)
   }
   const [editingName, setEditingName] = useState(false)
@@ -88,7 +92,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
   }, [showAssigneeDropdown])
 
   const abgehakt = items.filter(i => i.checked).length
-  const alleAbgehakt = abgehakt === items.length
+  const alleAbgehakt = items.length > 0 && items.every(item => !!item.checked)
   const dot = katColor(kategorie, allCategories)
 
   const handleSaveKatName = async () => {
@@ -102,13 +106,13 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
   // failure itself, so the bulk actions just drive it item by item. They go out
   // together: serialised, a long list costs one round trip per item.
   const handleCheckAll = async () => {
-    await Promise.all(items.filter(i => !i.checked).map(i => togglePackingItem(tripId, i.id, true)))
+    await Promise.all(editableItems.filter(i => !i.checked).map(i => togglePackingItem(tripId, i.id, true)))
   }
   const handleUncheckAll = async () => {
-    await Promise.all(items.filter(i => i.checked).map(i => togglePackingItem(tripId, i.id, false)))
+    await Promise.all(editableItems.filter(i => i.checked).map(i => togglePackingItem(tripId, i.id, false)))
   }
   const handleDeleteAll = async () => {
-    await onDeleteAll(items)
+    await onDeleteAll(mutableItems)
     setShowMenu(false)
   }
 
@@ -164,7 +168,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
                 </div>
               </>
             )
-            if (!canEdit) return <div key={a.user_id} style={{ position: 'relative' }}>{chip}</div>
+            if (!canManage) return <div key={a.user_id} style={{ position: 'relative' }}>{chip}</div>
             return (
               <button type="button" key={a.user_id}
                 style={{ position: 'relative', background: 'none', border: 'none', padding: 0, font: 'inherit', cursor: 'pointer' }}
@@ -174,7 +178,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
               </button>
             )
           })}
-          {canEdit && (
+          {canManage && (
           <div ref={assigneeDropdownRef} style={{ position: 'relative' }}>
             <button type="button" onClick={e => { e.stopPropagation(); setShowAssigneeDropdown(v => !v) }}
               style={{
@@ -246,7 +250,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
           {abgehakt}/{items.length}
         </span>
 
-        <div style={{ position: 'relative' }}>
+        {canManage && <div style={{ position: 'relative' }}>
           <button type="button" ref={menuBtnRef} onClick={() => setShowMenu(m => !m)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px 4px', borderRadius: 6, display: 'flex', color: 'var(--text-faint)' }}
             onMouseEnter={e => e.currentTarget.style.color = 'var(--text-secondary)'} onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}>
             <MoreHorizontal size={15} />
@@ -260,7 +264,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
                 {canEdit && <MenuItem icon={<Pencil size={13} />} label={t('packing.menuRename')} onClick={() => { setEditingName(true); setShowMenu(false) }} />}
                 <MenuItem icon={<CheckCheck size={13} />} label={t('packing.menuCheckAll')} onClick={() => { handleCheckAll(); setShowMenu(false) }} />
                 <MenuItem icon={<RotateCcw size={13} />} label={t('packing.menuUncheckAll')} onClick={() => { handleUncheckAll(); setShowMenu(false) }} />
-                {canEdit && <>
+                {canManage && <>
                 <div style={{ height: 1, background: 'var(--bg-tertiary)', margin: '4px 0' }} />
                 <MenuItem icon={<Trash2 size={13} />} label={t('packing.menuDeleteCat')} danger onClick={handleDeleteAll} />
                 </>}
@@ -268,7 +272,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
             </>
             );
           })()}
-        </div>
+        </div>}
       </div>
 
       {offen && (
@@ -277,9 +281,9 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
             const contributions = contribFor(item.id)
             return (
               <React.Fragment key={item.id}>
-                <ArtikelZeile item={item} tripId={tripId} categories={allCategories} onCategoryChange={() => {}} onDelete={onDeleteItem} bagTrackingEnabled={bagTrackingEnabled} bags={bags} onCreateBag={onCreateBag} canEdit={canEdit}
+                <ArtikelZeile item={item} tripId={tripId} categories={allCategories} onCategoryChange={() => {}} onDelete={onDeleteItem} bagTrackingEnabled={bagTrackingEnabled} bags={bags} onCreateBag={onCreateBag} canEdit={canEdit && (!item.is_private || item.owner_id === currentUserId)}
                   tripMembers={tripMembers} currentUserId={currentUserId} onSetSharing={onSetSharing} onClone={onClone} onJoin={onJoin} onLeave={onLeave}
-                  drag={canEdit ? {
+                  drag={canManage && (!item.is_private || item.owner_id === currentUserId) ? {
                     isDragging: dragId === item.id,
                     isOver: overId === item.id && dragId !== null && dragId !== item.id,
                     onStart: (id) => { setDragId(id); setOverId(null) },
@@ -292,7 +296,7 @@ export function KategorieGruppe({ kategorie, items, tripId, allCategories, onRen
             )
           })}
           {/* Inline add item */}
-          {canEdit && (showAddItem ? (
+          {canManage && (showAddItem ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px' }}>
               <input
                 ref={addItemRef}

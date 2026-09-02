@@ -100,6 +100,32 @@ describe('VacayPersons', () => {
     expect(screen.getByRole('heading', { name: 'Invite User' })).toBeInTheDocument()
   })
 
+  it('FE-COMP-VACAYPERSONS-004a: labels the invite icon for assistive technology', () => {
+    seedVacay()
+    seedCurrentUser()
+
+    render(<VacayPersons />)
+
+    expect(screen.getByRole('button', { name: 'Invite User' })).toBeInTheDocument()
+  })
+
+  it('FE-COMP-VACAYPERSONS-004b: invite dialog owns keyboard focus and Escape', async () => {
+    withNoAvailableUsers()
+    const user = userEvent.setup()
+    seedVacay()
+    seedCurrentUser()
+    render(<VacayPersons />)
+
+    await user.click(screen.getAllByRole('button')[0])
+    const dialog = screen.getByRole('dialog', { name: 'Invite User' })
+    expect(dialog).toHaveAttribute('data-trek-modal', 'true')
+    expect(screen.getByRole('button', { name: 'Close' })).toHaveFocus()
+    await user.tab({ shift: true })
+    expect(screen.getByRole('button', { name: /^cancel$/i })).toHaveFocus()
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'Invite User' })).not.toBeInTheDocument()
+  })
+
   it('FE-COMP-VACAYPERSONS-005: Invite modal fetches and displays available users', async () => {
     withAvailableUsers()
     const user = userEvent.setup()
@@ -189,6 +215,8 @@ describe('VacayPersons', () => {
 
     // Color picker modal heading is rendered via portal
     expect(screen.getByRole('heading', { name: 'Change color' })).toBeInTheDocument()
+    expect(screen.getByRole('dialog', { name: 'Change color' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '#6366f1' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('FE-COMP-VACAYPERSONS-009: Selecting a preset color calls updateColor', async () => {
@@ -264,6 +292,16 @@ describe('VacayPersons', () => {
 
     await user.click(screen.getByText('Bob'))
 
+    expect(setSelectedUserIdMock).not.toHaveBeenCalled()
+  })
+
+  it('FE-COMP-VACAYPERSONS-011b: color control does not select the user row', async () => {
+    const setSelectedUserIdMock = vi.fn()
+    const user = userEvent.setup()
+    seedVacay({ users: [{ id: 2, username: 'Bob', color: '#ec4899' }], isFused: true, selectedUserId: 1, setSelectedUserId: setSelectedUserIdMock })
+    seedCurrentUser(99)
+    render(<VacayPersons />)
+    await user.click(screen.getByRole('button', { name: 'Change color' }))
     expect(setSelectedUserIdMock).not.toHaveBeenCalled()
   })
 

@@ -42,8 +42,21 @@ const { db } = vi.hoisted(() => {
   tmp.exec(`CREATE TABLE invite_tokens (id INTEGER PRIMARY KEY AUTOINCREMENT, token TEXT NOT NULL,
     max_uses INTEGER, uses INTEGER DEFAULT 0, expires_at TEXT, created_by INTEGER NOT NULL,
     trip_id INTEGER, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
-  tmp.exec(`CREATE TABLE packing_templates (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
-    created_by INTEGER NOT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);`);
+  tmp.exec(`CREATE TABLE packing_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'instance'
+      CHECK (scope IN ('instance', 'personal')),
+    owner_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT packing_templates_scope_owner_check CHECK (
+      (scope = 'instance' AND owner_id IS NULL) OR
+      (scope = 'personal' AND owner_id IS NOT NULL)
+    )
+  );`);
+  tmp.exec(`CREATE INDEX idx_packing_templates_scope_owner_created
+    ON packing_templates(scope, owner_id, created_at);`);
   tmp.exec(`CREATE TABLE packing_template_categories (id INTEGER PRIMARY KEY AUTOINCREMENT,
     template_id INTEGER NOT NULL, name TEXT NOT NULL, sort_order INTEGER DEFAULT 0);`);
   tmp.exec(`CREATE TABLE packing_template_items (id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -66,7 +66,8 @@ fallthrough and the strip-ALL-slashes quirk (see `parsers.ts`
 DI in Nest, module-top `readEnv()` consts elsewhere):
 PORT, HOST, TRUST_PROXY, SESSION_DURATION(_REMEMBER), MCP_SESSION_TTL,
 MCP_MAX_SESSION_PER_USER, MCP_SSE_KEEPALIVE, TREK_PLUGIN_RPC_*/LOG_*/MAX_RSS_MB,
-TREK_PLUGIN_REGISTRY_URL, TREK_WIKI_DIR*, TREK_PLACE_PHOTO_DIR, BACKUP_*,
+TREK_PLUGIN_REGISTRY_URL, TREK_WIKI_DIR*, TREK_PLACE_PHOTO_DIR,
+TREK_ANDROID_RELEASE_DIR, BACKUP_*,
 TRANSIT_API_URL, LOG_LEVEL*, ALLOW_INTERNAL_NETWORK*, DEFAULT_LANGUAGE,
 TREK_DB_FILE, TREK_DB_JOURNAL_MODE, TREK_DB_SYNCHRONOUS, ENCRYPTION_KEY**.
 (* frozen today because the consuming module captures it at import; tests that
@@ -82,6 +83,9 @@ TREK_PLUGINS_ENABLED / _DEV_LINK / _DIR / _DATA_DIR / TREK_PLUGIN_PERMISSIONS,
 OIDC_*, SMTP_*, FORCE_HTTPS, COOKIE_SECURE, HSTS_INCLUDE_SUBDOMAINS,
 ALLOWED_ORIGINS, UNSPLASH_ACCESS_KEY, WEBAUTHN_*, TZ, ADMIN_EMAIL,
 ADMIN_PASSWORD, IDEMPOTENCY_TTL_SECONDS, MCP_RATE_LIMIT (request-path check).
+The per-SKU `TREK_GOOGLE_CAP_*` overrides are also live: each reservation and
+snapshot re-reads them so the existing zero-cap emergency switch remains
+effective without changing quota semantics.
 
 ## Exemptions — raw `process.env` stays
 

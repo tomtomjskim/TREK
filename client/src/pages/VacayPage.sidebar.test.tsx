@@ -4,6 +4,7 @@
 import React from 'react'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '../../tests/helpers/render'
+import userEvent from '@testing-library/user-event'
 import { resetAllStores, seedStore } from '../../tests/helpers/store'
 import { useVacayStore } from '../store/vacayStore'
 import VacayPage from './VacayPage'
@@ -140,6 +141,35 @@ describe('VacayPage sidebar', () => {
     await waitFor(() => expect(screen.getAllByTestId('persons')).toHaveLength(1))
   })
 
+  it('FE-PAGE-VCY-006b: the mobile drawer traps keyboard focus', async () => {
+    const user = userEvent.setup()
+    render(<VacayPage />)
+    const toggle = screen.getByRole('button', { name: /Year.*open/i })
+    await user.click(toggle)
+    const close = await waitFor(() => screen.getByRole('button', { name: /close/i }))
+    expect(document.activeElement).toBe(close)
+    await user.tab({ shift: true })
+    const drawerButtons = within(close.closest('[role="dialog"]') as HTMLElement).getAllByRole('button')
+    expect(document.activeElement).toBe(drawerButtons[drawerButtons.length - 1])
+  })
+
+  it('FE-PAGE-VCY-006c: a nested portal modal owns Escape before the mobile drawer', async () => {
+    const user = userEvent.setup()
+    render(<VacayPage />)
+    await user.click(screen.getByRole('button', { name: /Year.*open/i }))
+    const drawer = await screen.findByRole('dialog', { name: /year.*settings/i })
+    const nestedModal = document.createElement('div')
+    nestedModal.dataset.trekModal = 'true'
+    document.body.appendChild(nestedModal)
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(drawer).toBeInTheDocument()
+
+    nestedModal.remove()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /year.*settings/i })).not.toBeInTheDocument())
+  })
+
   it('FE-PAGE-VCY-007: the settings modal closes through its own dismiss control', async () => {
     render(<VacayPage />)
 
@@ -164,7 +194,7 @@ describe('VacayPage sidebar', () => {
     seedStore(useVacayStore, baseState({ removeYear }))
     const { container } = render(<VacayPage />)
 
-    fireEvent.click(container.querySelector('.bg-red-500') as HTMLElement)
+    fireEvent.click(screen.getByRole('button', { name: /Remove 2025\?/i }))
     expect(await screen.findByText(/Remove 2024\?|Remove 2025\?|Remove 2026\?/)).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
@@ -175,7 +205,7 @@ describe('VacayPage sidebar', () => {
   it('FE-PAGE-VCY-009: Escape dismisses the delete-year modal as well', async () => {
     const { container } = render(<VacayPage />)
 
-    fireEvent.click(container.querySelector('.bg-red-500') as HTMLElement)
+    fireEvent.click(screen.getByRole('button', { name: /Remove 2025\?/i }))
     expect(await screen.findByRole('button', { name: 'Cancel' })).toBeInTheDocument()
 
     fireEvent.keyDown(document, { key: 'Escape' })

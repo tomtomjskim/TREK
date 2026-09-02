@@ -264,16 +264,20 @@ export class PackingService {
     const item = this.getItemInTrip(tripId, id, actingUserId);
     if (!item) return null;
 
+    // Personal and Shared rows are owned by the bringer. A recipient may see
+    // the row, but the owner-only contract applies to every ordinary field as
+    // well as privacy/sharing changes; return null so REST, RPC and MCP expose
+    // the same 404/forbidden-resource boundary.
+    if (item.is_private && item.owner_id !== actingUserId) return null;
+
     // Optimistic concurrency (#1135): reject a stale offline overwrite. Absent
     // token => unconditional update (back-compat with older clients).
     if (ifMatch !== undefined && item.updated_at != null && String(item.updated_at) !== ifMatch) {
       return { conflict: true, server: this.db.get('SELECT * FROM packing_items WHERE id = ?', id) };
     }
 
-    // Recipients may edit ordinary fields on a Shared item, but visibility is
-    // controlled by its owner. Otherwise a recipient could publish the owner's
-    // restricted row through the general update route and trigger a room-wide
-    // broadcast. Legacy Common rows without an owner remain claimable.
+    // Visibility is controlled by the owner. Legacy Common rows without an
+    // owner remain claimable.
     const changesPrivacy = bodyKeys.includes('is_private');
     if (changesPrivacy && item.owner_id != null && item.owner_id !== actingUserId) {
       return { forbidden: true };
@@ -447,8 +451,17 @@ export class PackingService {
     const item = this.getItemInTrip(tripId, id, actingUserId);
     if (!item) return null;
 
+    // The restricted row still belongs to its bringer. Deletion is therefore
+    // owner-only; keep returning null so the object-level authorization boundary
+    // does not expose a distinct result to direct REST, RPC, or MCP callers.
+    if (item.is_private && item.owner_id !== actingUserId) return null;
+
+    // The row is about to disappear, so hydrate the viewer relationship before
+    // deleting it. REST/MCP/RPC fan-out uses this snapshot to notify every
+    // owner and Shared recipient who still has the item on screen.
+    const snapshot = this.enrichItems([item])[0];
     this.db.run('DELETE FROM packing_items WHERE id = ?', id);
-    return item;
+    return snapshot;
   }
 
   // ── Bulk Import ────────────────────────────────────────────────────────────
@@ -720,16 +733,33 @@ export class PackingService {
   // ── Reorder ────────────────────────────────────────────────────────────────
 
   reorderItems(tripId: string | number, orderedIds: number[], actingUserId: number): void {
-    const update = this.db.prepare(`
-      UPDATE packing_items
-      SET sort_order = ?
-      WHERE id = ? AND trip_id = ? AND (is_private = 0 OR owner_id = ?)
-    `);
     this.db.transaction(() => {
-      let visibleIndex = 0;
-      for (const id of orderedIds) {
-        const result = update.run(visibleIndex, id, tripId, actingUserId);
-        if (result.changes === 1) visibleIndex += 1;
+      const writableRows = this.db.all<{ id: number; sort_order: number }>(`
+        SELECT id, sort_order
+        FROM packing_items
+        WHERE trip_id = ? AND (is_private = 0 OR owner_id = ?)
+        ORDER BY sort_order ASC, created_at ASC, id ASC
+      `, tripId, actingUserId);
+      const requestedIds = [...new Set(orderedIds)];
+      const requestedSet = new Set(requestedIds);
+      const writableIds = new Set(writableRows.map(row => row.id));
+      // Reuse only the slots occupied by rows in this request. Rows omitted from
+      // the payload (for example a Shared item owned by another traveller) keep
+      // both their position and sort_order instead of being pushed to the end.
+      const availableSlots = writableRows
+        .filter(row => requestedSet.has(row.id))
+        .map(row => row.sort_order);
+      const reorderedIds = requestedIds.filter(id => writableIds.has(id));
+      // Old/imported rows can share one sort_order. Such a set has no distinct
+      // slots to exchange, so retain the legacy gapless normalization fallback;
+      // ordinary v4 rows use their unique existing slots and leave omissions
+      // (including Shared-to-me rows) untouched.
+      const targetSlots = new Set(availableSlots).size === availableSlots.length
+        ? availableSlots
+        : reorderedIds.map((_id, index) => index);
+      const update = this.db.prepare('UPDATE packing_items SET sort_order = ? WHERE id = ? AND trip_id = ?');
+      for (let index = 0; index < reorderedIds.length; index += 1) {
+        update.run(targetSlots[index], reorderedIds[index], tripId);
       }
     });
   }

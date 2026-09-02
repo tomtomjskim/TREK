@@ -135,6 +135,7 @@ const photoCacheStub = {
 import { db } from '../../../src/db/database';
 import { DatabaseService } from '../../../src/nest/database/database.service';
 import { MapsService, withPhotoFetchSlot, readWikiIdentity } from '../../../src/nest/maps/maps.service';
+import { GoogleApiTransportService } from '../../../src/nest/google-api-usage/google-api-transport.service';
 import type { PlacePhotoCacheService } from '../../../src/nest/place-photos/place-photo-cache.service';
 import { isolatedGoogleApiTransport } from '../../helpers/google-api-transport';
 // Type-only, so the module stays mocked: this import is erased at runtime.
@@ -1245,6 +1246,56 @@ describe('searchPlaces (fetch stubbed)', () => {
     expect((result.places[0] as any).google_ftid).toBeNull();
   });
 
+  it('MAPS-039i: enrichment candidates reserve Text Search Pro and request only the lean fields', async () => {
+    const reserve = vi.fn();
+    const candidateSvc = new MapsService(
+      new DatabaseService(db as never),
+      photoCacheStub,
+      new GoogleApiTransportService({ reserve } as never),
+    );
+    mockDbGet.mockReturnValueOnce({ maps_api_key: 'some-key' });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        places: [{
+          id: ' candidate-id ',
+          displayName: { text: 'Cafe Fuji' },
+          formattedAddress: 'Shizuoka',
+          location: { latitude: 35, longitude: 138 },
+          types: ['cafe'],
+          googleMapsUri: 'https://www.google.com/maps/place/?q=place_id:candidate-id&ftid=0x123:0x456',
+        }],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await candidateSvc.searchPlaceCandidates(1, 'Cafe Fuji', 'ja', {
+      lat: 35,
+      lng: 138,
+      radius: 2_000,
+    });
+
+    expect(reserve).toHaveBeenCalledWith('text_search_pro');
+    const [, init] = fetchMock.mock.calls[0];
+    expect((init.headers as Record<string, string>)['X-Goog-FieldMask']).toBe(
+      'places.id,places.displayName,places.formattedAddress,places.location,places.types,places.googleMapsUri',
+    );
+    expect((init.headers as Record<string, string>)['X-Goog-FieldMask']).not.toMatch(/rating|websiteUri|nationalPhoneNumber/);
+    expect(JSON.parse(init.body as string).locationBias.circle.radius).toBe(2_000);
+    expect(result).toMatchObject({
+      source: 'google',
+      places: [{ google_place_id: 'candidate-id', name: 'Cafe Fuji', lat: 35, lng: 138 }],
+    });
+  });
+
+  it('MAPS-039j: enrichment candidate lookup fails closed without a Google key', async () => {
+    mockDbGet.mockReturnValue(undefined);
+    await expect(svc.searchPlaceCandidates(999, 'Cafe Fuji')).rejects.toMatchObject({
+      message: 'Google Maps API key not configured',
+      status: 400,
+    });
+  });
+
   it('MAPS-039b: throws with Google error status when Google API returns non-ok', async () => {
     mockDbGet.mockReturnValueOnce({ maps_api_key: 'some-key' });
     vi.stubGlobal(
@@ -1718,6 +1769,31 @@ describe('getPlaceDetails (fetch stubbed)', () => {
     // Lean mask — reviews/summary not fetched in getPlaceDetails; use getPlaceDetailsExpanded for those
     expect(place.reviews).toHaveLength(0);
     expect(place.summary).toBeNull();
+  });
+
+  it('MAPS-041h: a fresh details lookup bypasses a valid cache row', async () => {
+    mockDbGet
+      .mockReturnValueOnce({ maps_api_key: 'gkey' })
+      .mockReturnValueOnce({
+        payload_json: JSON.stringify({ google_place_id: 'ChIJFresh', website: 'https://stale.test' }),
+        fetched_at: Date.now(),
+      });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        id: 'ChIJFresh',
+        displayName: { text: 'Fresh place' },
+        location: { latitude: 35, longitude: 138 },
+        websiteUri: 'https://fresh.test',
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await svc.getPlaceDetailsFresh(1, 'ChIJFresh', 'en');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.place).toMatchObject({ website: 'https://fresh.test' });
+    expect(preparedSql.filter((sql) => sql.includes('SELECT payload_json') && sql.includes('expanded = 0'))).toHaveLength(0);
   });
 
   it('MAPS-041b2: normalises non-standard TREK language codes for Google (br→pt-BR, gr→el)', async () => {

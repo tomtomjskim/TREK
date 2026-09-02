@@ -80,7 +80,9 @@ describe('VacayPersons modals', () => {
 
     openInvite()
     const modal = await screen.findByText('Invite another TREK user to share a combined vacation calendar.')
-    fireEvent.click(modal.closest('.fixed') as HTMLElement)
+    const backdrop = modal.closest('.fixed') as HTMLElement
+    fireEvent.mouseDown(backdrop)
+    fireEvent.click(backdrop)
     expect(screen.queryByRole('button', { name: 'Send Invite' })).not.toBeInTheDocument()
 
     openInvite()
@@ -124,7 +126,9 @@ describe('VacayPersons modals', () => {
 
     fireEvent.click(screen.getByTitle('Change color'))
     const dialog = await screen.findByText('Change color', { selector: 'h2' })
-    fireEvent.click(dialog.closest('.fixed') as HTMLElement)
+    const backdrop = dialog.closest('.fixed') as HTMLElement
+    fireEvent.mouseDown(backdrop)
+    fireEvent.click(backdrop)
     expect(screen.queryByText('Change color', { selector: 'h2' })).not.toBeInTheDocument()
   })
 })

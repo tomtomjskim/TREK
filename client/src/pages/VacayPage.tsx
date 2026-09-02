@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from '../i18n'
 import PageShell from '../components/Layout/PageShell'
@@ -7,7 +7,7 @@ import VacayPersons from '../components/Vacay/VacayPersons'
 import VacaySharedCalendars from '../components/Vacay/VacaySharedCalendars'
 import VacayStats from '../components/Vacay/VacayStats'
 import VacaySettings from '../components/Vacay/VacaySettings'
-import { Plus, Minus, ChevronLeft, ChevronRight, Settings, CalendarDays, AlertTriangle, Eye, Pencil, Trash2, Unlink, ShieldCheck, SlidersHorizontal } from 'lucide-react'
+import { Plus, Minus, ChevronLeft, ChevronRight, Settings, CalendarDays, AlertTriangle, Eye, Pencil, Trash2, Unlink, ShieldCheck, SlidersHorizontal, X } from 'lucide-react'
 import Modal from '../components/shared/Modal'
 import { useVacay } from './vacay/useVacay'
 
@@ -19,14 +19,26 @@ export default function VacayPage(): React.ReactElement {
 
 function VacayPageDesktop(): React.ReactElement {
   const { t } = useTranslation()
+  const deleteYearCancelRef = useRef<HTMLButtonElement>(null)
   // Page = wiring container: vacay store, live sync + UI state live in the hook.
   const {
-    years, selectedYear, setSelectedYear, removeYear, loading,
-    incomingInvites, acceptInvite, declineInvite, plan, sharedCalendars,
-    showSettings, setShowSettings, deleteYear, setDeleteYear,
-    showMobileSidebar, setShowMobileSidebar,
+    years, selectedYear, setSelectedYear, loading,
+    incomingInvites, acceptInvite, declineInvite, inviteAcceptError, plan, sharedCalendars,
+    showSettings, setShowSettings,
+    deleteYear, isRemovingYear, deleteYearError,
+    yearRemovalReadOnlyReason, yearRemovalNotice,
+    showMobileSidebar,
+    mobileSidebarButtonRef, mobileDrawerCloseButtonRef,
+    openMobileSidebar, closeMobileSidebar, openYearRemoval,
     handleAddNextYear, handleAddPrevYear,
+    cancelYearRemoval, confirmYearRemoval,
   } = useVacay()
+
+  const yearRemovalReasonText = yearRemovalReadOnlyReason === 'pending'
+    ? t('vacay.yearRemovalPendingReason')
+    : yearRemovalReadOnlyReason === 'fused'
+      ? t('vacay.yearRemovalFusedReason')
+      : null
 
   const hasVisibleShared = sharedCalendars.some(c => !c.hidden)
 
@@ -67,9 +79,9 @@ function VacayPageDesktop(): React.ReactElement {
         </div>
         <div className="grid grid-cols-4 gap-1.5">
           {years.map(y => (
-            <div key={y} role="button" tabIndex={0} onClick={() => setSelectedYear(y)}
-              onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedYear(y) } }}
-              className="group relative rounded-[9px] text-center cursor-pointer transition-[background-color,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)]"
+            <button key={y} type="button" onClick={() => setSelectedYear(y)}
+              aria-pressed={y === selectedYear}
+              className="rounded-[9px] text-center cursor-pointer transition-[background-color,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)]"
               style={{
                 padding: '7px 0',
                 fontSize: 12,
@@ -78,16 +90,32 @@ function VacayPageDesktop(): React.ReactElement {
                 color: y === selectedYear ? 'var(--vg-bg)' : 'var(--vg-ink2)',
               }}>
               {y}
-              {years.length > 1 && (
-                <button type="button" aria-label={t('vacay.removeYear')}
-                  onClick={e => { e.stopPropagation(); setDeleteYear(y); setShowMobileSidebar(false) }}
-                  className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-red-500 text-white text-[7px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
-                  <Minus size={7} />
-                </button>
-              )}
-            </div>
+            </button>
           ))}
         </div>
+        {years.length > 1 && (
+          <>
+            <button
+              type="button"
+              onClick={openYearRemoval}
+              disabled={yearRemovalReadOnlyReason !== null}
+              aria-label={[
+                t('vacay.removeYearConfirm', { year: selectedYear }),
+                yearRemovalReasonText,
+              ].filter(Boolean).join(' — ')}
+              className="mt-2 min-h-11 w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-300 px-3 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:border-edge disabled:text-content-faint disabled:hover:bg-transparent"
+            >
+              <Minus size={14} aria-hidden="true" />
+              <span>{t('vacay.removeYear')}</span>
+              <span className="tabular-nums">{selectedYear}</span>
+            </button>
+            {yearRemovalReasonText && (
+              <p className="mt-1.5 text-center text-xs text-content-muted">
+                {yearRemovalReasonText}
+              </p>
+            )}
+          </>
+        )}
       </div>
 
       <VacayPersons />
@@ -132,13 +160,16 @@ function VacayPageDesktop(): React.ReactElement {
             </div>
             <div className="flex items-center gap-2">
               <button type="button"
-                onClick={() => setShowMobileSidebar(true)}
+                ref={mobileSidebarButtonRef}
+                aria-label={`${t('vacay.year')} ${t('common.open')}`}
+                onClick={openMobileSidebar}
                 className="lg:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors bg-surface-secondary text-content-muted"
               >
                 <SlidersHorizontal size={14} />
               </button>
               <button type="button"
                 onClick={() => setShowSettings(true)}
+                aria-label={t('vacay.settings')}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors bg-surface-secondary text-content-muted"
               >
                 <Settings size={14} />
@@ -170,9 +201,21 @@ function VacayPageDesktop(): React.ReactElement {
       {/* Mobile Sidebar Drawer */}
       {showMobileSidebar && createPortal(
         <div className="fixed inset-0 lg:hidden" style={{ zIndex: 99980 }}>
-          <div className="absolute inset-0 bg-[rgba(0,0,0,0.4)]" role="presentation" onClick={() => setShowMobileSidebar(false)} />
-          <div className="absolute left-0 top-0 bottom-0 w-[280px] overflow-y-auto p-3 flex flex-col gap-3 bg-surface"
+          <div aria-hidden="true" className="absolute inset-0 bg-[rgba(0,0,0,0.4)]" onClick={closeMobileSidebar} />
+          <div role="dialog" aria-modal="true" aria-label={`${t('vacay.year')} ${t('vacay.settings')}`} className="absolute left-0 top-0 bottom-0 w-[280px] overflow-y-auto p-3 flex flex-col gap-3 bg-surface"
             style={{ boxShadow: '4px 0 24px rgba(0,0,0,0.15)', animation: 'slideInLeft 0.2s ease-out' }}>
+            <div className="flex min-h-11 items-center justify-between">
+              <h2 className="text-sm font-semibold text-content">{t('vacay.year')}</h2>
+              <button
+                ref={mobileDrawerCloseButtonRef}
+                type="button"
+                onClick={closeMobileSidebar}
+                aria-label={t('common.close')}
+                className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-lg text-content-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                <X size={18} aria-hidden="true" />
+              </button>
+            </div>
             {sidebarContent}
           </div>
         </div>,
@@ -184,44 +227,71 @@ function VacayPageDesktop(): React.ReactElement {
         <VacaySettings onClose={() => setShowSettings(false)} />
       </Modal>
 
+      {yearRemovalNotice && (
+        <p role="status" aria-live="polite" className="sr-only">
+          {yearRemovalNotice === 'pending'
+            ? t('vacay.yearRemovalPendingNotice')
+            : t('vacay.yearRemovalFusedNotice')}
+        </p>
+      )}
+
       {/* Delete Year Modal */}
-      <Modal isOpen={deleteYear !== null} onClose={() => setDeleteYear(null)} title={t('vacay.removeYear')} size="sm">
+      <Modal
+        isOpen={deleteYear !== null}
+        onClose={cancelYearRemoval}
+        title={deleteYear === null
+          ? t('vacay.removeYear')
+          : t('vacay.removeYearConfirm', { year: deleteYear })}
+        size="sm"
+        hideCloseButton={isRemovingYear}
+        dialogRole="alertdialog"
+        ariaDescribedBy="vacay-remove-year-description"
+        closeLabel={t('common.close')}
+        initialFocusRef={deleteYearCancelRef}
+      >
         <div className="space-y-4">
           <div className="flex gap-3 p-3 rounded-lg bg-[rgba(239,68,68,0.08)] border border-[rgba(239,68,68,0.15)]">
             <AlertTriangle size={18} className="text-red-500 shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-medium text-content">
-                {t('vacay.removeYearConfirm', { year: deleteYear })}
-              </p>
-              <p className="text-xs mt-1 text-content-muted">
+              <p id="vacay-remove-year-description" className="text-xs text-content-muted">
                 {t('vacay.removeYearHint')}
               </p>
             </div>
           </div>
+          {deleteYearError && (
+            <p role="alert" className="text-sm text-red-600">
+              {t('vacay.yearRemovalError')}
+            </p>
+          )}
           <div className="flex gap-3 justify-end">
-            <button type="button" onClick={() => setDeleteYear(null)} className="px-4 py-2 text-sm rounded-lg transition-colors border text-content-muted border-edge">
+            <button ref={deleteYearCancelRef} type="button" onClick={cancelYearRemoval} disabled={isRemovingYear} className="px-4 py-2 text-sm rounded-lg transition-colors border text-content-muted border-edge disabled:cursor-not-allowed disabled:opacity-50">
               {t('common.cancel')}
             </button>
-            <button type="button" onClick={async () => { await removeYear(deleteYear); setDeleteYear(null) }} className="px-4 py-2 text-sm bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors">
-              {t('vacay.remove')}
+            <button type="button" onClick={confirmYearRemoval} disabled={isRemovingYear} aria-busy={isRemovingYear ? 'true' : undefined} aria-label={t('vacay.removeYearConfirm', { year: deleteYear ?? '' })} className="px-4 py-2 text-sm bg-red-500 hover:bg-red-600 text-white rounded-lg transition-colors disabled:cursor-not-allowed disabled:opacity-60">
+              {isRemovingYear ? t('common.loading') : t('vacay.remove')}
             </button>
           </div>
         </div>
       </Modal>
 
-      {/* Incoming invite — forced fullscreen modal */}
-      {incomingInvites.length > 0 && createPortal(
-        <div className="fixed inset-0 flex items-center justify-center px-4 bg-[rgba(0,0,0,0.7)]"
-          style={{ zIndex: 99995, backdropFilter: 'blur(8px)' }}>
+      {/* Incoming invite — explicit accept/decline only. The no-op close handler
+          keeps Escape and backdrop clicks from silently discarding an invitation,
+          while Modal supplies the shared focus, stack and body-lock contract. */}
+      <Modal
+        isOpen={incomingInvites.length > 0}
+        onClose={() => undefined}
+        title={t('vacay.inviteTitle')}
+        size="sm"
+        hideCloseButton
+        zIndex={99995}
+      >
+        <div className="space-y-4">
           {incomingInvites.map(inv => (
-            <div key={inv.plan_id} className="trek-modal-enter w-full max-w-md rounded-2xl shadow-2xl overflow-hidden bg-surface-card">
-              <div className="px-6 pt-6 pb-4 text-center">
+            <div key={inv.plan_id} className="trek-modal-enter rounded-2xl shadow-2xl overflow-hidden bg-surface-card">
+              <div className="px-6 pt-2 pb-4 text-center">
                 <div className="w-14 h-14 rounded-full mx-auto mb-4 flex items-center justify-center text-lg font-bold bg-surface-secondary text-content">
                   {inv.owner_username?.[0]?.toUpperCase()}
                 </div>
-                <h2 className="text-lg font-bold mb-1 text-content">
-                  {t('vacay.inviteTitle')}
-                </h2>
                 <p className="text-sm text-content-muted">
                   <span className="font-semibold text-content">{inv.owner_username}</span> {t('vacay.inviteWantsToFuse')}
                 </p>
@@ -233,6 +303,11 @@ function VacayPageDesktop(): React.ReactElement {
                 <InfoItem icon={ShieldCheck} text={t('vacay.fuseInfo4')} />
                 <InfoItem icon={Unlink} text={t('vacay.fuseInfo5')} />
               </div>
+              {inviteAcceptError?.planId === inv.plan_id && (
+                <p role="alert" className="mx-6 mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600">
+                  {inviteAcceptError.message}
+                </p>
+              )}
               <div className="px-6 pb-6 flex gap-3">
                 <button type="button" onClick={() => declineInvite(inv.plan_id)}
                   className="flex-1 px-4 py-2.5 text-sm font-medium rounded-xl transition-colors border text-content-muted border-edge">
@@ -245,9 +320,8 @@ function VacayPageDesktop(): React.ReactElement {
               </div>
             </div>
           ))}
-        </div>,
-        document.body
-      )}
+        </div>
+      </Modal>
 
       <style>{`
         @keyframes slideInLeft {

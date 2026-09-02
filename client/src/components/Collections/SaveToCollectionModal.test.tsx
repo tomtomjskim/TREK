@@ -336,7 +336,8 @@ describe('SaveToCollectionModal', () => {
     openFor();
     render(<SaveToCollectionModal />);
     await screen.findByText('Favorites');
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    const footer = screen.getByRole('button', { name: 'View' }).parentElement as HTMLElement;
+    fireEvent.click(within(footer).getByRole('button', { name: 'Close' }));
     expect(mockNavigate).not.toHaveBeenCalled();
     expect(useSaveToCollectionStore.getState().target).toBeNull();
   });

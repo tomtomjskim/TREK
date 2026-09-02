@@ -2,7 +2,7 @@
 import React from 'react'
 import type { Mock } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { render, screen, fireEvent, waitFor } from '../../../tests/helpers/render'
+import { render, screen, fireEvent, waitFor, within } from '../../../tests/helpers/render'
 import { server } from '../../../tests/helpers/msw/server'
 import type { Category } from '@trek/shared'
 import { useTranslation } from '../../i18n/TranslationContext'
@@ -151,7 +151,8 @@ describe('AddPlaceToCollectionModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /Search/ }))
     await screen.findByText('Kissa Sakaiki')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    const dropdown = screen.getByText('Kissa Sakaiki').closest('div.absolute') as HTMLElement
+    fireEvent.click(within(dropdown).getByRole('button', { name: 'Close' }))
     expect(screen.queryByText('Kissa Sakaiki')).not.toBeInTheDocument()
   })
 
@@ -182,7 +183,8 @@ describe('AddPlaceToCollectionModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /Search/ }))
     await screen.findByText('No places found')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    const dropdown = screen.getByText('No places found').closest('div.absolute') as HTMLElement
+    fireEvent.click(within(dropdown).getByRole('button', { name: 'Close' }))
     expect(screen.queryByText('No places found')).not.toBeInTheDocument()
   })
 

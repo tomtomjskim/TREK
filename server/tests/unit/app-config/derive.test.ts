@@ -13,6 +13,7 @@ import {
   deriveBackup,
   deriveNet,
   derivePaths,
+  deriveGoogleApiUsage,
   deriveAll,
 } from '../../../src/app-config/derive';
 
@@ -234,8 +235,17 @@ describe('derivePaths', () => {
   it('passes the path vars through raw — defaulting stays at the consumer', () => {
     expect(derivePaths({ TREK_WIKI_DIR: '/w' }).wikiDir).toBe('/w');
     expect(derivePaths({ TREK_PLACE_PHOTO_DIR: '/p' }).placePhotoDir).toBe('/p');
+    expect(derivePaths({ TREK_ANDROID_RELEASE_DIR: '/android' }).androidReleaseDir).toBe('/android');
     expect(derivePaths({}).wikiDir).toBeUndefined();
     expect(derivePaths({}).placePhotoDir).toBeUndefined();
+    expect(derivePaths({}).androidReleaseDir).toBeUndefined();
+  });
+});
+
+describe('deriveGoogleApiUsage', () => {
+  it('keeps raw per-SKU cap overrides for the quota owner to clamp', () => {
+    expect(deriveGoogleApiUsage({ TREK_GOOGLE_CAP_TEXT_SEARCH_PRO: '0' }).capOverrides)
+      .toMatchObject({ TREK_GOOGLE_CAP_TEXT_SEARCH_PRO: '0' });
   });
 });
 
@@ -245,7 +255,7 @@ describe('deriveAll', () => {
     expect(env.app.port).toBe(4000);
     expect(env.demo.enabled).toBe(true);
     for (const ns of [
-      'app', 'http', 'session', 'demo', 'adminBootstrap', 'oidc', 'smtp', 'mcp',
+      'app', 'http', 'session', 'googleApiUsage', 'demo', 'adminBootstrap', 'oidc', 'smtp', 'mcp',
       'plugins', 'webauthn', 'integrations', 'backup', 'db', 'paths', 'net',
     ] as const) {
       expect(env[ns]).toBeDefined();

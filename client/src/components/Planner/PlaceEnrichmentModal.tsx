@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useId, useMemo, useRef, useState } from 'react'
 import ReactDOM from 'react-dom'
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import type {
@@ -9,6 +9,8 @@ import type {
 import { placesApi } from '../../api/client'
 import { useTranslation } from '../../i18n'
 import { useTripStore } from '../../store/tripStore'
+import { lockBodyScroll } from '../../utils/bodyScrollLock'
+import { ModalFocusScopeContext, focusableElementsInScope, isTopmostModal } from '../shared/Modal'
 
 interface PlaceEnrichmentModalProps {
   isOpen: boolean
@@ -38,6 +40,8 @@ export function PlaceEnrichmentModal({ isOpen, onClose, tripId, places }: PlaceE
   const footerCloseRef = useRef<HTMLButtonElement | null>(null)
   const onCloseRef = useRef(onClose)
   const busyRef = useRef(false)
+  const parentFocusScopeId = useContext(ModalFocusScopeContext)
+  const focusScopeId = useId()
 
   const closeModal = () => {
     const shouldRefresh = applyResult !== null
@@ -59,14 +63,23 @@ export function PlaceEnrichmentModal({ isOpen, onClose, tripId, places }: PlaceE
 
   useEffect(() => {
     if (!isOpen) return
+    return lockBodyScroll()
+  }, [isOpen])
+
+  useEffect(() => {
+    if (!isOpen) return
     const previous = document.activeElement as HTMLElement | null
-    const frame = requestAnimationFrame(() => firstActionRef.current?.focus())
+    const frame = requestAnimationFrame(() => {
+      if (isTopmostModal(dialogRef.current)) firstActionRef.current?.focus()
+    })
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && !busyRef.current) onCloseRef.current()
+      if (event.key === 'Escape' && isTopmostModal(dialogRef.current)) {
+        event.preventDefault()
+        if (!busyRef.current) onCloseRef.current()
+      }
       if (event.key !== 'Tab' || !dialogRef.current) return
-      const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>(
-        'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
-      )].filter((element) => element.offsetParent !== null)
+      if (!isTopmostModal(dialogRef.current)) return
+      const focusable = focusableElementsInScope(focusScopeId)
       if (!focusable.length) return
       const first = focusable[0]
       const last = focusable[focusable.length - 1]
@@ -82,13 +95,14 @@ export function PlaceEnrichmentModal({ isOpen, onClose, tripId, places }: PlaceE
     return () => {
       cancelAnimationFrame(frame)
       document.removeEventListener('keydown', onKeyDown)
-      previous?.focus?.()
+      if (previous?.isConnected) previous.focus()
     }
-  }, [isOpen])
+  }, [focusScopeId, isOpen])
 
   useEffect(() => {
     if (!isOpen || (phase !== 'results' && phase !== 'done')) return
     const frame = requestAnimationFrame(() => {
+      if (!isTopmostModal(dialogRef.current)) return
       if (phase === 'done') {
         footerCloseRef.current?.focus()
         return
@@ -174,6 +188,7 @@ export function PlaceEnrichmentModal({ isOpen, onClose, tripId, places }: PlaceE
   const busy = phase === 'scanning' || phase === 'applying'
 
   return ReactDOM.createPortal(
+    <ModalFocusScopeContext.Provider value={focusScopeId}>
     <div
       onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) closeModal() }}
       className="bg-[rgba(0,0,0,0.48)]"
@@ -181,6 +196,10 @@ export function PlaceEnrichmentModal({ isOpen, onClose, tripId, places }: PlaceE
     >
       <div
         ref={dialogRef}
+        data-trek-modal="true"
+        data-trek-modal-z-index={100000}
+        data-trek-modal-focus-scope={focusScopeId}
+        data-trek-modal-parent-focus-scope={parentFocusScopeId ?? undefined}
         role="dialog"
         aria-modal="true"
         aria-labelledby="place-enrichment-title"
@@ -403,7 +422,8 @@ export function PlaceEnrichmentModal({ isOpen, onClose, tripId, places }: PlaceE
           )}
         </div>
       </div>
-    </div>,
+    </div>
+    </ModalFocusScopeContext.Provider>,
     document.body,
   )
 }

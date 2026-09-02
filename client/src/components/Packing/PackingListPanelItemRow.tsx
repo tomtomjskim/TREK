@@ -64,17 +64,23 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
   const sharedByMe = !!item.is_private && item.owner_id === currentUserId && recipients.length > 0
   const broughtBy = !item.is_private && item.owner_username ? item.owner_username : null
   const contributors = item.contributors || []
-  const canShare = canEdit && !isPlaceholder && !!onSetSharing
+  // Common items retain collaborative editing. Personal and Shared rows belong
+  // to their bringer; a recipient can see a Shared row but cannot mutate it.
+  const canMutate = canEdit && (!item.is_private || item.owner_id === currentUserId)
+  const canManage = canMutate
+  const canShare = canManage && !isPlaceholder && !!onSetSharing
 
-  const handleToggle = () => togglePackingItem(tripId, item.id, !item.checked)
+  const handleToggle = () => { if (canMutate) togglePackingItem(tripId, item.id, !item.checked) }
 
   const handleSaveName = async () => {
+    if (!canMutate) return
     if (!editName.trim()) { setEditing(false); setEditName(isPlaceholder ? '' : item.name); return }
     try { await updatePackingItem(tripId, item.id, { name: editName.trim() }); setEditing(false) }
     catch { toast.error(t('packing.toast.saveError')) }
   }
 
   const handleDelete = async () => {
+    if (!canManage) return
     // The panel routes deletion through onDelete so an emptied custom category
     // keeps its placeholder; fall back to a plain delete when used standalone.
     if (onDelete) { await onDelete(item); return }
@@ -83,6 +89,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
   }
 
   const handleCatChange = async (cat: string) => {
+    if (!canMutate) return
     setShowCatPicker(false)
     setShowMenuCategories(false)
     setShowItemMenu(false)
@@ -91,7 +98,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
     catch { toast.error(t('common.error')) }
   }
 
-  const canDrag = canEdit && !isPlaceholder && !!drag
+  const canDrag = canManage && !isPlaceholder && !!drag
   const selectedBag = bags.find(b => b.id === item.bag_id)
 
   // Shared by both shells of the name: a renameable name is a real button so
@@ -99,7 +106,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
   const nameStyle: CSSProperties = {
     flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
     fontSize: 'calc(13.5px * var(--fs-scale-body, 1))',
-    cursor: !canEdit || item.checked ? 'default' : 'text',
+    cursor: !canMutate || item.checked ? 'default' : 'text',
     color: isPlaceholder ? 'var(--text-faint)' : (item.checked ? 'var(--text-faint)' : 'var(--text-primary)'),
     transition: 'color 200ms cubic-bezier(0.23,1,0.32,1)',
     textDecoration: item.checked ? 'line-through' : 'none',
@@ -133,8 +140,8 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
           <GripVertical size={13} />
         </div>
       )}
-      <button type="button" onClick={handleToggle} style={{
-        flexShrink: 0, background: 'none', border: 'none', cursor: 'pointer', padding: 0, position: 'relative',
+      <button type="button" onClick={handleToggle} disabled={!canMutate} style={{
+        flexShrink: 0, background: 'none', border: 'none', cursor: canMutate ? 'pointer' : 'default', padding: 0, position: 'relative',
         width: 18, height: 18,
         color: item.checked ? '#10b981' : 'var(--text-faint)',
         transition: 'color 200ms cubic-bezier(0.23,1,0.32,1)',
@@ -153,7 +160,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
         }} />
       </button>
 
-      {editing && canEdit ? (
+      {editing && canMutate ? (
         <input
           type="text" value={editName} autoFocus
           placeholder={isPlaceholder ? '...' : undefined}
@@ -162,7 +169,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
           onKeyDown={e => { if (e.key === 'Enter') handleSaveName(); if (e.key === 'Escape') { setEditing(false); setEditName(isPlaceholder ? '' : item.name) } }}
           style={{ flex: 1, minWidth: 0, fontSize: 'calc(13.5px * var(--fs-scale-body, 1))', padding: '2px 8px', borderRadius: 6, border: '1px solid var(--border-primary)', outline: 'none', fontFamily: 'inherit' }}
         />
-      ) : canEdit && !item.checked ? (
+      ) : canMutate && !item.checked ? (
         <button
           type="button"
           onClick={() => setEditing(true)}
@@ -198,7 +205,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
 
       <div className="packing-row-inline-actions" style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         {/* Quantity */}
-        {canEdit && <QuantityInput value={item.quantity || 1} onSave={qty => updatePackingItem(tripId, item.id, { quantity: qty })} />}
+        {canMutate && <QuantityInput value={item.quantity || 1} onSave={qty => updatePackingItem(tripId, item.id, { quantity: qty })} />}
 
         {/* Weight + Bag (when enabled) */}
         {bagTrackingEnabled && (
@@ -206,9 +213,9 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
           <div style={{ display: 'flex', alignItems: 'center', gap: 2, border: '1px solid var(--border-primary)', borderRadius: 8, padding: '3px 6px', background: 'transparent' }}>
             <NumericInput
               value={item.weight_grams ?? ''}
-              readOnly={!canEdit}
+              readOnly={!canMutate}
               onValueChange={async raw => {
-                if (!canEdit) return
+                if (!canMutate) return
                 const v = raw === '' ? null : Number.parseInt(raw)
                 try { await updatePackingItem(tripId, item.id, { weight_grams: v }) } catch { toast.error(t('packing.toast.saveError')) }
               }}
@@ -219,16 +226,16 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
           </div>
           <div style={{ position: 'relative' }}>
             <button type="button"
-              onClick={() => canEdit && setShowBagPicker(p => !p)}
+              onClick={() => canMutate && setShowBagPicker(p => !p)}
               style={{
-                width: 22, height: 22, borderRadius: '50%', cursor: canEdit ? 'pointer' : 'default', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                width: 22, height: 22, borderRadius: '50%', cursor: canMutate ? 'pointer' : 'default', padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
                 border: item.bag_id ? `2.5px solid ${selectedBag?.color || 'var(--border-primary)'}` : '2px dashed var(--border-primary)',
                 background: item.bag_id ? `${selectedBag?.color || 'var(--border-primary)'}30` : 'transparent',
               }}
             >
               {!item.bag_id && <Package size={9} className="text-content-faint" />}
             </button>
-            {showBagPicker && (
+            {showBagPicker && canMutate && (
               <div style={{
                 position: 'absolute', right: 0, top: '100%', marginTop: 4, zIndex: 50,
                 background: 'var(--bg-card)', border: '1px solid var(--border-primary)', borderRadius: 10,
@@ -296,7 +303,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
         )}
       </div>
 
-      {canEdit && (
+      {canMutate && (
       <div className="packing-row-inline-actions" style={{ display: 'flex', gap: 2, alignItems: 'center', flexShrink: 0 }}>
         <div style={{ position: 'relative' }}>
           <button type="button"
@@ -344,14 +351,14 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
           <Pencil size={13} />
         </button>
 
-        <button type="button" onClick={handleDelete} title={t('common.delete')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '3px 4px', borderRadius: 6, display: 'flex', color: 'var(--text-faint)' }}
+        {canManage && <button type="button" onClick={handleDelete} title={t('common.delete')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '3px 4px', borderRadius: 6, display: 'flex', color: 'var(--text-faint)' }}
           onMouseEnter={e => e.currentTarget.style.color = '#ef4444'} onMouseLeave={e => e.currentTarget.style.color = 'var(--text-faint)'}>
           <Trash2 size={13} />
-        </button>
+        </button>}
       </div>
       )}
 
-      {canEdit && (
+      {canMutate && (
         <div className="packing-row-overflow" style={{ display: 'none', flexShrink: 0, position: 'relative' }}>
           <button type="button"
             ref={itemMenuBtnRef}
@@ -393,8 +400,9 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
                         <div style={{ display: 'flex', alignItems: 'center', gap: 2, border: '1px solid var(--border-primary)', borderRadius: 8, padding: '3px 6px', background: 'transparent' }}>
                           <NumericInput
                             value={item.weight_grams ?? ''}
-                            readOnly={!canEdit}
+                            readOnly={!canMutate}
                             onValueChange={async raw => {
+                              if (!canMutate) return
                               const v = raw === '' ? null : Number.parseInt(raw)
                               try { await updatePackingItem(tripId, item.id, { weight_grams: v }) } catch { toast.error(t('packing.toast.saveError')) }
                             }}
@@ -447,7 +455,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
 
                   <div style={{ height: 1, background: 'var(--bg-tertiary)', margin: '4px 0' }} />
                   <OverflowMenuItem icon={<Pencil size={13} />} label={t('common.rename')} onClick={() => { setEditing(true); setShowItemMenu(false) }} />
-                  <OverflowMenuItem icon={<Trash2 size={13} />} label={t('common.delete')} danger onClick={() => { setShowItemMenu(false); handleDelete() }} />
+                  {canManage && <OverflowMenuItem icon={<Trash2 size={13} />} label={t('common.delete')} danger onClick={() => { setShowItemMenu(false); handleDelete() }} />}
                 </div>
               </>
             )

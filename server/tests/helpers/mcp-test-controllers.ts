@@ -55,7 +55,6 @@ import { VacayMcp } from '../../src/nest/vacay/vacay.mcp';
 import { VacayService } from '../../src/nest/vacay/vacay.service';
 import { RealtimeService } from '../../src/nest/realtime/realtime.service';
 import { McpToolGuardsService } from '../../src/nest/mcp-shared/mcp-tool-guards.service';
-import { QueryHelpersService } from '../../src/nest/query-helpers/query-helpers.service';
 import { JourneyMcp } from '../../src/nest/journey/journey.mcp';
 import { JourneyDomainService } from '../../src/nest/journey/journey-domain.service';
 import { JourneyShareService } from '../../src/nest/journey/journey-share.service';
@@ -76,6 +75,7 @@ import { TripMembersService } from '../../src/nest/trip-members/trip-members.ser
 import { TripReadModelService } from '../../src/nest/trip-read-model/trip-read-model.service';
 import { TripPromptsMcp } from '../../src/nest/trips/trip-prompts.mcp';
 import { PlacePhotoCacheService } from '../../src/nest/place-photos/place-photo-cache.service';
+import { QueryHelpersService } from '../../src/nest/query-helpers/query-helpers.service';
 import { RuntimeEnvService } from '../../src/nest/app-config/runtime-env.service';
 import { makeNotificationsService, makeNotificationPreferencesService } from './notifications';
 import { meteredGoogleApiTransport } from './google-api-transport';
@@ -219,7 +219,7 @@ export function createMcpTestRegistry(): McpRegistry {
       new VacayMcp(new VacayService(dbService, realtimeService, notificationsStub()), authService, addonsService),
       new TripsMcp(tripsService, todoService, collabService, authService, calendarService, membersService, readModelService, addonsService, guards),
       new TripPromptsMcp(tripsService, readModelService, packingService, addonsService),
-      new ShareMcp(new ShareService(dbService, new SettingsService(dbService), permissionsService, queryHelpersService, placePhotoCache), authService, guards),
+      new ShareMcp(new ShareService(dbService, permissionsService, placePhotoCache), authService, guards),
       new FeedsMcp(new FeedsService(dbService, calendarService), dbService, new RuntimeEnvService(), guards),
       new TripInviteMcp(new TripInviteService(dbService, permissionsService, new TripMembershipService(dbService)), dbService, new RuntimeEnvService(), guards, new AuditService(dbService)),
       new MapsMcp(mapsService),

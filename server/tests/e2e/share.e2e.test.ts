@@ -155,7 +155,8 @@ describe('Share-link e2e (real auth guard + real SQL over temp SQLite)', () => {
     const created = await request(server).post(`/api/trips/${tripId}/share-link`).set('Cookie', sessionCookie(1)).send({});
     const res = await request(server).get(`/api/shared/${created.body.token}`);
     expect(res.status).toBe(200);
-    expect(res.body.trip).toEqual(expect.objectContaining({ id: tripId, title: 'Trip' }));
+    expect(res.body.trip).toEqual(expect.objectContaining({ title: 'Trip' }));
+    expect(res.body.trip).not.toHaveProperty('id');
     expect(res.body.permissions).toEqual(expect.objectContaining({ share_map: true, share_budget: false }));
   });
 

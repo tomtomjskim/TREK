@@ -8,6 +8,7 @@ export {
   deriveSession,
   deriveManaged,
   deriveMaps,
+  deriveGoogleApiUsage,
   deriveDemo,
   deriveAdminBootstrap,
   deriveOidc,

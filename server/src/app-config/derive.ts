@@ -142,6 +142,23 @@ export function deriveMaps(raw: RawEnv) {
   };
 }
 
+export function deriveGoogleApiUsage(raw: RawEnv) {
+  return {
+    // Keep the raw strings: the quota owner intentionally clamps or falls back
+    // per SKU, including the supported zero-cap kill switch.
+    capOverrides: {
+      TREK_GOOGLE_CAP_AUTOCOMPLETE: raw.TREK_GOOGLE_CAP_AUTOCOMPLETE,
+      TREK_GOOGLE_CAP_TEXT_SEARCH_IDS_ONLY: raw.TREK_GOOGLE_CAP_TEXT_SEARCH_IDS_ONLY,
+      TREK_GOOGLE_CAP_TEXT_SEARCH_PRO: raw.TREK_GOOGLE_CAP_TEXT_SEARCH_PRO,
+      TREK_GOOGLE_CAP_TEXT_SEARCH_ENTERPRISE: raw.TREK_GOOGLE_CAP_TEXT_SEARCH_ENTERPRISE,
+      TREK_GOOGLE_CAP_PLACE_DETAILS_IDS_ONLY: raw.TREK_GOOGLE_CAP_PLACE_DETAILS_IDS_ONLY,
+      TREK_GOOGLE_CAP_PLACE_DETAILS_ENTERPRISE: raw.TREK_GOOGLE_CAP_PLACE_DETAILS_ENTERPRISE,
+      TREK_GOOGLE_CAP_PLACE_DETAILS_ATMOSPHERE: raw.TREK_GOOGLE_CAP_PLACE_DETAILS_ATMOSPHERE,
+      TREK_GOOGLE_CAP_PLACE_PHOTOS: raw.TREK_GOOGLE_CAP_PLACE_PHOTOS,
+    },
+  };
+}
+
 export function deriveDemo(raw: RawEnv) {
   return {
     enabled: parseBool(raw.DEMO_MODE) === true,
@@ -270,6 +287,7 @@ export function derivePaths(raw: RawEnv) {
   return {
     wikiDir: raw.TREK_WIKI_DIR,
     placePhotoDir: raw.TREK_PLACE_PHOTO_DIR,
+    androidReleaseDir: raw.TREK_ANDROID_RELEASE_DIR,
   };
 }
 
@@ -286,6 +304,7 @@ export function deriveAll(raw: RawEnv) {
     session: deriveSession(raw),
     managed: deriveManaged(raw),
     maps: deriveMaps(raw),
+    googleApiUsage: deriveGoogleApiUsage(raw),
     demo: deriveDemo(raw),
     adminBootstrap: deriveAdminBootstrap(raw),
     oidc: deriveOidc(raw),

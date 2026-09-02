@@ -1,7 +1,8 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, useContext, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Check } from 'lucide-react'
 import { useAnchoredPosition, scrollAnchorIntoView } from '../../hooks/useAnchoredPosition'
+import { ModalFocusScopeContext } from './Modal'
 
 interface SelectOption {
   // Callers use both string keys and numeric ids (e.g. day/place ids) as values;
@@ -13,6 +14,7 @@ interface SelectOption {
   searchLabel?: string
   groupLabel?: string
   badge?: string
+  disabled?: boolean
 }
 
 interface CustomSelectProps {
@@ -38,9 +40,13 @@ export default function CustomSelect({
 }: CustomSelectProps) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
+  const [activeValue, setActiveValue] = useState<string | number | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const dropRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const modalFocusScopeId = useContext(ModalFocusScopeContext)
+  const listboxId = `custom-select-${useId().replace(/:/g, '')}`
 
   // Follows the trigger while the sheet scrolls and while the on-screen keyboard
   // resizes the viewport, instead of freezing at the rect measured on open (#1999).
@@ -91,14 +97,86 @@ export default function CustomSelect({
     : options
 
   const sm = size === 'sm'
+  const selectable = filtered.filter(option => !option.isHeader && !option.disabled)
+  const resolvedActiveValue = selectable.some(option => option.value === activeValue)
+    ? activeValue
+    : (selectable.find(option => option.value === value)?.value ?? selectable[0]?.value ?? null)
+
+  useEffect(() => {
+    if (open && activeValue !== resolvedActiveValue) setActiveValue(resolvedActiveValue)
+  }, [activeValue, open, resolvedActiveValue])
+
+  const openSelect = () => {
+    if (disabled) return
+    setOpen(true)
+    setSearch('')
+    setActiveValue(selected && !selected.isHeader && !selected.disabled ? selected.value : (selectable[0]?.value ?? null))
+  }
+
+  const closeSelect = () => {
+    setOpen(false)
+    setSearch('')
+    triggerRef.current?.focus()
+  }
+
+  const selectValue = (nextValue: string | number) => {
+    onChange(nextValue)
+    closeSelect()
+  }
+
+  const moveActive = (direction: 1 | -1) => {
+    if (selectable.length === 0) return
+    const currentIndex = selectable.findIndex(option => option.value === resolvedActiveValue)
+    const nextIndex = currentIndex < 0
+      ? (direction === 1 ? 0 : selectable.length - 1)
+      : (currentIndex + direction + selectable.length) % selectable.length
+    setActiveValue(selectable[nextIndex].value)
+  }
+
+  const handleKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (!open) {
+      if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        openSelect()
+      }
+      return
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      moveActive(event.key === 'ArrowDown' ? 1 : -1)
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      if (selectable.length > 0) setActiveValue((event.key === 'Home' ? selectable[0] : selectable[selectable.length - 1]).value)
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      const active = selectable.find(option => option.value === resolvedActiveValue)
+      if (active) selectValue(active.value)
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      closeSelect()
+    }
+  }
+
+  const handleSearchKeyboard = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    // Space and Home/End are ordinary text editing keys while searching.
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp' && event.key !== 'Enter' && event.key !== 'Escape' && event.key !== ' ' && event.key !== 'Home' && event.key !== 'End') return
+    event.stopPropagation()
+    if (event.key !== ' ' && event.key !== 'Home' && event.key !== 'End') handleKeyboard(event)
+  }
 
   return (
     <div ref={ref} style={{ position: 'relative', ...style }}>
       {/* Trigger */}
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
-        onClick={() => { if (!disabled) { setOpen(o => !o); setSearch('') } }}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-activedescendant={open && resolvedActiveValue !== null ? `${listboxId}-option-${String(resolvedActiveValue)}` : undefined}
+        onKeyDown={handleKeyboard}
+        onClick={() => { if (!disabled) { if (open) closeSelect(); else openSelect() } }}
         style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: 8,
           padding: sm ? '8px 12px' : '8px 14px', borderRadius: 10,
@@ -128,34 +206,44 @@ export default function CustomSelect({
 
       {/* Dropdown */}
       {open && createPortal(
-        <div ref={dropRef} style={{
-          position: 'fixed',
-          ...(anchored
-            ? anchored.flipped
-              ? { bottom: anchored.bottom, left: anchored.left, width: anchored.width }
-              : { top: anchored.top, left: anchored.left, width: anchored.width }
-            : { top: 0, left: 0, width: 200 }),
-          zIndex: 99999,
-          background: 'var(--bg-card)',
-          backdropFilter: 'blur(24px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-          border: '1px solid var(--border-primary)',
-          borderRadius: 10,
-          boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
-          overflow: 'hidden',
-          animation: 'trek-menu-enter 200ms cubic-bezier(0.23, 1, 0.32, 1)',
-          transformOrigin: anchored?.flipped ? 'bottom center' : 'top center',
-          willChange: 'transform, opacity',
-        }}>
+        <div
+          ref={dropRef}
+          id={listboxId}
+          role="listbox"
+          aria-label={placeholder || 'Options'}
+          aria-activedescendant={resolvedActiveValue !== null ? `${listboxId}-option-${String(resolvedActiveValue)}` : undefined}
+          onKeyDown={handleKeyboard}
+          data-trek-modal-focus-scope={modalFocusScopeId ?? undefined}
+          style={{
+            position: 'fixed',
+            ...(anchored
+              ? anchored.flipped
+                ? { bottom: anchored.bottom, left: anchored.left, width: anchored.width }
+                : { top: anchored.top, left: anchored.left, width: anchored.width }
+              : { top: 0, left: 0, width: 200 }),
+            zIndex: 99999,
+            background: 'var(--bg-card)',
+            backdropFilter: 'blur(24px) saturate(180%)',
+            WebkitBackdropFilter: 'blur(24px) saturate(180%)',
+            border: '1px solid var(--border-primary)',
+            borderRadius: 10,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
+            overflow: 'hidden',
+            animation: 'trek-menu-enter 200ms cubic-bezier(0.23, 1, 0.32, 1)',
+            transformOrigin: anchored?.flipped ? 'bottom center' : 'top center',
+            willChange: 'transform, opacity',
+          }}>
           {/* Search */}
           {searchable && (
             <div style={{ padding: '6px 6px 2px' }}>
-              <input
+                <input
                 ref={searchRef}
                 type="text"
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                placeholder="..."
+                  placeholder="..."
+                  aria-label="Search options"
+                  onKeyDown={handleSearchKeyboard}
                 style={{
                   width: '100%', border: '1px solid var(--border-secondary)', borderRadius: 6,
                   padding: '5px 8px', fontSize: 'calc(12px * var(--fs-scale-body, 1))', outline: 'none', fontFamily: 'inherit',
@@ -194,20 +282,26 @@ export default function CustomSelect({
                   )
                 }
                 const isSelected = option.value === value
+                const isActive = option.value === resolvedActiveValue
                 return (
                   <button
                     key={option.value}
+                    id={`${listboxId}-option-${String(option.value)}`}
+                    role="option"
+                    aria-selected={isSelected}
+                    disabled={option.disabled}
+                    tabIndex={-1}
                     type="button"
-                    onClick={() => { onChange(option.value); setOpen(false); setSearch('') }}
+                    onClick={() => { if (!option.disabled) selectValue(option.value) }}
+                    onMouseEnter={() => { if (!option.disabled) setActiveValue(option.value) }}
                     style={{
                       width: '100%', display: 'flex', alignItems: 'center', gap: 8,
                       padding: '7px 10px', borderRadius: 6,
-                      border: 'none', background: isSelected ? 'var(--bg-hover)' : 'transparent',
+                      border: 'none', background: isActive || isSelected ? 'var(--bg-hover)' : 'transparent',
                       color: 'var(--text-primary)', fontSize: 'calc(13px * var(--fs-scale-body, 1))', fontFamily: 'inherit',
                       cursor: 'pointer', textAlign: 'left', transition: 'background 0.1s',
                     }}
-                    onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
-                    onMouseLeave={e => e.currentTarget.style.background = isSelected ? 'var(--bg-hover)' : 'transparent'}
+                    onMouseLeave={e => e.currentTarget.style.background = isActive || isSelected ? 'var(--bg-hover)' : 'transparent'}
                   >
                     {option.icon && <span style={{ display: 'flex', flexShrink: 0 }}>{option.icon}</span>}
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{option.label}</span>
