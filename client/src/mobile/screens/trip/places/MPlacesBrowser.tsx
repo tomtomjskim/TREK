@@ -1,11 +1,12 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react'
 import {
   Bookmark, Check, CheckCheck, CheckCircle2, Download, ListChecks, Loader2, MapPin, Plus,
-  SlidersHorizontal, Tag, Trash2, X,
+  RefreshCw, SlidersHorizontal, Tag, Trash2, X,
 } from 'lucide-react'
 import MDancingTrek from '../../../components/MDancingTrek'
 import { useTripStore } from '../../../../store/tripStore'
 import { useAddonStore } from '../../../../store/addonStore'
+import { useAuthStore } from '../../../../store/authStore'
 import { useToast } from '../../../../components/shared/Toast'
 import { collectionsApi } from '../../../../api/collections'
 import PlaceAvatar from '../../../../components/shared/PlaceAvatar'
@@ -17,6 +18,7 @@ import type { Place } from '../../../../types'
 import MPlacesBulkCategorySheet from './MPlacesBulkCategorySheet'
 import MPlacesSaveToCollectionSheet from './MPlacesSaveToCollectionSheet'
 import { filterPool, firstPlannedDayNumbers, plannedPlaceIds } from './placesBrowserModel'
+import { PlaceEnrichmentModal } from '../../../../components/Planner/PlaceEnrichmentModal'
 
 /**
  * Fullscreen places pool (mode === 'browse'): All/Unplanned/Tracks filter
@@ -33,6 +35,9 @@ export default function MPlacesBrowser({ planner, shell }: MPlacesBrowserProps) 
   const { t, places, categories, assignments, days, trip } = planner
   const canEditPlaces = planner.can('place_edit', trip)
   const collectionsEnabled = useAddonStore(s => s.isEnabled('collections'))
+  const canEnrichPlaces = useAuthStore(
+    s => s.hasMapsKey && s.placesEnrichEnabled && s.placesEnrichmentEnabled,
+  )
 
   const filter = useTripStore(s => s.placesFilter)
   const setFilter = useTripStore(s => s.setPlacesFilter)
@@ -45,6 +50,7 @@ export default function MPlacesBrowser({ planner, shell }: MPlacesBrowserProps) 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false)
   const [saveToListOpen, setSaveToListOpen] = useState(false)
+  const [enrichmentOpen, setEnrichmentOpen] = useState(false)
   const [markVisitedBusy, setMarkVisitedBusy] = useState(false)
   const toast = useToast()
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false)
@@ -182,7 +188,7 @@ export default function MPlacesBrowser({ planner, shell }: MPlacesBrowserProps) 
           )}
         </div>
 
-        {/* ── Search + category filter + select toggle ── */}
+        {/* ── Search + category/enrichment/select/add actions ── */}
         <div className="mt-[10px] flex items-stretch gap-2">
           <input
             value={search}
@@ -204,6 +210,16 @@ export default function MPlacesBrowser({ planner, shell }: MPlacesBrowserProps) 
               </span>
             )}
           </button>
+          {canEditPlaces && canEnrichPlaces && (
+            <button
+              type="button"
+              onClick={() => setEnrichmentOpen(true)}
+              aria-label={t('places.enrichmentAction')}
+              className="flex w-[42px] flex-none items-center justify-center rounded-full border border-[color:var(--m-rowbr)] bg-[color:var(--m-ic)] text-m-muted"
+            >
+              <RefreshCw size={15} strokeWidth={2} />
+            </button>
+          )}
           {canEditPlaces && (
             <button
               type="button"
@@ -379,6 +395,12 @@ export default function MPlacesBrowser({ planner, shell }: MPlacesBrowserProps) 
           try { await planner.confirmChangeCategory(ids, categoryId) } catch { return }
           exitSelectMode()
         }}
+      />
+      <PlaceEnrichmentModal
+        isOpen={enrichmentOpen}
+        onClose={() => setEnrichmentOpen(false)}
+        tripId={planner.tripId}
+        places={places}
       />
       {collectionsEnabled && (
         <MPlacesSaveToCollectionSheet

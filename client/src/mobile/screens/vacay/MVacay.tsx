@@ -269,9 +269,12 @@ export default function MVacay() {
               <button
                 type="button"
                 onClick={() => v.setMode('company')}
+                disabled={v.isFused}
+                aria-label={v.isFused ? `${t('mobileVacay.modeCompany')}: ${t('shared.readOnly')}` : undefined}
+                title={v.isFused ? t('shared.readOnly') : undefined}
                 className={`flex items-center gap-[6px] whitespace-nowrap rounded-full px-[14px] py-2 text-[0.78125rem] font-bold ${
                   v.mode === 'company' ? 'bg-m-act text-m-actfg' : 'bg-[color:var(--m-ic)] text-m-muted'
-                }`}
+                } disabled:cursor-not-allowed disabled:opacity-50`}
               >
                 <Building2 size={13} strokeWidth={2.2} />
                 {t('mobileVacay.modeCompany')}

@@ -628,6 +628,31 @@ describe('Google Maps list import', () => {
 describe('touch device at desktop width (#1616)', () => {
   const tabletProps = { ...defaultProps, isMobile: false };
 
+  it('FE-PLANNER-SIDEBAR-044a: coarse-pointer rows do not arm native drag at desktop width (#1432)', () => {
+    const place = buildPlace({ id: 7, name: 'iPad Place' });
+    render(<PlacesSidebar {...tabletProps} isTouch places={[place]} />);
+    const placeRow = screen.getByText('iPad Place').closest('div[draggable]')!;
+    expect(placeRow).toHaveAttribute('draggable', 'false');
+  });
+
+  it('FE-PLANNER-SIDEBAR-044b: coarse rows remain sources for the long-press bridge', async () => {
+    const place = buildPlace({ id: 42, name: 'iPad Bridge Place' });
+    render(<PlacesSidebar {...tabletProps} isTouch places={[place]} />);
+    const teardown = installTouchDragBridge();
+    try {
+      const row = screen.getByText('iPad Bridge Place').closest('[data-touch-draggable]')!;
+      fireEvent.touchStart(row, { touches: [{ identifier: 1, clientX: 20, clientY: 40 }] });
+      await new Promise(resolve => setTimeout(resolve, 400));
+      expect(window.__dragData).toEqual({ placeId: '42' });
+    } finally {
+      teardown();
+      window.__dragData = null;
+      // The bridge swallows the click that follows a completed drag. Let that
+      // short-lived listener expire before the next test's controls are clicked.
+      await new Promise(resolve => setTimeout(resolve, 450));
+    }
+  });
+
   it('FE-PLANNER-SIDEBAR-044: place rows are draggable and opt into the touch bridge', () => {
     const place = buildPlace({ id: 7, name: 'Tablet Place' });
     const { container } = render(<PlacesSidebar {...tabletProps} places={[place]} />);

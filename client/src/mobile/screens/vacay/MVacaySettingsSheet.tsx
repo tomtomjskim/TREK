@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowRightLeft, Building2, Calendar, CalendarRange, CalendarX, ChevronDown, Globe, GraduationCap, Loader2, Plus, Trash2, Unlink, X } from 'lucide-react'
+import { ArrowRightLeft, Building2, CalendarRange, CalendarX, ChevronDown, Globe, GraduationCap, Loader2, Plus, Trash2, Unlink, X } from 'lucide-react'
 import MSheet from '../../components/MSheet'
 import MIconBtn from '../../components/MIconBtn'
 import MToggle from '../../components/MToggle'
+import MConfirmSheet from '../settings/MConfirmSheet'
 import { useVacayStore } from '../../../store/vacayStore'
 import { getIntlLanguage, useTranslation } from '../../../i18n'
 import { useToast } from '../../../components/shared/Toast'
@@ -30,10 +31,13 @@ interface MVacaySettingsSheetProps {
 export default function MVacaySettingsSheet({ open, onClose }: MVacaySettingsSheetProps) {
   const { t, language } = useTranslation()
   const toast = useToast()
-  const { plan, updatePlan, addHolidayCalendar, updateHolidayCalendar, deleteHolidayCalendar, isFused, dissolve, users } = useVacayStore()
+  const { plan, updatePlan, addHolidayCalendar, updateHolidayCalendar, deleteHolidayCalendar, isFused, dissolve, users, years, removeYear, pendingInvites, loadPlan } = useVacayStore()
   const [countries, setCountries] = useState<Option[]>([])
   const [showAddForm, setShowAddForm] = useState(false)
   const [showAddSchoolForm, setShowAddSchoolForm] = useState(false)
+  const [deleteYear, setDeleteYear] = useState<number | null>(null)
+  const [isRemovingYear, setIsRemovingYear] = useState(false)
+  const [yearRemovalNotice, setYearRemovalNotice] = useState<'fused' | 'pending' | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -49,6 +53,23 @@ export default function MVacaySettingsSheet({ open, onClose }: MVacaySettingsShe
     }).catch(() => {})
   }, [open, language])
 
+  const yearRemovalReadOnlyReason: 'fused' | 'pending' | null = isFused
+    ? 'fused'
+    : pendingInvites.length > 0
+      ? 'pending'
+      : null
+  const yearRemovalReadOnlyLabel = yearRemovalReadOnlyReason === 'pending'
+    ? t('vacay.yearRemovalPendingReason')
+    : yearRemovalReadOnlyReason === 'fused'
+      ? t('vacay.yearRemovalFusedReason')
+      : null
+
+  useEffect(() => {
+    if (yearRemovalReadOnlyReason === null || deleteYear === null) return
+    setDeleteYear(null)
+    setYearRemovalNotice(yearRemovalReadOnlyReason)
+  }, [deleteYear, yearRemovalReadOnlyReason])
+
   if (!plan) return null
 
   // Public and school calendars live in the same holiday_calendars list, split by type
@@ -58,6 +79,29 @@ export default function MVacaySettingsSheet({ open, onClose }: MVacaySettingsShe
   const schoolHolidayCountries = countries.filter(country => country.value in SCHOOL_HOLIDAY_COUNTRY_CONFIG)
 
   const weekendDays: number[] = plan.weekend_days ? String(plan.weekend_days).split(',').map(Number) : [0, 6]
+
+  const requestYearRemoval = (year: number) => {
+    if (yearRemovalReadOnlyReason !== null || isRemovingYear) return
+    setYearRemovalNotice(null)
+    setDeleteYear(year)
+  }
+  const confirmYearRemoval = async () => {
+    if (deleteYear === null || yearRemovalReadOnlyReason !== null || isRemovingYear) return
+    setIsRemovingYear(true)
+    try {
+      await removeYear(deleteYear)
+      setDeleteYear(null)
+    } catch {
+      toast.error(t('vacay.yearRemovalError'))
+      try {
+        await loadPlan()
+      } catch {
+        // Keep the destructive prompt retryable even when reconciliation fails.
+      }
+    } finally {
+      setIsRemovingYear(false)
+    }
+  }
   const weekdayChips = [
     { day: 1, label: t('vacay.mon') },
     { day: 2, label: t('vacay.tue') },
@@ -116,33 +160,6 @@ export default function MVacaySettingsSheet({ open, onClose }: MVacaySettingsShe
         )}
         <div className="my-2 h-px bg-[color:var(--m-rowbr)]" />
 
-        {/* Week start */}
-        <div className="flex items-start gap-[11px] py-3">
-          <Calendar size={17} strokeWidth={2} className="mt-[1px] flex-none text-m-muted" />
-          <div className="flex-1">
-            <div className="text-[0.84375rem] font-bold">{t('vacay.weekStart')}</div>
-            <div className="font-geist text-[0.65625rem] text-m-muted">{t('vacay.weekStartHint')}</div>
-          </div>
-          <span className="flex flex-none gap-[5px]">
-            {[{ value: 1, label: t('vacay.mon') }, { value: 0, label: t('vacay.sun') }].map(({ value, label }) => {
-              const active = (plan.week_start ?? 1) === value
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => updatePlan({ week_start: value })}
-                  className={`rounded-[10px] px-[13px] py-[7px] text-[0.71875rem] font-semibold ${
-                    active ? 'bg-m-act text-m-actfg' : 'border border-[color:var(--m-rowbr)] bg-[color:var(--m-ic)] text-m-ink'
-                  }`}
-                >
-                  {label}
-                </button>
-              )
-            })}
-          </span>
-        </div>
-        <div className="my-2 h-px bg-[color:var(--m-rowbr)]" />
-
         {/* Carry over */}
         <div className="flex items-start gap-[11px] py-3">
           <ArrowRightLeft size={17} strokeWidth={2} className="mt-[1px] flex-none text-m-muted" />
@@ -165,9 +182,44 @@ export default function MVacaySettingsSheet({ open, onClose }: MVacaySettingsShe
             <div className="text-[0.84375rem] font-bold">{t('vacay.companyHolidays')}</div>
             <div className="font-geist text-[0.65625rem] text-m-muted">{t('vacay.companyHolidaysHint')} · {t('vacay.companyHolidaysNoDeduct')}</div>
           </div>
-          <MToggle checked={plan.company_holidays_enabled} onChange={() => updatePlan({ company_holidays_enabled: !plan.company_holidays_enabled })} ariaLabel={t('vacay.companyHolidays')} />
+          <MToggle
+            checked={plan.company_holidays_enabled}
+            onChange={() => updatePlan({ company_holidays_enabled: !plan.company_holidays_enabled })}
+            ariaLabel={isFused ? `${t('vacay.companyHolidays')}: ${t('shared.readOnly')}` : t('vacay.companyHolidays')}
+            disabled={isFused}
+          />
         </div>
+        {isFused && (
+          <p className="-mt-2 ml-7 font-geist text-[0.65625rem] text-m-muted">{t('shared.readOnly')}</p>
+        )}
         <div className="my-2 h-px bg-[color:var(--m-rowbr)]" />
+
+        {years.length > 1 && (
+          <>
+            <div className="py-3">
+              <div className="text-[0.84375rem] font-bold">{t('vacay.removeYear')}</div>
+              <div className="font-geist text-[0.65625rem] text-m-muted">{t('vacay.removeYearHint')}</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {years.map(year => (
+                  <button
+                    key={year}
+                    type="button"
+                    disabled={yearRemovalReadOnlyReason !== null}
+                    onClick={() => requestYearRemoval(year)}
+                    aria-label={[t('vacay.removeYearConfirm', { year }), yearRemovalReadOnlyLabel].filter(Boolean).join(': ')}
+                    title={yearRemovalReadOnlyLabel ?? undefined}
+                    className="inline-flex items-center gap-1 rounded-lg border border-red-300 px-3 py-2 text-[0.71875rem] font-semibold text-red-600 disabled:cursor-not-allowed disabled:border-[color:var(--m-rowbr)] disabled:text-m-faint"
+                  >
+                    <Trash2 size={13} aria-hidden="true" />
+                    {year}
+                  </button>
+                ))}
+              </div>
+              {yearRemovalReadOnlyLabel && <p className="mt-2 font-geist text-[0.65625rem] text-m-muted">{yearRemovalReadOnlyLabel}</p>}
+            </div>
+            <div className="my-2 h-px bg-[color:var(--m-rowbr)]" />
+          </>
+        )}
 
         {/* Public holidays + calendar editor */}
         <div className="flex items-start gap-[11px] py-3">
@@ -280,6 +332,25 @@ export default function MVacaySettingsSheet({ open, onClose }: MVacaySettingsShe
           </div>
         )}
       </div>
+      {yearRemovalNotice && (
+        <p role="status" aria-live="polite" className="sr-only">
+          {yearRemovalNotice === 'pending'
+            ? t('vacay.yearRemovalPendingNotice')
+            : t('vacay.yearRemovalFusedNotice')}
+        </p>
+      )}
+      <MConfirmSheet
+        open={deleteYear !== null}
+        onClose={() => { if (!isRemovingYear) setDeleteYear(null) }}
+        title={t('vacay.removeYearConfirm', { year: deleteYear ?? '' })}
+        message={t('vacay.removeYearHint')}
+        confirmLabel={t('vacay.remove')}
+        cancelLabel={t('common.cancel')}
+        danger
+        busy={isRemovingYear}
+        busyLabel={t('common.loading')}
+        onConfirm={() => { void confirmYearRemoval() }}
+      />
     </MSheet>
   )
 }

@@ -17,7 +17,7 @@ export type SharedDayMark = { color: string; name: string; fraction?: number; co
 
 export default function VacayCalendar() {
   const { t, locale } = useTranslation()
-  const { selectedYear, selectedUserId, entries, companyHolidays, toggleEntry, toggleCompanyHoliday, plan, users, holidays, sharedCalendars, yearSettings } = useVacayStore()
+  const { selectedYear, selectedUserId, entries, companyHolidays, toggleEntry, toggleCompanyHoliday, plan, users, holidays, sharedCalendars, yearSettings, isFused } = useVacayStore()
   const currentUserId = useAuthStore(s => s.user?.id)
   const personalWeekStart = useSettingsStore(state => state.settings.calendar_week_start)
   const [mode, setMode] = useState<VacayMode>('vacation')
@@ -30,6 +30,10 @@ export default function VacayCalendar() {
   const companyMode = mode === 'company'
   const [tripDates, setTripDates] = useState<Set<string>>(new Set())
   const [tip, setTip] = useState<HoverTip | null>(null)
+
+  useEffect(() => {
+    if (isFused) setMode('vacation')
+  }, [isFused])
 
   useEffect(() => {
     let cancelled = false
@@ -94,7 +98,7 @@ export default function VacayCalendar() {
 
   const handleCellClick = useCallback(async (dateStr: string) => {
     if (mode === 'company') {
-      if (!companyHolidaysEnabled) return
+      if (isFused || !companyHolidaysEnabled) return
       await toggleCompanyHoliday(dateStr)
       return
     }
@@ -110,7 +114,7 @@ export default function VacayCalendar() {
     }
     if (companyHolidaysEnabled && companyHolidaySet.has(dateStr)) return
     await toggleEntry(dateStr, selectedUserId || undefined, halfDay ? 0.5 : 1, compDay ? 'comp' : 'vacation')
-  }, [mode, halfDay, compDay, toggleEntry, toggleCompanyHoliday, companyHolidaySet, blockWeekends, weekendDays, companyHolidaysEnabled, selectedUserId, currentUserId, entryMap])
+  }, [mode, halfDay, compDay, toggleEntry, toggleCompanyHoliday, companyHolidaySet, blockWeekends, weekendDays, companyHolidaysEnabled, isFused, selectedUserId, currentUserId, entryMap])
 
   // Cells with a half day or a shared overlay report a hover, so the tooltip
   // appears exactly when there's something to explain. Fixed-positioned at the
@@ -235,10 +239,12 @@ export default function VacayCalendar() {
           {companyHolidaysEnabled && (
             <button type="button"
               onClick={() => setMode('company')}
+              disabled={isFused}
+              title={isFused ? t('shared.readOnly') : undefined}
               className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-1.5 rounded-full text-[11px] sm:text-xs font-semibold transition-[background-color,color] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)]"
               style={companyMode
                 ? { background: '#d97706', color: '#fff' }
-                : { background: 'transparent', color: 'var(--vg-ink2)' }}>
+              : { background: 'transparent', color: 'var(--vg-ink2)', opacity: isFused ? 0.5 : undefined }}>
               <Building2 size={13} />
               {t('vacay.modeCompany')}
             </button>

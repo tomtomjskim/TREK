@@ -415,7 +415,7 @@ export default function PackingTemplateManager() {
   const btnIcon = 'p-1.5 rounded-lg transition-colors'
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+    <div data-testid="packing-template-manager" className="bg-white rounded-xl border border-slate-200 overflow-hidden">
       {/* Header */}
       <div className="p-5 border-b border-slate-100 flex items-center justify-between">
         <div>

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen } from '@testing-library/react'
+import { act, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { render } from '../../../tests/helpers/render'
 import { resetAllStores, seedStore } from '../../../tests/helpers/store'
@@ -213,6 +213,38 @@ describe('VacayCalendar', () => {
 
     // Active company mode paints the button amber via inline style (glass facelift).
     expect(companyBtn.style.background).toMatch(/#d97706|217,\s*119,\s*6/i)
+  })
+
+  it('FE-COMP-VACAYCALENDAR-005a: fusion resets company mode without mutating company holidays', async () => {
+    const user = userEvent.setup()
+    const toggleCompanyHoliday = vi.fn().mockResolvedValue(undefined)
+    const toggleEntry = vi.fn().mockResolvedValue(undefined)
+
+    seedStore(useVacayStore, {
+      selectedYear: 2025,
+      entries: [],
+      companyHolidays: [],
+      holidays: {},
+      plan: basePlan,
+      users: [],
+      selectedUserId: null,
+      isFused: false,
+      toggleCompanyHoliday,
+      toggleEntry,
+    })
+
+    render(<VacayCalendar />)
+
+    await user.click(screen.getByRole('button', { name: /^Company Holiday$/ }))
+    expect(screen.getByRole('button', { name: /^Company Holiday$/ }).style.background).toMatch(/#d97706|217,\s*119,\s*6/i)
+    act(() => { useVacayStore.setState({ isFused: true }) })
+    const companyButton = screen.getByRole('button', { name: /^Company Holiday$/ })
+    expect(companyButton).toBeDisabled()
+    expect(companyButton).toHaveAttribute('title', 'Read-only shared view')
+    await user.click(screen.getByText('click-0'))
+
+    expect(toggleCompanyHoliday).not.toHaveBeenCalled()
+    expect(toggleEntry).toHaveBeenCalled()
   })
 
   it('FE-COMP-VACAYCALENDAR-006: cell click in vacation mode calls toggleEntry', async () => {

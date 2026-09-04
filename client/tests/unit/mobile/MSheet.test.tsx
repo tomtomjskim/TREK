@@ -58,6 +58,23 @@ describe('MSheet', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('FE-MOB-SHEET-016: Escape closes only the topmost nested sheet', () => {
+    const closeParent = vi.fn();
+    const closeChild = vi.fn();
+    render(
+      <MSheet open onClose={closeParent} ariaLabel="Parent">
+        <MSheet open onClose={closeChild} ariaLabel="Child">
+          <span>Child content</span>
+        </MSheet>
+      </MSheet>,
+    );
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(closeChild).toHaveBeenCalledTimes(1);
+    expect(closeParent).not.toHaveBeenCalled();
+  });
+
   it('FE-MOB-SHEET-005: stays mounted for the exit animation, then unmounts', () => {
     vi.useFakeTimers();
     const { rerender } = render(

@@ -216,11 +216,20 @@ beforeAll(async () => {
   app = nestApp.getHttpAdapter().getInstance();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   resetTestDb(testDb);
   resetRateLimits(nestApp);
   // Provider routes are Journey-owned and require the addon to be enabled.
   setAddonEnabled(testDb, 'journey', true);
+  // The migration intentionally seeds this provider disabled; the legacy
+  // behavior assertions below exercise the enabled provider path by default.
+  testDb.prepare("UPDATE photo_providers SET enabled = 1 WHERE id = 'synologyphotos'").run();
+  // A capability gate can short-circuit tests that queue one-shot responses.
+  // Reset the mock before every case so an unconsumed queue cannot leak into
+  // the next test once the provider is enabled again.
+  const guard = await import('../../src/utils/ssrfGuard') as any;
+  vi.mocked(safeFetch).mockReset();
+  vi.mocked(safeFetch).mockImplementation(guard.__fakeSynologyFetch);
 });
 
 afterAll(async () => {

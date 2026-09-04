@@ -1,4 +1,4 @@
-import React, { ReactNode, useEffect, useRef, useState } from 'react'
+import React, { ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { lockBodyScroll } from '../../utils/bodyScrollLock'
 
@@ -26,6 +26,8 @@ const EXIT_MS = 280
 
 const FOCUSABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+const MSheetScopeContext = React.createContext<string | null>(null)
 
 const POSITION: Record<MSheetVariant, string> = {
   card: 'absolute left-[14px] right-[14px] top-1/2 -translate-y-1/2',
@@ -55,6 +57,22 @@ function sheetRoot(): HTMLElement {
   return document.getElementById('m-sheet-root') ?? document.body
 }
 
+function topmostOpenSheet(): HTMLElement | null {
+  const openSheets = Array.from(document.querySelectorAll<HTMLElement>('[data-trek-sheet="true"]'))
+  const parentIds = new Set(openSheets
+    .map(sheet => sheet.dataset.trekSheetParent)
+    .filter((id): id is string => Boolean(id)))
+  const topmostCandidates = openSheets.filter(sheet => {
+    const id = sheet.dataset.trekSheetId
+    return !id || !parentIds.has(id)
+  })
+  return topmostCandidates[topmostCandidates.length - 1] ?? null
+}
+
+function isTopmostSheet(dialog: HTMLElement | null): boolean {
+  return dialog !== null && topmostOpenSheet() === dialog
+}
+
 /**
  * The one sheet primitive of the mobile design system. Handles portal,
  * scrim, ESC/backdrop dismissal, body scroll lock, focus trapping, 280ms
@@ -75,6 +93,8 @@ export default function MSheet({
   // fill would otherwise override the inline drag transform for good.
   const [entered, setEntered] = useState(false)
   const [dragY, setDragY] = useState<number | null>(null)
+  const scopeId = useId()
+  const parentScopeId = React.useContext(MSheetScopeContext)
   const panelRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ startY: number; lastY: number; lastT: number; velocity: number } | null>(null)
 
@@ -93,7 +113,9 @@ export default function MSheet({
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape' || !isTopmostSheet(panelRef.current)) return
+      e.preventDefault()
+      onClose()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
@@ -109,7 +131,10 @@ export default function MSheet({
     if (!open || !rendered) return
     const previous = document.activeElement as HTMLElement | null
     panelRef.current?.focus()
-    return () => previous?.focus()
+    return () => {
+      if (previous?.isConnected && !previous.hasAttribute('disabled')) previous.focus()
+      else topmostOpenSheet()?.focus()
+    }
   }, [open, rendered])
 
   if (!rendered) return null
@@ -192,6 +217,9 @@ export default function MSheet({
           role="dialog"
           aria-modal="true"
           aria-label={ariaLabel}
+          data-trek-sheet={open ? 'true' : undefined}
+          data-trek-sheet-id={scopeId}
+          data-trek-sheet-parent={parentScopeId ?? undefined}
           tabIndex={-1}
           className={`relative flex flex-col overflow-hidden outline-none text-m-ink ${SHAPE[variant]} ${MATERIAL[resolvedMaterial]} ${animation} ${className}`}
           style={variant === 'bottom' ? dragStyle : undefined}
@@ -212,7 +240,9 @@ export default function MSheet({
               onPointerCancel={handlePointerEnd}
             />
           )}
-          {children}
+          <MSheetScopeContext.Provider value={scopeId}>
+            {children}
+          </MSheetScopeContext.Provider>
         </div>
       </div>
     </div>,

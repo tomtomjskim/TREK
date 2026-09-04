@@ -37,10 +37,11 @@ function templateHost(url: string): string {
 }
 
 export function withTileApiKey(url: string, key?: string | null): string {
-  if (!url || !key) return url
+  const normalizedKey = key?.trim()
+  if (!url || !normalizedKey) return url
   if (!CARTO_HOST.test(templateHost(url))) return url
   if (/[?&]key=/.test(url)) return url
-  return `${url}${url.includes('?') ? '&' : '?'}key=${encodeURIComponent(key)}`
+  return `${url}${url.includes('?') ? '&' : '?'}key=${encodeURIComponent(normalizedKey)}`
 }
 
 /** Keeps the key out of anything we persist: stored templates, book documents. */

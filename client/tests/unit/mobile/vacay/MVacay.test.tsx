@@ -167,6 +167,17 @@ describe('MVacay', () => {
     expect(mocks.v.setSheet).toHaveBeenNthCalledWith(3, null);
   });
 
+  it('FE-MOB-MVACSCR-004c: a fused plan exposes company mode as read-only', () => {
+    mocks.v = buildV({ view: 'edit', isFused: true });
+    render(<MVacay />);
+
+    const companyMode = screen.getByRole('button', { name: 'Company: Read-only shared view' });
+    expect(companyMode).toBeDisabled();
+    expect(companyMode).toHaveAttribute('title', 'Read-only shared view');
+    fireEvent.click(companyMode);
+    expect(mocks.v.setMode).not.toHaveBeenCalled();
+  });
+
   it('FE-MOB-MVACSCR-005: renders the person card with the remaining balance and stepper', () => {
     render(<MVacay />);
 

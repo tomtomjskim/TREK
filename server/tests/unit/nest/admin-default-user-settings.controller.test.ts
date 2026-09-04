@@ -51,8 +51,28 @@ describe('AdminDefaultUserSettingsController', () => {
     expect(c.update(user, { theme: 'light' } as never, req)).toEqual({ theme: 'dark' });
     expect(settings.setAdminUserDefaults).toHaveBeenCalledWith({ theme: 'light' });
     expect(writeAudit).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 1, action: 'admin.default_user_settings_update', details: { theme: 'light' } }),
+      expect.objectContaining({
+        userId: 1,
+        action: 'admin.default_user_settings_update',
+        details: { changed: ['theme'] },
+      }),
     );
+  });
+
+  it('DEFAULTS-002a audits secret-bearing defaults by key name only', () => {
+    const sentinels = {
+      carto_api_key: 'carto-sentinel-secret',
+      mapbox_access_token: 'mapbox-sentinel-secret',
+      llm_api_key: 'llm-sentinel-secret',
+    };
+
+    controller().c.update(user, sentinels as never, req);
+
+    expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({
+      details: { changed: ['carto_api_key', 'llm_api_key', 'mapbox_access_token'] },
+    }));
+    const auditCalls = JSON.stringify(writeAudit.mock.calls);
+    for (const secret of Object.values(sentinels)) expect(auditCalls).not.toContain(secret);
   });
 
   it('DEFAULTS-003 a rejected write is a 400 carrying the message, and is not audited', () => {

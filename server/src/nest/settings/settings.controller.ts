@@ -128,7 +128,11 @@ export class AdminDefaultUserSettingsController {
         userId: user.id,
         action: 'admin.default_user_settings_update',
         ip: getClientIp(req),
-        details: body as Record<string, unknown>,
+        // Names only: audit details are rendered as raw JSON and mirrored into
+        // the debug log. Default settings can contain CARTO, Mapbox and LLM
+        // credentials, so copying their values here would persist each secret
+        // a second time outside the encrypted settings store.
+        details: { changed: Object.keys(allowed).sort() },
       });
       // Answer with the stored defaults, not the request body: the service normalises
       // and drops unknown keys, and the admin panel renders straight from this.

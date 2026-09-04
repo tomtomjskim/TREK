@@ -7,6 +7,7 @@ import { resetAllStores } from '../../../helpers/store';
 import { useMVacay } from '../../../../src/mobile/screens/vacay/useMVacay';
 import { useVacayStore } from '../../../../src/store/vacayStore';
 import { useAuthStore } from '../../../../src/store/authStore';
+import { useSettingsStore } from '../../../../src/store/settingsStore';
 import type { VacayEntry, VacayPlan, VacayStat, VacayUser } from '../../../../src/types';
 
 const navigateMock = vi.fn();
@@ -154,7 +155,7 @@ describe('useMVacay', () => {
     expect(result.current.weekendDays).toEqual([0, 6]);
   });
 
-  it('FE-MOB-MVAC-006: reads configured weekend days and week start off the plan', async () => {
+  it('FE-MOB-MVAC-006: reads weekend days and falls back to the legacy plan week start', async () => {
     mocks.vacay = buildVacay({
       plan: buildPlan({
         weekend_days: '5,6', week_start: 0, block_weekends: false,
@@ -168,6 +169,28 @@ describe('useMVacay', () => {
     expect(result.current.blockWeekends).toBe(false);
     expect(result.current.companyHolidaysEnabled).toBe(false);
     expect(result.current.holidaysEnabled).toBe(true);
+  });
+
+  it('FE-MOB-MVAC-006a: personal Sunday start overrides a legacy Monday plan', async () => {
+    useSettingsStore.setState(state => ({
+      settings: { ...state.settings, calendar_week_start: 0 },
+    }));
+    mocks.vacay = buildVacay({ plan: buildPlan({ week_start: 1 }) });
+
+    const { result } = await mount();
+
+    expect(result.current.weekStart).toBe(0);
+  });
+
+  it('FE-MOB-MVAC-006b: personal Monday start overrides a legacy Sunday plan', async () => {
+    useSettingsStore.setState(state => ({
+      settings: { ...state.settings, calendar_week_start: 1 },
+    }));
+    mocks.vacay = buildVacay({ plan: buildPlan({ week_start: 0 }) });
+
+    const { result } = await mount();
+
+    expect(result.current.weekStart).toBe(1);
   });
 
   it('FE-MOB-MVAC-007: groups entries per date and indexes the company holidays', async () => {
@@ -333,6 +356,20 @@ describe('useMVacay', () => {
     act(() => { rerender(); });
     await act(async () => { await result.current.handleDayTap('2026-12-24'); });
     expect(toggleCompanyHoliday).toHaveBeenCalledWith('2026-12-24');
+  });
+
+  it('FE-MOB-MVAC-018a: fusion resets company mode and rejects a late company-holiday tap', async () => {
+    const toggleCompanyHoliday = vi.fn(async (_date: string) => {});
+    act(() => { useVacayStore.setState({ toggleCompanyHoliday }); });
+    const { result } = await mount();
+
+    act(() => { result.current.toggleView(); result.current.setMode('company'); });
+    expect(result.current.mode).toBe('company');
+    act(() => { useVacayStore.setState({ isFused: true }); });
+    expect(result.current.mode).toBe('vacation');
+
+    await act(async () => { await result.current.handleDayTap('2026-12-24'); });
+    expect(toggleCompanyHoliday).not.toHaveBeenCalled();
   });
 
   it('FE-MOB-MVAC-019: the entitlement stepper caps at 365 and never drops below used', async () => {

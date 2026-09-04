@@ -6,7 +6,8 @@ import { useToast } from '../../../components/shared/Toast'
 import { SYMBOLS, currenciesWith } from '../../../components/Budget/BudgetPanel.constants'
 import { TRIP_TAB_IDS, TRIP_TAB_LABEL_KEYS, isTripTabId } from '../../../constants/tripTabs'
 import { DEFAULT_START_PAGE, DEFAULT_START_TRIP_TAB, type StartPage } from '../../../utils/startDestination'
-import type { Settings, DistanceUnit } from '../../../types'
+import { normalizeCalendarWeekStart } from '../../../utils/calendarWeek'
+import type { Settings, CalendarWeekStart, DistanceUnit } from '../../../types'
 import { MSetCard, MSetEyebrow, MSetSelectRow, MSetSegments, MSetRow } from './MSettingsUi'
 import MToggle from '../../components/MToggle'
 import MSetPickerSheet from './MSetPickerSheet'
@@ -16,7 +17,7 @@ import MSetPickerSheet from './MSetPickerSheet'
  * cards, wired to the real user preferences (DisplaySettingsTab parity).
  */
 export default function MSettingsGeneral() {
-  const { t } = useTranslation()
+  const { t, locale } = useTranslation()
   const toast = useToast()
   const { settings, updateSetting } = useSettingsStore()
   const [currencyOpen, setCurrencyOpen] = useState(false)
@@ -36,6 +37,7 @@ export default function MSettingsGeneral() {
   const currency = settings.default_currency || ''
   const currencyLabel = currency ? `${currency} — ${SYMBOLS[currency] || currency}` : t('settings.currencyTrip')
   const language = SUPPORTED_LANGUAGES.find((l) => l.value === settings.language) || SUPPORTED_LANGUAGES[0]
+  const calendarWeekStart = normalizeCalendarWeekStart(settings.calendar_week_start)
 
   const chevron = <ChevronDown size={13} strokeWidth={2} className="flex-none text-m-faint" />
 
@@ -136,6 +138,20 @@ export default function MSettingsGeneral() {
             { value: '12h', label: '12h' },
           ]}
         />
+
+        <MSetEyebrow className="mb-[6px] mt-[14px]">{t('settings.calendarWeekStart')}</MSetEyebrow>
+        <MSetSegments<CalendarWeekStart>
+          value={calendarWeekStart}
+          onChange={(v) => save('calendar_week_start', v)}
+          options={([
+            { value: 1, date: new Date(2024, 0, 1) },
+            { value: 0, date: new Date(2024, 0, 7) },
+          ] as const).map((option) => ({
+            value: option.value,
+            label: option.date.toLocaleDateString(locale, { weekday: 'long' }),
+          }))}
+        />
+        <p className="mt-[5px] font-geist text-[0.625rem] text-m-muted">{t('settings.calendarWeekStartHint')}</p>
       </MSetCard>
 
       <MSetCard title={t('settings.general.travelMap')} icon={Map} className="mt-3">

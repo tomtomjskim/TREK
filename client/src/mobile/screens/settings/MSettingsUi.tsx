@@ -59,12 +59,12 @@ export function MSetSelectRow({ label, trailing, onClick, className = '' }: MSet
   )
 }
 
-export interface MSetSegmentOption<T extends string = string> {
+export interface MSetSegmentOption<T extends string | number = string> {
   value: T
   label: ReactNode
 }
 
-interface MSetSegmentsProps<T extends string = string> {
+interface MSetSegmentsProps<T extends string | number = string> {
   options: MSetSegmentOption<T>[]
   value: T
   onChange: (value: T) => void
@@ -72,7 +72,7 @@ interface MSetSegmentsProps<T extends string = string> {
 }
 
 /** Wide segment pair/triple of the General card: r12 blocks, active on --m-act. */
-export function MSetSegments<T extends string = string>({ options, value, onChange, className = '' }: MSetSegmentsProps<T>) {
+export function MSetSegments<T extends string | number = string>({ options, value, onChange, className = '' }: MSetSegmentsProps<T>) {
   return (
     <div className={`flex gap-[6px] ${className}`}>
       {options.map((opt) => {

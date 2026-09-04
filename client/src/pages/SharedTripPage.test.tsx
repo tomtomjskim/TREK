@@ -1483,6 +1483,51 @@ describe('SharedTripPage', () => {
     });
   });
 
+  describe('FE-PAGE-SHARED-048: valid zero coordinates stay on the shared map', () => {
+    it('keeps all-days places at the equator or prime meridian with their public notes', async () => {
+      await open('zero-coordinate-all-token', payload({
+        places: [
+          { id: 901, name: 'Equator Stop', lat: 0, lng: 12, notes: 'EQUATOR_PUBLIC_NOTE' },
+          { id: 902, name: 'Meridian Stop', lat: 12, lng: 0, notes: 'MERIDIAN_PUBLIC_NOTE' },
+          { id: 903, name: 'Missing Coordinates', lat: null, lng: 12, notes: 'MISSING_COORDINATE_NOTE' },
+          { id: 904, name: 'Non-finite Coordinates', lat: Number.NaN, lng: 12, notes: 'NAN_COORDINATE_NOTE' },
+          { id: 905, name: 'Missing Latitude', lng: 12, notes: 'UNDEFINED_COORDINATE_NOTE' },
+          { id: 906, name: 'Out-of-range Latitude', lat: 91, lng: 12, notes: 'LAT_RANGE_NOTE' },
+          { id: 907, name: 'Out-of-range Longitude', lat: 12, lng: 181, notes: 'LNG_RANGE_NOTE' },
+        ],
+      }));
+
+      expect(screen.getAllByTestId('map-marker')).toHaveLength(2);
+      expect(screen.getByTestId('shared-place-popup-901')).toHaveTextContent('EQUATOR_PUBLIC_NOTE');
+      expect(screen.getByTestId('shared-place-popup-902')).toHaveTextContent('MERIDIAN_PUBLIC_NOTE');
+      expect(screen.queryByTestId('shared-place-popup-903')).toBeNull();
+      expect(screen.queryByTestId('shared-place-popup-904')).toBeNull();
+      expect(screen.queryByTestId('shared-place-popup-905')).toBeNull();
+      expect(screen.queryByTestId('shared-place-popup-906')).toBeNull();
+      expect(screen.queryByTestId('shared-place-popup-907')).toBeNull();
+    });
+
+    it('keeps selected-day nested places at zero coordinates with their public notes', async () => {
+      const day = { id: 7, day_number: 1, date: '2026-07-01', title: 'Day One' };
+      await open('zero-coordinate-selected-token', payload({
+        days: [day],
+        assignments: {
+          '7': [
+            { id: 9901, order_index: 0, place: { id: 911, name: 'Nested Equator Stop', lat: 0, lng: 12, notes: 'NESTED_EQUATOR_PUBLIC_NOTE' } },
+            { id: 9902, order_index: 1, place: { id: 912, name: 'Nested Meridian Stop', lat: 12, lng: 0, notes: 'NESTED_MERIDIAN_PUBLIC_NOTE' } },
+            { id: 9903, order_index: 2, place: { id: 913, name: 'Nested Missing Coordinates', lat: null, lng: 12, notes: 'NESTED_MISSING_COORDINATE_NOTE' } },
+          ],
+        },
+      }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Day 1' }));
+      await waitFor(() => expect(screen.getAllByTestId('map-marker')).toHaveLength(2));
+      expect(screen.getByTestId('shared-place-popup-911')).toHaveTextContent('NESTED_EQUATOR_PUBLIC_NOTE');
+      expect(screen.getByTestId('shared-place-popup-912')).toHaveTextContent('NESTED_MERIDIAN_PUBLIC_NOTE');
+      expect(screen.queryByTestId('shared-place-popup-913')).toBeNull();
+    });
+  });
+
   describe('FE-PAGE-SHARED-046: marker labels provide the place name to Leaflet', () => {
     it('sets the title for both the trip-wide and selected-day marker shapes', async () => {
       const day = { id: 7, day_number: 1, date: '2026-07-01', title: 'Day One' };

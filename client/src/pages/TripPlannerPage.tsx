@@ -427,18 +427,22 @@ function TripPlannerPageDesktop(): React.ReactElement | null {
             )}
 
             <div className="hidden md:block" style={{ position: 'absolute', left: 10, top: 10, bottom: 10, zIndex: 20 }}>
-              <button type="button" onClick={() => setLeftCollapsed(c => !c)}
+              <button
+                type="button"
+                onClick={() => setLeftCollapsed(c => !c)}
+                aria-label={`${t(leftCollapsed ? 'common.open' : 'common.close')} ${t('trip.mobilePlan')}`}
+                title={`${t(leftCollapsed ? 'common.open' : 'common.close')} ${t('trip.mobilePlan')}`}
                 style={{
-                  position: leftCollapsed ? 'fixed' : 'absolute', top: leftCollapsed ? 'calc(var(--nav-h) + 44px + 14px)' : 14, left: leftCollapsed ? 10 : undefined, right: leftCollapsed ? undefined : -28, zIndex: -1,
-                  width: 36, height: 36, borderRadius: leftCollapsed ? 10 : '0 10px 10px 0',
+                  position: leftCollapsed ? 'fixed' : 'absolute', top: leftCollapsed ? 'calc(var(--nav-h) + 44px + 14px)' : 14, left: leftCollapsed ? 10 : undefined, right: leftCollapsed ? undefined : -44, zIndex: -1,
+                  width: 44, height: 44, borderRadius: leftCollapsed ? 12 : '0 12px 12px 0',
                   background: leftCollapsed ? '#000' : 'var(--sidebar-bg)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
                   boxShadow: leftCollapsed ? '0 2px 12px rgba(0,0,0,0.2)' : 'none', border: 'none',
                   cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: leftCollapsed ? '#fff' : 'var(--text-faint)', transition: 'color 0.15s',
+                  color: leftCollapsed ? '#fff' : 'var(--text-faint)', transition: 'color 0.15s', touchAction: 'manipulation',
                 }}
                 onMouseEnter={e => { if (!leftCollapsed) e.currentTarget.style.color = 'var(--text-primary)' }}
                 onMouseLeave={e => { if (!leftCollapsed) e.currentTarget.style.color = 'var(--text-faint)' }}>
-                {leftCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+                {leftCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
               </button>
 
               <div style={{
@@ -516,18 +520,22 @@ function TripPlannerPageDesktop(): React.ReactElement | null {
             </div>
 
             <div className="hidden md:block" style={{ position: 'absolute', right: 10, top: 10, bottom: 10, zIndex: 20 }}>
-              <button type="button" onClick={() => setRightCollapsed(c => !c)}
+              <button
+                type="button"
+                onClick={() => setRightCollapsed(c => !c)}
+                aria-label={`${t(rightCollapsed ? 'common.open' : 'common.close')} ${t('trip.mobilePlaces')}`}
+                title={`${t(rightCollapsed ? 'common.open' : 'common.close')} ${t('trip.mobilePlaces')}`}
                 style={{
-                  position: rightCollapsed ? 'fixed' : 'absolute', top: rightCollapsed ? 'calc(var(--nav-h) + 44px + 14px)' : 14, right: rightCollapsed ? 10 : undefined, left: rightCollapsed ? undefined : -28, zIndex: -1,
-                  width: 36, height: 36, borderRadius: rightCollapsed ? 10 : '10px 0 0 10px',
+                  position: rightCollapsed ? 'fixed' : 'absolute', top: rightCollapsed ? 'calc(var(--nav-h) + 44px + 14px)' : 14, right: rightCollapsed ? 10 : undefined, left: rightCollapsed ? undefined : -44, zIndex: -1,
+                  width: 44, height: 44, borderRadius: rightCollapsed ? 12 : '12px 0 0 12px',
                   background: rightCollapsed ? '#000' : 'var(--sidebar-bg)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
                   boxShadow: rightCollapsed ? '0 2px 12px rgba(0,0,0,0.2)' : 'none', border: 'none',
                   cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  color: rightCollapsed ? '#fff' : 'var(--text-faint)', transition: 'color 0.15s',
+                  color: rightCollapsed ? '#fff' : 'var(--text-faint)', transition: 'color 0.15s', touchAction: 'manipulation',
                 }}
                 onMouseEnter={e => { if (!rightCollapsed) e.currentTarget.style.color = 'var(--text-primary)' }}
                 onMouseLeave={e => { if (!rightCollapsed) e.currentTarget.style.color = 'var(--text-faint)' }}>
-                {rightCollapsed ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
+                {rightCollapsed ? <PanelRightOpen size={18} /> : <PanelRightClose size={18} />}
               </button>
 
               <div style={{
@@ -569,6 +577,7 @@ function TripPlannerPageDesktop(): React.ReactElement | null {
                     pushUndo={pushUndo}
                     days={days}
                     isMobile={false}
+                    isTouch={isTouch}
                   />
                 </div>
               </div>

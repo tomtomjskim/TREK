@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import type { Page } from '@playwright/test';
 
 /**
  * Dismiss the system-notice modal(s) (SystemNoticeHost), which greet a freshly
@@ -20,24 +20,40 @@ import type { Page } from '@playwright/test'
  * cleared for every later spec in the run (shared test DB).
  */
 export async function dismissSystemNotices(page: Page, appearTimeoutMs = 3_000): Promise<void> {
-  const dialog = page.getByRole('dialog').first()
-  await dialog.waitFor({ state: 'visible', timeout: appearTimeoutMs }).catch(() => {})
+  // System notices own deterministic notice-* accessible ids. Restricting the
+  // locator keeps unrelated product dialogs (for example Create Trip) out of
+  // this helper when a route opens one before the notice fetch settles.
+  const dialog = page
+    .locator('[role="dialog"][aria-labelledby^="notice-title-"][aria-describedby^="notice-body-"]')
+    .first();
+  await dialog.waitFor({ state: 'visible', timeout: appearTimeoutMs }).catch(() => {});
 
   // Clear up to a handful of queued notices.
   for (let notice = 0; notice < 4 && (await dialog.isVisible().catch(() => false)); notice++) {
-    const next = dialog.getByRole('button', { name: /next/i })
-    for (let i = 0; i < 8 && (await next.isVisible().catch(() => false)); i++) {
-      if (!(await next.isEnabled().catch(() => false))) break
-      await next.click()
+    // A release notice shares the same deterministic accessible ids but has a
+    // dedicated close control. Check it inside the single dialog loop so a
+    // release that mounts near the appearance timeout cannot escape between two
+    // serial waits and leave its overlay over the page.
+    const releaseClose = dialog.locator('.rn-close');
+    if (await releaseClose.isVisible().catch(() => false)) {
+      await releaseClose.click();
+      await page.waitForTimeout(400);
+      continue;
     }
-    const dismiss = dialog.getByRole('button', { name: 'Dismiss', exact: true })
-    const ok = dialog.getByRole('button', { name: 'OK', exact: true })
-    if (await dismiss.isVisible().catch(() => false)) await dismiss.click()
-    else if (await ok.isVisible().catch(() => false)) await ok.click()
-    else break
+
+    const next = dialog.getByRole('button', { name: /next/i });
+    for (let i = 0; i < 8 && (await next.isVisible().catch(() => false)); i++) {
+      if (!(await next.isEnabled().catch(() => false))) break;
+      await next.click();
+    }
+    const dismiss = dialog.getByRole('button', { name: 'Dismiss', exact: true });
+    const ok = dialog.getByRole('button', { name: 'OK', exact: true });
+    if (await dismiss.isVisible().catch(() => false)) await dismiss.click();
+    else if (await ok.isVisible().catch(() => false)) await ok.click();
+    else break;
     // Exit animation + the next queued notice mounting.
-    await page.waitForTimeout(400)
+    await page.waitForTimeout(400);
   }
 
-  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {})
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {});
 }

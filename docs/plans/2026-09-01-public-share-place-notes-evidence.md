@@ -143,12 +143,14 @@ All rows come from `client/e2e/shared-trip-place-notes.public.spec.ts` under Pla
 address/note, long-note wrapping, keyboard interaction, no-map state, and invalid/expired/revoked
 states. An authenticated `app`-project screenshot does not satisfy this gate.
 
-Final v4.1.1 checkpoint screenshot bindings:
+The stable screenshot paths below were regenerated on 2026-09-05 by the isolated v4.2.0
+preservation rerun. The earlier v4.1.1 values remain historical evidence bound to checkpoint
+`a55fcccb` and its Git blobs; they are not the current working-tree files. Current path bindings:
 
 | Artifact                                  | Dimensions | SHA-256                                                            |
 | ----------------------------------------- | ---------- | ------------------------------------------------------------------ |
-| `share-place-notes-1440-all-days.png`     | 1440×919   | `3d250f0da0864971562fe4a0e0087f68a179e5d1c0c703227a7049e4da766ab7` |
-| `share-place-notes-1440-selected-day.png` | 1440×1129  | `76ef6a13fe14d4ab87e9fd976a9aa7b33dbcebb6cd812c10f1553338e1c8db4e` |
+| `share-place-notes-1440-all-days.png`     | 1440×900   | `679afeeadee4039b7682fed9ff4d5abde01ec17b1ded67a12a6c65fea519c6b2` |
+| `share-place-notes-1440-selected-day.png` | 1440×1129  | `5d5e253ac7395678c7d62c1fb39e2ed8dc91ec45fe67fd80342090faaa178d18` |
 | `share-place-notes-390-selected-day.png`  | 390×1208   | `284d3df4ec99ca471e7358f6e2c3bd9a190b14b332cb08052ec4441c2ff12cfe` |
 
 ## Locale semantic review ledger

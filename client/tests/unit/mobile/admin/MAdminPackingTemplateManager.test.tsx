@@ -45,6 +45,268 @@ beforeEach(() => {
 });
 
 describe('MAdminPackingTemplateManager', () => {
+  it('FE-MOB-APKG-030: rapid template, category and item gestures issue one create request each', async () => {
+    const user = userEvent.setup();
+    let templateCalls = 0;
+    let categoryCalls = 0;
+    let itemCalls = 0;
+    let releaseTemplate!: () => void;
+    let releaseCategory!: () => void;
+    let releaseItem!: () => void;
+    const templateGate = new Promise<void>(resolve => { releaseTemplate = resolve; });
+    const categoryGate = new Promise<void>(resolve => { releaseCategory = resolve; });
+    const itemGate = new Promise<void>(resolve => { releaseItem = resolve; });
+    server.use(
+      list([tmpl1]),
+      http.post('/api/admin/packing-templates', async () => {
+        templateCalls += 1;
+        await templateGate;
+        return HttpResponse.json({ template: { id: 3, name: 'Work', created_by_name: 'admin' } });
+      }),
+      detail(1, [cat1], []),
+      http.post('/api/admin/packing-templates/1/categories', async () => {
+        categoryCalls += 1;
+        await categoryGate;
+        return HttpResponse.json({ category: { id: 20, template_id: 1, name: 'Electronics', sort_order: 1 } });
+      }),
+      http.post('/api/admin/packing-templates/1/categories/10/items', async () => {
+        itemCalls += 1;
+        await itemGate;
+        return HttpResponse.json({ item: { id: 102, category_id: 10, name: 'Sandals', sort_order: 2 } });
+      }),
+    );
+    renderManager();
+
+    await user.click(screen.getByRole('button', { name: 'New Template' }));
+    const templateInput = screen.getByPlaceholderText('Template name (e.g. Beach Holiday)');
+    await user.type(templateInput, 'Work');
+    await user.keyboard('{Enter}{Enter}');
+    expect(templateCalls).toBe(1);
+    releaseTemplate();
+    await screen.findByText('Work');
+
+    await user.click(screen.getByText('Beach Trip'));
+    await screen.findByText('Clothing');
+    await user.click(screen.getByRole('button', { name: 'Add category' }));
+    const categoryInput = screen.getByPlaceholderText('Category name (e.g. Clothing)');
+    await user.type(categoryInput, 'Electronics');
+    await user.keyboard('{Enter}{Enter}');
+    expect(categoryCalls).toBe(1);
+    releaseCategory();
+    await screen.findByText('Electronics');
+
+    await user.click(within(categoryHeader('Clothing')).getByRole('button', { name: 'Item name' }));
+    const itemInput = screen.getByPlaceholderText('Item name');
+    await user.type(itemInput, 'Sandals');
+    await user.keyboard('{Enter}{Enter}');
+    expect(itemCalls).toBe(1);
+    releaseItem();
+    await screen.findByText('Sandals');
+  });
+
+  it('FE-MOB-APKG-031: composing, legacy IME and repeated Enter never submit', async () => {
+    const user = userEvent.setup();
+    let postCalls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    server.use(
+      list([]),
+      http.post('/api/admin/packing-templates', async () => {
+        postCalls += 1;
+        await gate;
+        return HttpResponse.json({ template: { id: 3, name: '한국어', created_by_name: 'admin' } });
+      }),
+    );
+    renderManager();
+    await user.click(screen.getByRole('button', { name: 'New Template' }));
+    const input = screen.getByPlaceholderText('Template name (e.g. Beach Holiday)');
+    await user.type(input, '한국어');
+
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 });
+    fireEvent.keyDown(input, { key: 'Enter', repeat: true });
+    expect(postCalls).toBe(0);
+
+    await user.keyboard('{Enter}');
+    expect(postCalls).toBe(1);
+    release();
+    await screen.findByText('한국어');
+  });
+
+  it('FE-MOB-APKG-032: Enter followed by rename blur commits a template and category once', async () => {
+    const user = userEvent.setup();
+    let templateCalls = 0;
+    let categoryCalls = 0;
+    let releaseTemplate!: () => void;
+    let releaseCategory!: () => void;
+    const templateGate = new Promise<void>(resolve => { releaseTemplate = resolve; });
+    const categoryGate = new Promise<void>(resolve => { releaseCategory = resolve; });
+    server.use(
+      list([tmpl1]),
+      detail(1, [cat1], []),
+      http.put('/api/admin/packing-templates/1', async () => {
+        templateCalls += 1;
+        await templateGate;
+        return HttpResponse.json({ success: true });
+      }),
+      http.put('/api/admin/packing-templates/1/categories/10', async () => {
+        categoryCalls += 1;
+        await categoryGate;
+        return HttpResponse.json({ success: true });
+      }),
+    );
+    renderManager();
+    await screen.findByText('Beach Trip');
+
+    await user.click(within(templateRow('Beach Trip')).getByRole('button', { name: 'Edit' }));
+    const templateInput = screen.getByDisplayValue('Beach Trip');
+    await user.clear(templateInput);
+    await user.type(templateInput, 'Summer Packing');
+    await user.keyboard('{Enter}');
+    fireEvent.blur(templateInput);
+    expect(templateCalls).toBe(1);
+    releaseTemplate();
+    await screen.findByText('Summer Packing');
+
+    await user.click(screen.getByText('Summer Packing'));
+    await user.click(within(categoryHeader('Clothing')).getByRole('button', { name: 'Edit' }));
+    const categoryInput = screen.getByDisplayValue('Clothing');
+    await user.clear(categoryInput);
+    await user.type(categoryInput, 'Shoes');
+    await user.keyboard('{Enter}');
+    fireEvent.blur(categoryInput);
+    expect(categoryCalls).toBe(1);
+    releaseCategory();
+    await screen.findByText('Shoes');
+  });
+
+  it('FE-MOB-APKG-033: an older detail response cannot overwrite the newer template', async () => {
+    const user = userEvent.setup();
+    let resolveA!: () => void;
+    const aGate = new Promise<void>(resolve => { resolveA = resolve; });
+    server.use(
+      list([tmpl1, tmpl2]),
+      http.get('/api/admin/packing-templates/1', async () => {
+        await aGate;
+        return HttpResponse.json({ categories: [{ ...cat1, name: 'A category' }], items: [] });
+      }),
+      detail(2, [{ id: 20, template_id: 2, name: 'B category', sort_order: 0 }], []),
+    );
+    renderManager();
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    fireEvent.click(screen.getByText('City Break'));
+    await screen.findByText('B category');
+
+    resolveA();
+    await waitFor(() => expect(screen.getByText('B category')).toBeInTheDocument());
+    expect(screen.queryByText('A category')).not.toBeInTheDocument();
+  });
+
+  it('FE-MOB-APKG-034: a pending template-A mutation cannot append into template B', async () => {
+    const user = userEvent.setup();
+    let resolveAdd!: () => void;
+    let addCalls = 0;
+    const addGate = new Promise<void>(resolve => { resolveAdd = resolve; });
+    server.use(
+      list([tmpl1, tmpl2]),
+      detail(1, [cat1], []),
+      detail(2, [{ id: 20, template_id: 2, name: 'B category', sort_order: 0 }], []),
+      http.post('/api/admin/packing-templates/1/categories', async () => {
+        addCalls += 1;
+        await addGate;
+        return HttpResponse.json({ category: { id: 21, template_id: 1, name: 'A only', sort_order: 1 } });
+      }),
+    );
+    renderManager();
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await screen.findByText('Clothing');
+    await user.click(screen.getByRole('button', { name: 'Add category' }));
+    await user.type(screen.getByPlaceholderText('Category name (e.g. Clothing)'), 'A only');
+    await user.keyboard('{Enter}');
+    expect(addCalls).toBe(1);
+
+    await user.click(screen.getByText('City Break'));
+    await screen.findByText('B category');
+    resolveAdd();
+    await waitFor(() => expect(screen.getByText('B category')).toBeInTheDocument());
+    expect(screen.queryByText('A only')).not.toBeInTheDocument();
+  });
+
+  it('FE-MOB-APKG-035: one template serializes nested writes and disables the other controls', async () => {
+    const user = userEvent.setup();
+    let categoryCalls = 0;
+    let itemCalls = 0;
+    let releaseCategory!: () => void;
+    const categoryGate = new Promise<void>(resolve => { releaseCategory = resolve; });
+    server.use(
+      list([tmpl1]),
+      detail(1, [cat1], []),
+      http.post('/api/admin/packing-templates/1/categories', async () => {
+        categoryCalls += 1;
+        await categoryGate;
+        return HttpResponse.json({ category: { id: 20, template_id: 1, name: 'Electronics', sort_order: 1 } });
+      }),
+      http.post('/api/admin/packing-templates/1/categories/10/items', () => {
+        itemCalls += 1;
+        return HttpResponse.json({ item: { id: 102, category_id: 10, name: 'Sandals', sort_order: 2 } });
+      }),
+    );
+    renderManager();
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await screen.findByText('Clothing');
+    await user.click(screen.getByRole('button', { name: 'Add category' }));
+    const categoryInput = screen.getByPlaceholderText('Category name (e.g. Clothing)');
+    await user.type(categoryInput, 'Electronics');
+    await user.keyboard('{Enter}');
+    expect(categoryCalls).toBe(1);
+
+    const addItemButton = within(categoryHeader('Clothing')).getByRole('button', { name: 'Item name' });
+    expect(addItemButton).toBeDisabled();
+    await user.click(addItemButton);
+    expect(itemCalls).toBe(0);
+    releaseCategory();
+  });
+
+  it('FE-MOB-APKG-036: reopening after a nested mutation refreshes authoritative detail and counts', async () => {
+    const user = userEvent.setup();
+    let detailCalls = 0;
+    let releaseAdd!: () => void;
+    const addGate = new Promise<void>(resolve => { releaseAdd = resolve; });
+    const authoritativeCategory = { id: 20, template_id: 1, name: 'Server category', sort_order: 0 };
+    server.use(
+      list([tmpl1]),
+      http.get('/api/admin/packing-templates/1', () => {
+        detailCalls += 1;
+        return HttpResponse.json({
+          categories: detailCalls >= 3 ? [authoritativeCategory] : [],
+          items: [],
+        });
+      }),
+      http.post('/api/admin/packing-templates/1/categories', async () => {
+        await addGate;
+        return HttpResponse.json({ category: { ...authoritativeCategory } });
+      }),
+    );
+    renderManager();
+    await screen.findByText('Beach Trip');
+    await user.click(screen.getByText('Beach Trip'));
+    await user.click(await screen.findByRole('button', { name: 'Add category' }));
+    const categoryInput = screen.getByPlaceholderText('Category name (e.g. Clothing)');
+    await user.type(categoryInput, 'Server category');
+    await user.keyboard('{Enter}');
+    await user.click(screen.getByRole('button', { name: 'Collapse' }));
+    await user.click(screen.getByText('Beach Trip'));
+    await waitFor(() => expect(detailCalls).toBe(2));
+
+    releaseAdd();
+    await screen.findByText('Server category');
+    expect(detailCalls).toBe(3);
+    expect(screen.getByText('1 categories · 0 items')).toBeInTheDocument();
+  });
+
   it('FE-MOB-APKG-001: shows the spinner while templates load, then the empty state', async () => {
     server.use(
       http.get('/api/admin/packing-templates', async () => {
@@ -318,6 +580,7 @@ describe('MAdminPackingTemplateManager', () => {
 
     await waitFor(() => expect(body).toEqual({ name: 'Electronics' }));
     await screen.findByText('Electronics');
+    expect(screen.getByText('3 categories · 5 items')).toBeInTheDocument();
     expect(screen.queryByPlaceholderText('Category name (e.g. Clothing)')).not.toBeInTheDocument();
   });
 
@@ -467,6 +730,7 @@ describe('MAdminPackingTemplateManager', () => {
     await waitFor(() => expect(screen.queryByText('Clothing')).not.toBeInTheDocument());
     expect(screen.queryByText('T-shirt')).not.toBeInTheDocument();
     expect(screen.queryByText('Shorts')).not.toBeInTheDocument();
+    expect(screen.getByText('1 categories · 3 items')).toBeInTheDocument();
   });
 
   it('FE-MOB-APKG-021: a failing category delete toasts and keeps the category', async () => {
@@ -508,6 +772,7 @@ describe('MAdminPackingTemplateManager', () => {
 
     await waitFor(() => expect(body).toEqual({ name: 'Sandals' }));
     await screen.findByText('Sandals');
+    expect(screen.getByText('2 categories · 6 items')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Item name')).toHaveValue('');
   });
 
@@ -669,6 +934,7 @@ describe('MAdminPackingTemplateManager', () => {
     await user.click(within(itemRow('T-shirt')).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(screen.queryByText('T-shirt')).not.toBeInTheDocument());
     expect(screen.getByText('Shorts')).toBeInTheDocument();
+    expect(screen.getByText('2 categories · 4 items')).toBeInTheDocument();
 
     await user.click(within(itemRow('Shorts')).getByRole('button', { name: 'Delete' }));
     await screen.findByText('Failed to delete');

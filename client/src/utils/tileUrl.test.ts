@@ -91,8 +91,13 @@ describe('withTileApiKey', () => {
   it('passes the template through without a usable key', () => {
     expect(withTileApiKey(CARTO)).toBe(CARTO)
     expect(withTileApiKey(CARTO, '')).toBe(CARTO)
+    expect(withTileApiKey(CARTO, '   ')).toBe(CARTO)
     expect(withTileApiKey(CARTO, null)).toBe(CARTO)
     expect(withTileApiKey('', 'abc123')).toBe('')
+  })
+
+  it('trims surrounding whitespace before appending a key', () => {
+    expect(withTileApiKey(CARTO, '  abc123 \n')).toBe(`${CARTO}?key=abc123`)
   })
 
   it('joins onto an existing query string with &', () => {
@@ -170,5 +175,9 @@ describe('resolveTileUrl', () => {
     // A self-hosted template reaches the network without the key, even when the
     // fallback would have been CARTO.
     expect(resolveTileUrl(SELF_HOSTED, CARTO, 'abc123')).toBe(SELF_HOSTED)
+  })
+
+  it('falls back instead of requesting CARTO with a whitespace-only key', () => {
+    expect(resolveTileUrl(CARTO, OSM, '   ')).toBe(OSM)
   })
 })

@@ -11,6 +11,7 @@ interface MConfirmSheetProps {
   cancelLabel: string
   danger?: boolean
   busy?: boolean
+  busyLabel?: string
   onConfirm?: () => void
   /** Extra content between message and buttons (e.g. a password field). */
   children?: ReactNode
@@ -26,22 +27,23 @@ export default function MConfirmSheet({
   cancelLabel,
   danger = false,
   busy = false,
+  busyLabel,
   onConfirm,
   children,
 }: MConfirmSheetProps) {
   return (
     <MSheet open={open} onClose={onClose} variant="card" material="opaque" ariaLabel={title}>
-      <div className="p-[18px]">
+      <div className="p-[18px]" aria-busy={busy ? 'true' : undefined}>
         <div className="text-[0.9375rem] font-extrabold text-m-ink">{title}</div>
         <p className="mt-2 text-[0.78125rem] leading-relaxed text-m-muted">{message}</p>
         {children}
         <div className="mt-4 flex justify-end gap-2">
-          <MSetButton variant="ghost" onClick={onClose}>
+          <MSetButton variant="ghost" onClick={onClose} disabled={busy}>
             {cancelLabel}
           </MSetButton>
           {onConfirm && confirmLabel && (
             <MSetButton variant={danger ? 'danger' : 'primary'} onClick={onConfirm} disabled={busy}>
-              {confirmLabel}
+              {busy ? (busyLabel ?? confirmLabel) : confirmLabel}
             </MSetButton>
           )}
         </div>

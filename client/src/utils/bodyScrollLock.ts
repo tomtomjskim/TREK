@@ -10,6 +10,14 @@
  */
 let locks = 0
 let savedOverflow = ''
+let savedRootOverflow = ''
+let savedPosition = ''
+let savedTop = ''
+let savedLeft = ''
+let savedRight = ''
+let savedWidth = ''
+let savedScrollX = 0
+let savedScrollY = 0
 
 /**
  * Locks body scrolling and returns the matching release. Releasing twice is a
@@ -18,7 +26,26 @@ let savedOverflow = ''
 export function lockBodyScroll(): () => void {
   if (locks === 0) {
     savedOverflow = document.body.style.overflow
+    savedRootOverflow = document.documentElement.style.overflow
+    savedPosition = document.body.style.position
+    savedTop = document.body.style.top
+    savedLeft = document.body.style.left
+    savedRight = document.body.style.right
+    savedWidth = document.body.style.width
+    savedScrollX = window.scrollX
+    savedScrollY = window.scrollY
     document.body.style.overflow = 'hidden'
+    // WebKit keeps the root element as document.scrollingElement. Locking only
+    // body therefore leaves the page behind a modal programmatically scrollable.
+    document.documentElement.style.overflow = 'hidden'
+    // Safari/WebKit still honours programmatic root scrolling with overflow
+    // hidden. Pinning the body keeps the page visually stationary for both
+    // touch gestures and script-driven scroll while an overlay is open.
+    document.body.style.position = 'fixed'
+    document.body.style.top = `-${savedScrollY}px`
+    document.body.style.left = `-${savedScrollX}px`
+    document.body.style.right = '0'
+    document.body.style.width = '100%'
   }
   locks += 1
 
@@ -27,7 +54,24 @@ export function lockBodyScroll(): () => void {
     if (released) return
     released = true
     locks = Math.max(0, locks - 1)
-    if (locks === 0) document.body.style.overflow = savedOverflow
+    if (locks === 0) {
+      document.body.style.overflow = savedOverflow
+      document.documentElement.style.overflow = savedRootOverflow
+      document.body.style.position = savedPosition
+      document.body.style.top = savedTop
+      document.body.style.left = savedLeft
+      document.body.style.right = savedRight
+      document.body.style.width = savedWidth
+      const scrollingElement = document.scrollingElement ?? document.documentElement
+      const rootMoved =
+        scrollingElement.scrollLeft !== savedScrollX ||
+        scrollingElement.scrollTop !== savedScrollY ||
+        window.scrollX !== savedScrollX ||
+        window.scrollY !== savedScrollY
+      if (savedScrollX !== 0 || savedScrollY !== 0 || rootMoved) {
+        window.scrollTo(savedScrollX, savedScrollY)
+      }
+    }
   }
 }
 
@@ -40,4 +84,12 @@ export function bodyScrollLocks(): number {
 export function resetBodyScrollLock(): void {
   locks = 0
   savedOverflow = ''
+  savedRootOverflow = ''
+  savedPosition = ''
+  savedTop = ''
+  savedLeft = ''
+  savedRight = ''
+  savedWidth = ''
+  savedScrollX = 0
+  savedScrollY = 0
 }

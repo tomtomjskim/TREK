@@ -422,4 +422,23 @@ describe('vacayStore year selection', () => {
 
     expect(useVacayStore.getState().selectedYear).toBe(current);
   });
+
+  it('FE-STORE-VCY-024: a successful year removal is kept when stats refresh fails', async () => {
+    const current = new Date().getFullYear();
+    useVacayStore.setState({ years: [current, current + 1], selectedYear: current + 1 });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    server.use(
+      http.delete('/api/addons/vacay/years/:year', () => HttpResponse.json({ years: [current] })),
+      http.get('/api/addons/vacay/stats/:year', () => HttpResponse.json({ error: 'stats unavailable' }, { status: 503 })),
+    );
+
+    try {
+      await expect(useVacayStore.getState().removeYear(current + 1)).resolves.toBeUndefined();
+      expect(useVacayStore.getState().years).toEqual([current]);
+      expect(useVacayStore.getState().selectedYear).toBe(current);
+      expect(warn).toHaveBeenCalledWith('[vacay] failed to refresh stats after year removal:', expect.anything());
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

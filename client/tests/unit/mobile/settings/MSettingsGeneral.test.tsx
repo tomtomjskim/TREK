@@ -91,6 +91,22 @@ describe('MSettingsGeneral', () => {
     expect(updateSetting).toHaveBeenCalledWith('time_format', '12h');
   });
 
+  it('FE-MOB-SET-015: calendar week start uses localized weekday segments and persists Sunday', async () => {
+    const user = userEvent.setup();
+    const updateSetting = vi.fn().mockResolvedValue(undefined);
+    seedStore(useSettingsStore, {
+      settings: buildSettings({ language: 'en', calendar_week_start: 1 }),
+      updateSetting,
+    });
+    render(<MSettingsGeneral />);
+
+    expect(screen.getByText('Week starts on')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Monday$/ })).toHaveAttribute('aria-pressed', 'true');
+    await user.click(screen.getByRole('button', { name: /^Sunday$/ }));
+
+    expect(updateSetting).toHaveBeenCalledWith('calendar_week_start', 0);
+  });
+
   it('FE-MOB-SET-007: unset unit preferences fall back to the metric/24h defaults', () => {
     seedStore(useSettingsStore, {
       settings: buildSettings({ language: 'en', temperature_unit: undefined, distance_unit: undefined, time_format: undefined }),

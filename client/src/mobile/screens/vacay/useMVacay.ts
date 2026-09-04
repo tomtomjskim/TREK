@@ -3,11 +3,13 @@ import { useNavigate } from 'react-router'
 import { useVacay } from '../../../pages/vacay/useVacay'
 import { useVacayStore } from '../../../store/vacayStore'
 import { useAuthStore } from '../../../store/authStore'
+import { useSettingsStore } from '../../../store/settingsStore'
 import { useTranslation } from '../../../i18n'
 import { useToast } from '../../../components/shared/Toast'
 import { tripsApi } from '../../../api/client'
 import { isWeekend } from '../../../components/Vacay/holidays'
 import { currentPeriodYear, inGridWindow, windowMonths } from '../../../vacay/yearWindow'
+import { normalizeCalendarWeekStart } from '../../../utils/calendarWeek'
 import { FALLBACK_PERSON_COLOR, localDateStr, type DayVisualContext } from './vacayDayModel'
 import { getApiErrorMessage, type Trip } from '../../../types'
 
@@ -37,6 +39,7 @@ export function useMVacay() {
     incomingShares, sharedCalendars, setShareHidden, yearSettings,
   } = useVacayStore()
   const currentUser = useAuthStore(s => s.user)
+  const personalWeekStart = useSettingsStore(s => s.settings.calendar_week_start)
 
   const [view, setView] = useState<MVacayView>('grid')
   // Index into the window's twelve months (#737), not a calendar month — with a
@@ -49,6 +52,10 @@ export function useMVacay() {
   const [compDay, setCompDay] = useState(false)
   const [sheet, setSheet] = useState<MVacaySheet>(null)
   const [tripDates, setTripDates] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    if (isFused) setMode('vacation')
+  }, [isFused])
 
   // The leave-year window's shape as a primitive. loadAll() hands back a fresh
   // (deep-equal) settings object every refresh, so effects key on this instead of
@@ -88,7 +95,7 @@ export function useMVacay() {
   const blockWeekends = plan?.block_weekends !== false
   const companyHolidaysEnabled = plan?.company_holidays_enabled !== false
   const holidaysEnabled = plan?.holidays_enabled === true
-  const weekStart = plan?.week_start ?? 1
+  const weekStart = normalizeCalendarWeekStart(personalWeekStart ?? plan?.week_start)
   const weekendDays = useMemo<number[]>(
     () => (plan?.weekend_days ? String(plan.weekend_days).split(',').map(Number) : [0, 6]),
     [plan?.weekend_days],
@@ -192,7 +199,7 @@ export function useMVacay() {
       return
     }
     if (mode === 'company') {
-      if (!companyHolidaysEnabled) return
+      if (isFused || !companyHolidaysEnabled) return
       await toggleCompanyHoliday(dateStr)
       return
     }
@@ -208,7 +215,12 @@ export function useMVacay() {
     }
     if (companyHolidaysEnabled && companyHolidaySet.has(dateStr)) return
     await toggleEntry(dateStr, selectedUserId || undefined, halfDay ? 0.5 : 1, compDay ? 'comp' : 'vacation')
-  }, [view, months, openMonthSlot, mode, halfDay, compDay, companyHolidaysEnabled, blockWeekends, weekendDays, companyHolidaySet, toggleEntry, toggleCompanyHoliday, selectedUserId, currentUser?.id, entryMap])
+  }, [view, months, openMonthSlot, mode, halfDay, compDay, companyHolidaysEnabled, isFused, blockWeekends, weekendDays, companyHolidaySet, toggleEntry, toggleCompanyHoliday, selectedUserId, currentUser?.id, entryMap])
+
+  const setVacayMode = useCallback((nextMode: MVacayMode) => {
+    if (nextMode === 'company' && isFused) return
+    setMode(nextMode)
+  }, [isFused])
 
   // Entitlement stepper: never below what is already used this year
   // (carried-over days cover the difference when used > entitlement).
@@ -253,7 +265,7 @@ export function useMVacay() {
     incomingInvites, acceptInvite, declineInvite,
     incomingShares, toggleShareHidden,
     view, months, monthSlot, activeMonth, isShiftedYear: yearSettings.year_type !== 'calendar',
-    mode, halfDay, setHalfDay, compDay, setCompDay, sheet, setSheet, setMode, setMonthSlot,
+    mode, halfDay, setHalfDay, compDay, setCompDay, sheet, setSheet, setMode: setVacayMode, setMonthSlot,
     tripDates, tripDotColor,
     blockWeekends, companyHolidaysEnabled, holidaysEnabled, weekStart, weekendDays,
     dayCtx, monthNamesShort, monthNameLong,

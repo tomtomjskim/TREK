@@ -39,6 +39,8 @@ export interface PlacesSidebarProps {
   onBulkChangeCategory?: (ids: number[], categoryId: number | null) => void;
   days: Day[];
   isMobile: boolean;
+  /** Primary pointer is coarse; native drag would swallow the places-list swipe (#1432). */
+  isTouch?: boolean;
   pushUndo?: (label: string, undoFn: () => Promise<void> | void) => void;
   initialScrollTop?: number;
   onScrollTopChange?: (top: number) => void;

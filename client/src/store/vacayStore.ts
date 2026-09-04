@@ -326,7 +326,13 @@ export const useVacayStore = create<VacayState>((set, get) => ({
       updates.selectedYear = defaultPeriodYear(data.years, get().yearSettings)
     }
     set(updates)
-    await get().loadStats()
+    try {
+      await get().loadStats()
+    } catch (err) {
+      // The year mutation already succeeded; stale stats are preferable to making
+      // the UI report a failed deletion and encouraging a duplicate retry.
+      console.warn('[vacay] failed to refresh stats after year removal:', err)
+    }
   },
 
   loadEntries: async (year?: number) => {

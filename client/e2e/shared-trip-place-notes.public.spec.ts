@@ -392,7 +392,14 @@ test.describe.serial('public shared place notes', () => {
       await page.evaluate(() => (window as typeof window & { __trekSharedNoteXss?: boolean }).__trekSharedNoteXss)
     ).toBeUndefined();
     await expectCookieFree(page);
-    await page.screenshot({ path: '../docs/screenshots/share-place-notes-1440-all-days.png', fullPage: true });
+    // Move off the marker so its hover tooltip cannot cover the click-opened
+    // Popup in the visual evidence.
+    await page.mouse.move(0, 0);
+    await expect(popup).toBeVisible();
+    // Full-page capture temporarily resizes the viewport, which makes Leaflet
+    // close/reposition the popup before the bitmap is taken. The complete
+    // all-days evidence fits in the viewport, so preserve the asserted popup.
+    await page.screenshot({ path: '../docs/screenshots/share-place-notes-1440-all-days.png' });
     expect(problems).toEqual([]);
   });
 

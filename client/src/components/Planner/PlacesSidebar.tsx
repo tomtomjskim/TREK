@@ -18,18 +18,18 @@ const PlacesSidebar = React.memo(function PlacesSidebar(props: PlacesSidebarProp
     sidebarDragOver, handleSidebarDragEnter, handleSidebarDragOver, handleSidebarDragLeave, handleSidebarDrop,
     selectMode, filtered, t, dayPickerPlace, listImportOpen,
     fileImportOpen, setFileImportOpen, sidebarDropFile, setSidebarDropFile, tripId, pushUndo,
-    ctxMenu, isMobile, pendingDeleteIds, setPendingDeleteIds, onBulkDeleteConfirm,
+    ctxMenu, isMobile, isTouch, pendingDeleteIds, setPendingDeleteIds, onBulkDeleteConfirm,
     categories, selectedIds, exitSelectMode, onBulkChangeCategory, categoryPickerOpen, setCategoryPickerOpen,
     collectionsEnabled, saveToListOpen, setSaveToListOpen,
     enrichmentOpen, setEnrichmentOpen, places,
   } = S
   // Below lg the places sit in their own tab with no plan beside them to drag
-  // into. A coarse pointer no longer disables the drag on its own — tablets
-  // reach it through a long press (#1616).
-  const dragDisabled = isMobile
+  // into. At desktop widths a coarse pointer still disables native HTML5 drag:
+  // on iPadOS it claims a vertical swipe before the places scroller (#1432).
+  const dragDisabled = isMobile || Boolean(isTouch)
   return (
     <div
-      data-touch-drag={dragDisabled ? undefined : ''}
+      data-touch-drag={isMobile ? undefined : ''}
       onDragEnter={dragDisabled ? undefined : handleSidebarDragEnter}
       onDragOver={dragDisabled ? undefined : handleSidebarDragOver}
       onDragLeave={dragDisabled ? undefined : handleSidebarDragLeave}

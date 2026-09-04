@@ -43,6 +43,21 @@ function displayPlaceNote(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
+function hasUsableCoordinates(place: any): boolean {
+  const lat = place?.lat;
+  const lng = place?.lng;
+  return (
+    typeof lat === 'number' &&
+    typeof lng === 'number' &&
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= -90 &&
+    lat <= 90 &&
+    lng >= -180 &&
+    lng <= 180
+  );
+}
+
 // Injected into Leaflet's marker HTML, where CSS variables cannot reach - the same
 // reason MapView.tsx is exempt from theme:lint outright.
 const ORDER_BADGE_STYLE = 'position:absolute;bottom:-4px;right:-4px;min-width:16px;height:16px;border-radius:8px;padding:0 3px;background:rgba(255,255,255,0.94);border:1.5px solid rgba(0,0,0,0.15);box-shadow:0 1px 4px rgba(0,0,0,0.18);display:flex;align-items:center;justify-content:center;font-weight:800;color:#111827;line-height:1;box-sizing:border-box;white-space:nowrap;'; // theme-lint-disable
@@ -185,11 +200,11 @@ export default function SharedTripPage() {
   const seenPlaceIds = new Set<number>();
   for (const a of dayAssignments as any[]) {
     const p = a.place;
-    if (!p?.lat || !p?.lng || seenPlaceIds.has(p.id)) continue;
+    if (!hasUsableCoordinates(p) || seenPlaceIds.has(p.id)) continue;
     seenPlaceIds.add(p.id);
     dayPlaces.push(p);
   }
-  const mapPlaces = selectedDay ? dayPlaces : (places || []).filter((p: any) => p?.lat && p?.lng);
+  const mapPlaces = selectedDay ? dayPlaces : (places || []).filter(hasUsableCoordinates);
 
   // Open framed on the trip's places instead of on Paris. MapContainer only reads center/zoom
   // at mount, so recomputing this per render is free — and the fit below takes over from there.

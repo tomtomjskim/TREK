@@ -3,6 +3,7 @@ import { adminApi, authApi } from '../../../api/client'
 import { getApiErrorMessage } from '../../../types'
 import type { TranslationFn } from '../../../types'
 import type { useAdmin } from '../../../pages/admin/useAdmin'
+import GoogleApiUsagePanel from '../../../components/Admin/GoogleApiUsagePanel'
 import MToggle from '../../components/MToggle'
 import {
   MAdminButton,
@@ -384,6 +385,8 @@ export default function MAdminSettingsSection({ admin, t }: MAdminSettingsSectio
           </MAdminButton>
         </div>
       </MAdminCard>
+
+      <GoogleApiUsagePanel />
 
       {/* OIDC / SSO */}
       <MAdminCard>

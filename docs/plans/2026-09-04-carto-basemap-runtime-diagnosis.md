@@ -1,7 +1,7 @@
 # CARTO Basemap Runtime Diagnosis
 
 > 작성일: 2026-09-04
-> 상태: 원인 확인; v4.1.1 후보의 개선 계약·계획 탭 브라우저 검증 완료; 운영 변경 없음
+> 상태: 원인 확인; v4.2.0 격리 후보에 계약 보존·focused 검증 반영; 운영 변경 없음
 > 범위: 계획 탭 지도에서 보이는 `API KEY REQUIRED` 워터마크
 > 로컬 코드 근거: 계획 탭 fallback `14a1796d`, public map 격리 `69f83999`, public Journey 서버/클라이언트 경계 `d4f8ed9f` + `3ee91284`; 최종 code/test descendant `a55fcccb`
 
@@ -45,9 +45,9 @@ v4.1.1 동작 검증은 유효한 중간 근거지만, 최신 배포 후보는 v
 - 따라서 CARTO 사이트에서 키를 발급받았더라도 v3 정상 UI만으로는 계획 지도 요청에 연결할
   수 없다.
 
-## v4.1.1 개선 계약
+## v4.2.0 격리 후보 개선 계약
 
-격리된 v4.1.1 통합 후보는 다음 경로를 유지한다.
+격리된 v4.2.0 통합 후보는 v4.1.1에서 확인한 다음 경로를 유지한다.
 
 1. `MapSettingsTab`과 모바일/관리자 설정에서 `carto_api_key`를 저장한다.
 2. Nest settings service가 key를 암호화 저장하고 사용자 → 관리자 기본값 → managed operator
@@ -57,8 +57,11 @@ v4.1.1 동작 검증은 유효한 중간 근거지만, 최신 배포 후보는 v
 5. 계획 탭은 해석된 URL을 `MapViewAuto`에 전달한다.
 6. 익명 Journey 지도는 저장된 tile template/key를 읽지 않고 keyless OpenFreeMap을 강제하며,
    공개 API의 `cartoApiKey` 호환 필드는 항상 빈 문자열이다.
+7. 설정 key는 URL에 바인딩하기 전에 trim한다. 빈 문자열 또는 whitespace-only 값은 key가
+   없는 것으로 처리하여 OpenFreeMap fallback을 선택한다.
 
-관련 focused 계약은 settings service 34 tests, map/settings/planner 198 tests에서 통과했다.
+관련 focused 계약은 settings service 34 tests, map/settings/planner 198 tests에서 통과했고,
+통합 후보의 `tileUrl` 회귀는 27/27로 trim·whitespace-only fallback을 확인했다.
 인증된 계획 탭 Playwright도 settings UI에 저장된 CARTO template이 실제로 로드됐음을 확인한
 뒤, keyless 상태에서 CARTO 요청 0건과 OpenFreeMap 요청·지도 표시를 검증했다. v4 client와
 v3 server를 혼합하면 키가 평문으로 저장될 수 있으므로 두 계층은 원자적으로 승격해야 한다.
@@ -75,7 +78,7 @@ v3 server를 혼합하면 키가 평문으로 저장될 수 있으므로 두 계
    관찰한다.
 4. OpenFreeMap 요청은 존재하고 `basemaps.cartocdn.com` 요청은 0건임을 확인한다.
 
-[1440px 계획 탭 증거](../screenshots/carto-keyless-openfreemap-plan.png)는 OpenFreeMap 지도와
+[계획 탭 증거](../screenshots/carto-keyless-openfreemap-plan.png)는 OpenFreeMap 지도와
 attribution이 표시되고 `API KEY REQUIRED` 워터마크가 없음을 육안 검수했다. 이 브라우저
 증거는 로컬 후보 동작에 대한 것이며 전체 release gate나 운영 배포 완료를 의미하지 않는다.
 이미지는 1280×720 PNG이며 SHA-256은
@@ -83,7 +86,7 @@ attribution이 표시되고 `API KEY REQUIRED` 워터마크가 없음을 육안 
 
 ## 배포 후 안전 확인 절차
 
-1. `/api/auth/app-config`의 version/managed 상태만 확인하고 v4.1.1 server/client가 함께
+1. `/api/auth/app-config`의 version/managed 상태만 확인하고 v4.2.0 server/client가 함께
    승격됐는지 확인한다.
 2. 키가 없는 상태에서 계획 탭 요청 host가 `tiles.openfreemap.org`이고 CARTO tile 요청이
    없는지 확인한다.
@@ -99,7 +102,7 @@ attribution이 표시되고 `API KEY REQUIRED` 워터마크가 없음을 육안 
 - v3에 임시 key를 직접 주입하지 않는다. 정상 UI 계약이 없고 평문 저장 위험이 있다.
 - 권장 경로는 검증된 v4.1.1 CARTO 계약을 official v4.2.0 증분 branch에 보존한 뒤
   server/client를 원자적으로 승격하는 것이다.
-- 현재 v4.1.1 branch는 로컬 중간 후보이며, v4.2.0 통합·restore/image/browser gate와 별도
+- 현재 v4.2.0 branch는 로컬 격리 후보이며, restore/image/browser gate와 별도
   승인 전에는 main merge·push·production deploy를 수행하지 않는다.
 - CARTO 공식 근거:
   [Basemap API key 안내](https://carto.com/basemaps/apikey/),

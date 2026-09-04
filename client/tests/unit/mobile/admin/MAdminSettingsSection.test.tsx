@@ -1,4 +1,4 @@
-// FE-MOB-ASET-001 to FE-MOB-ASET-023
+// FE-MOB-ASET-001 to FE-MOB-ASET-024
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
@@ -418,5 +418,11 @@ describe('MAdminSettingsSection', () => {
     await user.click(screen.getByRole('button', { name: 'Rotate' }));
 
     expect(admin.setShowRotateJwtModal).toHaveBeenCalledWith(true);
+  });
+
+  it('FE-MOB-ASET-024: preserves the Google usage panel in mobile admin settings', () => {
+    renderSettings();
+
+    expect(screen.getByRole('region', { name: 'Google Places usage' })).toBeInTheDocument();
   });
 });

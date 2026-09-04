@@ -54,6 +54,12 @@ let session: Session | null = null
 /** Events this module dispatched, so a browser-driven drag stays recognisable. */
 const ours = new WeakSet<Event>()
 
+/** Lets draggable controls accept the bridge's synthetic dragstart while native
+ * drag remains disabled on coarse pointers. */
+export function isTouchDragBridgeEvent(event: Event): boolean {
+  return ours.has(event)
+}
+
 /**
  * A stand-in for the browsers that refuse `new DataTransfer()`. Only the parts
  * the planner's handlers reach for are implemented.
@@ -274,7 +280,7 @@ function onTouchStart(e: TouchEvent): void {
   if (session) { endSession(false); return }
   if (e.touches.length !== 1) return
   const start = e.target as Element | null
-  const source = start?.closest?.('[draggable="true"]') as HTMLElement | null
+  const source = start?.closest?.('[draggable="true"], [data-touch-draggable]') as HTMLElement | null
   if (!source || !source.closest('[data-touch-drag]')) return
   const touch = e.touches[0]
   session = {

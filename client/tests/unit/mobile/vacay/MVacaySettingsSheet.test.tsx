@@ -1,8 +1,9 @@
 // FE-MOB-MVACSET-001 to FE-MOB-MVACSET-030
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
-import { render, screen, fireEvent, waitFor, within } from '../../../helpers/render';
+import { act, render, screen, fireEvent, waitFor, within } from '../../../helpers/render';
 import { server } from '../../../helpers/msw/server';
 import { resetAllStores } from '../../../helpers/store';
 import { useVacayStore } from '../../../../src/store/vacayStore';
@@ -77,6 +78,17 @@ describe('MVacaySettingsSheet', () => {
     expect(screen.queryByRole('dialog', { name: 'Settings' })).not.toBeInTheDocument();
   });
 
+  it('FE-MOB-MVACSET-001a: mounts safely when a plan loads after the empty state', async () => {
+    useVacayStore.setState({ plan: null });
+    render(<MVacaySettingsSheet open onClose={() => {}} />);
+
+    act(() => {
+      useVacayStore.setState({ plan: buildPlan() });
+    });
+
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+  });
+
   it('FE-MOB-MVACSET-002: renders nothing while closed', () => {
     render(<MVacaySettingsSheet open={false} onClose={() => {}} />);
 
@@ -123,19 +135,17 @@ describe('MVacaySettingsSheet', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fri' }));
     expect(updatePlan).toHaveBeenLastCalledWith({ weekend_days: '0,6,5' });
 
-    // 'Sun' is also a week-start button; the weekend chips come first in the DOM.
-    fireEvent.click(screen.getAllByRole('button', { name: 'Sun' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Sun' }));
     expect(updatePlan).toHaveBeenLastCalledWith({ weekend_days: '6' });
   });
 
-  it('FE-MOB-MVACSET-008: the week-start buttons mark the active day and save the other', () => {
+  it('FE-MOB-MVACSET-008: omits the legacy plan week-start editor owned by personal settings', () => {
     const updatePlan = vi.fn(async (_updates: Partial<VacayPlan>) => {});
-    seedPlan(buildPlan({ block_weekends: false }), { updatePlan });
+    seedPlan(buildPlan(), { updatePlan });
     renderSheet();
 
-    expect(screen.getByRole('button', { name: 'Mon' }).className).toContain('bg-m-act');
-    fireEvent.click(screen.getByRole('button', { name: 'Sun' }));
-    expect(updatePlan).toHaveBeenCalledWith({ week_start: 0 });
+    expect(screen.queryByText('Choose whether the calendar week starts on Monday or Sunday')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Sun' })).toHaveLength(1);
   });
 
   it('FE-MOB-MVACSET-009: carry-over and company holidays toggle their plan flags', () => {
@@ -148,6 +158,133 @@ describe('MVacaySettingsSheet', () => {
 
     fireEvent.click(screen.getByRole('switch', { name: 'Company Holidays' }));
     expect(updatePlan).toHaveBeenLastCalledWith({ company_holidays_enabled: true });
+  });
+
+  it('FE-MOB-MVACSET-009a: fused plans expose the company-holiday switch as read-only', () => {
+    const updatePlan = vi.fn(async (_updates: Partial<VacayPlan>) => {});
+    seedPlan(buildPlan({ company_holidays_enabled: true }), { isFused: true, updatePlan });
+    renderSheet();
+
+    const companyHolidays = screen.getByRole('switch', { name: 'Company Holidays: Read-only shared view' });
+    expect(companyHolidays).toBeDisabled();
+    expect(screen.getByText('Read-only shared view', { exact: true })).toBeInTheDocument();
+    fireEvent.click(companyHolidays);
+
+    expect(updatePlan).not.toHaveBeenCalled();
+  });
+
+  it('FE-MOB-MVACSET-009b: fused plans disable every removable year with the read-only reason', () => {
+    useVacayStore.setState({ years: [2025, 2026], selectedYear: 2026, isFused: true });
+    renderSheet();
+
+    const remove2025 = screen.getByRole('button', { name: /Remove 2025.*Years cannot be removed while vacation plans are fused/ });
+    const remove2026 = screen.getByRole('button', { name: /Remove 2026.*Years cannot be removed while vacation plans are fused/ });
+    expect(remove2025).toBeDisabled();
+    expect(remove2026).toBeDisabled();
+  });
+
+  it('FE-MOB-MVACSET-009c: a solo plan confirms a year removal before calling the store action', async () => {
+    const removeYear = vi.fn(async (_year: number) => {});
+    useVacayStore.setState({ years: [2025, 2026], selectedYear: 2026, isFused: false, removeYear });
+    renderSheet();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 2025?' }));
+    expect(removeYear).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(removeYear).toHaveBeenCalledWith(2025));
+  });
+
+  it('FE-MOB-MVACSET-009d: a failed year removal stays open for retry and reports the error', async () => {
+    const removeYear = vi.fn(async (_year: number) => { throw new Error('conflict'); });
+    const loadPlan = vi.fn(async () => {});
+    useVacayStore.setState({ years: [2025, 2026], selectedYear: 2026, isFused: false, removeYear, loadPlan });
+    renderSheet();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 2025?' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(toasts).toContainEqual({ type: 'error', message: 'The removal result could not be confirmed. Refresh to verify the year, or try again.' }));
+    expect(loadPlan).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('dialog', { name: 'Remove 2025?' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeEnabled();
+  });
+
+  it('FE-MOB-MVACSET-009e: a pending fusion invitation disables year removal with its reason', () => {
+    useVacayStore.setState({
+      years: [2025, 2026],
+      selectedYear: 2026,
+      isFused: false,
+      pendingInvites: [{ user_id: 2, username: 'pending-user' }],
+    });
+    renderSheet();
+
+    const remove2025 = screen.getByRole('button', {
+      name: /Remove 2025.*A fusion invitation is pending/,
+    });
+    expect(remove2025).toBeDisabled();
+    expect(screen.getByText(/A fusion invitation is pending\. Cancel the invitation/)).toBeInTheDocument();
+  });
+
+  it('FE-MOB-MVACSET-009f: a live pending-invite transition closes an open removal prompt', async () => {
+    useVacayStore.setState({ years: [2025, 2026], selectedYear: 2026, isFused: false, pendingInvites: [] });
+    renderSheet();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove 2025?' }));
+    expect(screen.getByRole('dialog', { name: 'Remove 2025?' })).toBeInTheDocument();
+
+    act(() => {
+      useVacayStore.setState({ pendingInvites: [{ user_id: 2, username: 'pending-user' }] });
+    });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Remove 2025?' })).not.toBeInTheDocument());
+    expect(screen.getByRole('status')).toHaveTextContent(/removal dialog closed.*invitation is pending/i);
+  });
+
+  it('FE-MOB-MVACSET-009g: Escape closes only the removal prompt and preserves settings', async () => {
+    const user = userEvent.setup();
+    useVacayStore.setState({ years: [2025, 2026], selectedYear: 2026, isFused: false, pendingInvites: [] });
+    const { onClose } = renderSheet();
+    const removeButton = screen.getByRole('button', { name: 'Remove 2025?' });
+    await user.click(removeButton);
+
+    await user.keyboard('{Escape}');
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Remove 2025?' })).not.toBeInTheDocument());
+    expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    await waitFor(() => expect(removeButton).toHaveFocus());
+  });
+
+  it('FE-MOB-MVACSET-009h: a pending removal disables both actions and exposes busy state', async () => {
+    const user = userEvent.setup();
+    let resolveRemoval!: () => void;
+    const removal = new Promise<void>(resolve => { resolveRemoval = resolve; });
+    const removeYear = vi.fn(() => removal);
+    useVacayStore.setState({ years: [2025, 2026], selectedYear: 2026, removeYear });
+    renderSheet();
+
+    await user.click(screen.getByRole('button', { name: 'Remove 2025?' }));
+    await user.click(screen.getByRole('button', { name: 'Remove' }));
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Loading...' })).toBeDisabled();
+    expect(screen.getByRole('dialog', { name: 'Remove 2025?' }).querySelector('[aria-busy="true"]')).not.toBeNull();
+
+    await act(async () => { resolveRemoval(); await removal; });
+  });
+
+  it('FE-MOB-MVACSET-009i: successful deletion of the opener year focuses the surviving settings sheet', async () => {
+    const user = userEvent.setup();
+    const removeYear = vi.fn(async (_year: number) => {
+      useVacayStore.setState({ years: [2026], selectedYear: 2026 });
+    });
+    useVacayStore.setState({ years: [2025, 2026], selectedYear: 2026, removeYear });
+    renderSheet();
+
+    await user.click(screen.getByRole('button', { name: 'Remove 2025?' }));
+    await user.click(screen.getByRole('button', { name: 'Remove' }));
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove 2025?' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveFocus());
   });
 
   it('FE-MOB-MVACSET-010: the calendar leave year shows its Jan–Dec window', () => {
