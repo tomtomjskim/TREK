@@ -5,14 +5,16 @@
 
 ## Current baseline
 
-| 기준                    | 현재 값                                                              |
-| ----------------------- | -------------------------------------------------------------------- |
-| 애플리케이션 버전       | `3.4.1`                                                              |
-| v3.4.x 통합 기준 commit | `86d3e9a01c73f0de1aeaa73031353a2ddb3373cd`                           |
-| Vacay hardening 기준    | `37a0784c33f01ab52fd2c84710e3c11f684e0f09`                           |
-| 포크 runtime source     | `7a50356e4cc469ea8cab902739642cf62e8ef24c`                           |
-| 운영 image              | `trek:3.4.1-jsnetworkcorp-7a50356e`                                  |
-| 공식 release 기준       | exact `v3.4.1` tag target `a0994658890eae96624fb9cbe7f55867f047fea2` |
+| 기준                    | 현재 값                                                                 |
+| ----------------------- | ----------------------------------------------------------------------- |
+| 애플리케이션 버전       | `3.4.1`                                                                 |
+| v3.4.x 통합 기준 commit | `86d3e9a01c73f0de1aeaa73031353a2ddb3373cd`                              |
+| Vacay hardening 기준    | `37a0784c33f01ab52fd2c84710e3c11f684e0f09`                              |
+| 포크 runtime source     | `7a50356e4cc469ea8cab902739642cf62e8ef24c`                              |
+| 운영 image              | `trek:3.4.1-jsnetworkcorp-7a50356e`                                     |
+| 공식 release 기준       | exact `v3.4.1` tag target `a0994658890eae96624fb9cbe7f55867f047fea2`    |
+| 격리 v4.1.1 중간 후보   | `a55fcccb` (`sync/upstream-v4.1.1`; main/runtime 미반영)                |
+| 공식 최신 검토 target   | exact `v4.2.0` peeled commit `09ce5cb733bb681c992dfd4f029706718aae58cc` |
 
 현재 runtime은 공식 v3.4.1 통합과 custom version SemVer correctness,
 packing-template 관리자 exact-once/race guard 위에 Vacay 입력 보존·융합
@@ -37,14 +39,20 @@ truth다.
   [evidence](plans/2026-09-01-upstream-v4.1.1-integration-evidence.md): unsigned exact tag,
   159개 conflict, schema 175→200과 포크 변경 보존을 조건부 GO로 관리하는 격리 통합 계약.
   Process-wide restore quiesce/crash recovery와 sanitized rehearsal 전 main/deploy는 NO-GO
+- [v4.2.0 incremental preflight](plans/2026-09-04-upstream-v4.2.0-incremental-preflight.md):
+  2026-09-03 공개된 새 latest tag를 v4.1.1 중간 checkpoint에 증분 통합하기 위한 87 commits,
+  605 files, schema 200→205, 42 conflict 감사와 격리 실행 순서. Direct main/deploy는 NO-GO
 - [v4.1.1 fork preservation matrix](plans/2026-09-01-upstream-v4.1.1-preservation-matrix.md):
   DB, packing privacy, Google 비용, Vacay 데이터 안전, 지도/Fold/calendar, Android와
-  공개 공유 동작을 새 v4 owner module의 RED/GREEN 증거에 연결하는 누락 방지 원장
+  Trip/Journey 공개 공유 동작을 새 v4 owner module의 RED/GREEN 증거에 연결하는 누락 방지 원장
 - [Public shared place notes design](plans/2026-09-01-public-share-place-notes-design.md) ·
   [implementation plan](plans/2026-09-01-public-share-place-notes.md) ·
   [evidence](plans/2026-09-01-public-share-place-notes-evidence.md): 공개 지도·계획의
   `places.notes` projection/표시, 전체 anonymous DTO exact allowlist, 개인 메모 오표기와
   `share_map=false` 비노출 계약. `0842e229` + `c3b8e18f` local VERIFIED
+- [CARTO basemap runtime diagnosis](plans/2026-09-04-carto-basemap-runtime-diagnosis.md):
+  운영 v3.4.1의 빈 지도 설정이 keyless CARTO 기본값으로 연결되는 원인, 비밀값 비노출
+  운영 집계, 실제 워터마크 재현과 v4.1.1의 encrypted-key/OpenFreeMap fallback 계약
 - [Vacay correctness extraction dossiers](upstream/vacay-correctness-extraction.md):
   최신 공식 Nest 경로에 다시 구현할 데이터 보존 후보와 공식 contract와 충돌하는
   포크 정책 변경을 제출 단위별로 분리한 자료
