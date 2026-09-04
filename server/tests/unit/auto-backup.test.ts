@@ -317,6 +317,22 @@ describe('auto-backup scheduling (AutoBackupJob.start)', () => {
       else process.env.TZ = prevTz;
     }
   });
+
+  it('getAutoSettings falls back to UTC when the host does not report a timezone', () => {
+    const previousTz = process.env.TZ;
+    const dateTimeFormat = vi.spyOn(Intl, 'DateTimeFormat').mockReturnValue({
+      resolvedOptions: () => ({ timeZone: '' }),
+    } as Intl.DateTimeFormat);
+    try {
+      delete process.env.TZ;
+      const { job } = makeJob();
+      expect(job.getAutoSettings().timezone).toBe('UTC');
+    } finally {
+      dateTimeFormat.mockRestore();
+      if (previousTz === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTz;
+    }
+  });
 });
 
 // Moved from backup.impl.test.ts when updateAutoSettings moved onto the job

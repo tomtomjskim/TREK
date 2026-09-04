@@ -44,7 +44,7 @@ const audit = { writeAudit } as unknown as AuditService;
 function job(o: Partial<AutoBackupJob> = {}): AutoBackupJob {
   return { getAutoSettings: vi.fn(), updateAutoSettings: vi.fn(), start: vi.fn(), ...o } as unknown as AutoBackupJob;
 }
-const bc = (s: BackupService, j: AutoBackupJob = job()) => new BackupController(s, audit, j, { isManaged: () => false } as unknown as RuntimeEnvService);
+const bc = (s: BackupService, j: AutoBackupJob = job(), env: RuntimeEnvService = { isManaged: () => false } as unknown as RuntimeEnvService) => new BackupController(s, audit, j, env);
 
 function svc(o: Partial<BackupService> = {}): BackupService {
   return {
@@ -106,6 +106,9 @@ describe('BackupController', () => {
     const res = await bc(svc({ createBackup } as Partial<BackupService>)).create(user, req);
     expect(res).toEqual({ success: true, backup: { filename: 'b.zip', size: 10 } });
     expect(writeAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'backup.create', resource: 'b.zip' }));
+    const checkRateLimit = vi.fn().mockReturnValue(false);
+    expect(await thrownAsync(() => bc(svc({ checkRateLimit })).create(user, { ...req, ip: '' } as Request))).toEqual({ status: 429, body: { error: 'Too many backup requests. Please try again later.' } });
+    expect(checkRateLimit).toHaveBeenCalledWith('unknown', 3, 3600000);
   });
 
   it('GET /download 400 invalid / 404 missing, else serves through storage', async () => {
@@ -155,6 +158,23 @@ describe('BackupController', () => {
   it('POST /upload-restore maps a failed restore status', async () => {
     const file = { path: '/tmp/does-not-exist-xyz.zip', originalname: 'up.zip' } as Express.Multer.File;
     expect(await thrownAsync(() => bc(svc({ restoreFromZip: vi.fn().mockResolvedValue({ success: false, status: 422, error: 'bad' }) } as Partial<BackupService>)).uploadRestore(user, file, req))).toEqual({ status: 422, body: { error: 'bad' } });
+  });
+
+  it('POST /upload-restore defaults a failed restore without a status to 400', async () => {
+    const file = { path: '/tmp/does-not-exist-xyz.zip', originalname: 'up.zip' } as Express.Multer.File;
+    expect(await thrownAsync(() => bc(svc({ restoreFromZip: vi.fn().mockResolvedValue({ success: false, error: 'bad' }) } as Partial<BackupService>)).uploadRestore(user, file, req))).toEqual({ status: 400, body: { error: 'bad' } });
+  });
+
+  it('POST /upload-restore rejects managed instances before calling the restore service', async () => {
+    const restoreFromZip = vi.fn();
+    const file = { path: '/tmp/managed.zip', originalname: 'up.zip' } as Express.Multer.File;
+    const managed = bc(svc({ restoreFromZip } as Partial<BackupService>), job(), { isManaged: () => true } as unknown as RuntimeEnvService);
+
+    expect(await thrownAsync(() => managed.uploadRestore(user, file, req))).toEqual({
+      status: 403,
+      body: { error: 'This is configured by the operator of this instance.', code: 'MANAGED_FORBIDDEN' },
+    });
+    expect(restoreFromZip).not.toHaveBeenCalled();
   });
 
   it('POST /upload-restore falls back to a default name and maps unexpected errors to 500', async () => {

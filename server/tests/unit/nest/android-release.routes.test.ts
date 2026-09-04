@@ -59,6 +59,36 @@ describe('Android release routes', () => {
     const invalid = await request(app()).get('/.well-known/assetlinks.json');
     expect(invalid.status).toBe(404);
     expect(invalid.body).toEqual({ error: 'not_found' });
+
+    fs.writeFileSync(path.join(releaseDir, 'assetlinks.json'), JSON.stringify([]));
+    const empty = await request(app()).get('/.well-known/assetlinks.json');
+    expect(empty.status).toBe(404);
+    expect(empty.body).toEqual({ error: 'not_found' });
+  });
+
+  it.runIf(process.platform !== 'win32')('fails closed when the association file resolves outside the release directory', async () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-android-outside-'));
+    try {
+      const outsideFile = path.join(outsideDir, 'assetlinks.json');
+      fs.writeFileSync(outsideFile, JSON.stringify(assetLinksDocument()));
+      fs.symlinkSync(outsideFile, path.join(releaseDir, 'assetlinks.json'));
+
+      const res = await request(app()).get('/.well-known/assetlinks.json');
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'not_found' });
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when the association path is a directory rather than a file', async () => {
+    fs.mkdirSync(path.join(releaseDir, 'assetlinks.json'));
+
+    const res = await request(app()).get('/.well-known/assetlinks.json');
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'not_found' });
   });
 
   it('rejects an association document for any other package', async () => {
