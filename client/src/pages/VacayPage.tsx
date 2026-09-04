@@ -1,4 +1,4 @@
-import React, { useRef } from 'react'
+import React from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from '../i18n'
 import PageShell from '../components/Layout/PageShell'
@@ -19,7 +19,6 @@ export default function VacayPage(): React.ReactElement {
 
 function VacayPageDesktop(): React.ReactElement {
   const { t } = useTranslation()
-  const deleteYearCancelRef = useRef<HTMLButtonElement>(null)
   // Page = wiring container: vacay store, live sync + UI state live in the hook.
   const {
     years, selectedYear, setSelectedYear, loading,
@@ -28,7 +27,7 @@ function VacayPageDesktop(): React.ReactElement {
     deleteYear, isRemovingYear, deleteYearError,
     yearRemovalReadOnlyReason, yearRemovalNotice,
     showMobileSidebar,
-    mobileSidebarButtonRef, mobileDrawerCloseButtonRef,
+    mobileSidebarButtonRef, mobileDrawerCloseButtonRef, deleteYearCancelRef,
     openMobileSidebar, closeMobileSidebar, openYearRemoval,
     handleAddNextYear, handleAddPrevYear,
     cancelYearRemoval, confirmYearRemoval,

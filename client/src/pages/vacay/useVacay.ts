@@ -27,6 +27,7 @@ export function useVacay() {
   const [showMobileSidebar, setShowMobileSidebar] = useState(false)
   const mobileSidebarButtonRef = useRef<HTMLButtonElement | null>(null)
   const mobileDrawerCloseButtonRef = useRef<HTMLButtonElement | null>(null)
+  const deleteYearCancelRef = useRef<HTMLButtonElement | null>(null)
   const returnFocusRef = useRef<HTMLButtonElement | null>(null)
   const previousDeleteYearRef = useRef<number | null>(deleteYear)
   const yearRemovalReadOnlyReason: 'fused' | 'pending' | null = isFused
@@ -203,7 +204,7 @@ export function useVacay() {
     deleteYear, isRemovingYear, deleteYearError,
     yearRemovalReadOnlyReason, yearRemovalNotice,
     showMobileSidebar,
-    mobileSidebarButtonRef, mobileDrawerCloseButtonRef,
+    mobileSidebarButtonRef, mobileDrawerCloseButtonRef, deleteYearCancelRef,
     openMobileSidebar: () => setShowMobileSidebar(true),
     closeMobileSidebar, openYearRemoval,
     handleAddNextYear, handleAddPrevYear,
