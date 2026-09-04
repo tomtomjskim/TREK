@@ -1,4 +1,4 @@
-// FE-JRN-PUBWIRE-001 to FE-JRN-PUBWIRE-023
+// FE-JRN-PUBWIRE-001 to FE-JRN-PUBWIRE-024
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent } from '../../tests/helpers/render';
 import { useSettingsStore } from '../store/settingsStore';
@@ -38,7 +38,7 @@ vi.mock('../components/Journey/JournalBody', () => ({
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
-function photo(id: number): PublicEntry['photos'][number] {
+function photo(id: number): NonNullable<PublicEntry['photos']>[number] {
   return { id, entry_id: 1, photo_id: id * 10, caption: `caption ${id}` };
 }
 
@@ -315,5 +315,19 @@ describe('JourneyPublicPage wiring', () => {
     setup({ perms: { share_timeline: true, share_gallery: false, share_map: false }, desktopTwoColumn: false });
     expect(screen.queryByRole('button', { name: /Gallery/ })).not.toBeInTheDocument();
     expect(screen.getByText('Arrival')).toBeInTheDocument();
+  });
+
+  it('FE-JRN-PUBWIRE-024: accepts the server map-only entry shape without photos', () => {
+    const mapOnlyEntry = {
+      id: 7,
+      type: 'entry',
+      title: 'Map stop',
+      entry_date: '2026-05-02',
+      location_name: 'Kyoto',
+      location_lat: 35.0116,
+      location_lng: 135.7681,
+    } satisfies PublicEntry;
+
+    expect(groupByDate([mapOnlyEntry]).get('2026-05-02')).toEqual([mapOnlyEntry]);
   });
 });

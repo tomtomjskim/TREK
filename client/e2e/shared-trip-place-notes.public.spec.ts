@@ -10,6 +10,7 @@ const REVOKED_TOKEN = 'e2e-public-place-notes-revoked';
 const SHARE_TOKENS = [TOKEN, NO_MAP_TOKEN, EXPIRED_TOKEN, REVOKED_TOKEN] as const;
 const TRIP_TITLE_PREFIX = 'E2E Public Place Notes';
 const CATEGORY_NAME = 'E2E Park';
+const FOREIGN_CLEANUP_EMAIL = 'e2e-public-place-notes-foreign@trek.local';
 const PLACE_NAME = 'Seoul Forest E2E';
 const SECOND_PLACE_NAME = 'Museum E2E';
 const PLACE_NOTE = [
@@ -48,9 +49,9 @@ function cleanupPublicShare(seed?: Seed): void {
       tripIds.add(seed.boundaryTripId);
     }
     if (!seed) {
-      const titleTrips = db.prepare('SELECT id FROM trips WHERE title LIKE ?').all(`${TRIP_TITLE_PREFIX}%`) as Array<{
-        id: number;
-      }>;
+      const titleTrips = db
+        .prepare('SELECT id FROM trips WHERE user_id = ? AND title LIKE ?')
+        .all(owner.id, `${TRIP_TITLE_PREFIX}%`) as Array<{ id: number }>;
       titleTrips.forEach(({ id }) => tripIds.add(id));
     }
 
@@ -95,6 +96,52 @@ function cleanupPublicShare(seed?: Seed): void {
   } finally {
     db.close();
   }
+}
+
+function assertCleanupKeepsAnotherOwnersMatchingTrip(): void {
+  const setupDb = new Database(DB_FILE);
+  setupDb.pragma('foreign_keys = ON');
+  let boundary: { foreignUserId: number; foreignTripId: number } | undefined;
+  try {
+    const prior = setupDb.prepare('SELECT id FROM users WHERE email = ?').get(FOREIGN_CLEANUP_EMAIL) as
+      | { id: number }
+      | undefined;
+    if (prior) setupDb.prepare('DELETE FROM users WHERE id = ?').run(prior.id);
+    const foreignUserId = Number(
+      setupDb
+        .prepare(
+          "INSERT INTO users (username, email, password_hash, role) VALUES ('e2e_public_notes_foreign', ?, 'synthetic', 'user')"
+        )
+        .run(FOREIGN_CLEANUP_EMAIL).lastInsertRowid
+    );
+    const foreignTripId = Number(
+      setupDb
+        .prepare('INSERT INTO trips (user_id, title, description, currency) VALUES (?, ?, ?, ?)')
+        .run(foreignUserId, `${TRIP_TITLE_PREFIX} Foreign Owner`, 'cleanup boundary sentinel', 'USD')
+        .lastInsertRowid
+    );
+    boundary = { foreignUserId, foreignTripId };
+  } finally {
+    setupDb.close();
+  }
+  if (!boundary) throw new Error('Failed to create the cleanup boundary fixture');
+  const { foreignUserId, foreignTripId } = boundary;
+
+  cleanupPublicShare();
+
+  const verifyDb = new Database(DB_FILE);
+  verifyDb.pragma('foreign_keys = ON');
+  let survived = false;
+  try {
+    survived = !!verifyDb
+      .prepare('SELECT 1 FROM trips WHERE id = ? AND user_id = ?')
+      .get(foreignTripId, foreignUserId);
+    verifyDb.prepare('DELETE FROM trips WHERE id = ?').run(foreignTripId);
+    verifyDb.prepare('DELETE FROM users WHERE id = ?').run(foreignUserId);
+  } finally {
+    verifyDb.close();
+  }
+  expect(survived).toBe(true);
 }
 
 function seedPublicShare(): Seed {
@@ -256,6 +303,7 @@ test.describe.serial('public shared place notes', () => {
   let seed: Seed;
 
   test.beforeAll(() => {
+    assertCleanupKeepsAnotherOwnersMatchingTrip();
     seed = seedPublicShare();
   });
 

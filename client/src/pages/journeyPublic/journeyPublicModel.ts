@@ -18,7 +18,8 @@ export interface PublicEntry {
   weather?: string | null
   tags?: string[]
   pros_cons?: { pros: string[]; cons: string[] } | null
-  photos: PublicPhoto[]
+  /** Omitted by the server's deliberately minimal map-only projection. */
+  photos?: PublicPhoto[]
 }
 
 export interface PublicPhoto {
