@@ -98,50 +98,91 @@ function cleanupPublicShare(seed?: Seed): void {
   }
 }
 
-function assertCleanupKeepsAnotherOwnersMatchingTrip(): void {
-  const setupDb = new Database(DB_FILE);
-  setupDb.pragma('foreign_keys = ON');
+function cleanupForeignCleanupFixture(): void {
+  const db = new Database(DB_FILE);
+  db.pragma('foreign_keys = ON');
+  try {
+    const cleanup = db.transaction(() => {
+      db.prepare('DELETE FROM trips WHERE user_id IN (SELECT id FROM users WHERE email = ?)').run(
+        FOREIGN_CLEANUP_EMAIL
+      );
+      db.prepare('DELETE FROM users WHERE email = ?').run(FOREIGN_CLEANUP_EMAIL);
+    });
+    cleanup();
+  } finally {
+    db.close();
+  }
+}
+
+function withForeignCleanupBoundaryFixture(
+  assertion: (boundary: { foreignUserId: number; foreignTripId: number }) => void
+): void {
+  cleanupForeignCleanupFixture();
   let boundary: { foreignUserId: number; foreignTripId: number } | undefined;
   try {
-    const prior = setupDb.prepare('SELECT id FROM users WHERE email = ?').get(FOREIGN_CLEANUP_EMAIL) as
-      | { id: number }
-      | undefined;
-    if (prior) setupDb.prepare('DELETE FROM users WHERE id = ?').run(prior.id);
-    const foreignUserId = Number(
-      setupDb
-        .prepare(
-          "INSERT INTO users (username, email, password_hash, role) VALUES ('e2e_public_notes_foreign', ?, 'synthetic', 'user')"
-        )
-        .run(FOREIGN_CLEANUP_EMAIL).lastInsertRowid
-    );
-    const foreignTripId = Number(
-      setupDb
-        .prepare('INSERT INTO trips (user_id, title, description, currency) VALUES (?, ?, ?, ?)')
-        .run(foreignUserId, `${TRIP_TITLE_PREFIX} Foreign Owner`, 'cleanup boundary sentinel', 'USD')
-        .lastInsertRowid
-    );
-    boundary = { foreignUserId, foreignTripId };
+    const setupDb = new Database(DB_FILE);
+    setupDb.pragma('foreign_keys = ON');
+    try {
+      const foreignUserId = Number(
+        setupDb
+          .prepare(
+            "INSERT INTO users (username, email, password_hash, role) VALUES ('e2e_public_notes_foreign', ?, 'synthetic', 'user')"
+          )
+          .run(FOREIGN_CLEANUP_EMAIL).lastInsertRowid
+      );
+      const foreignTripId = Number(
+        setupDb
+          .prepare('INSERT INTO trips (user_id, title, description, currency) VALUES (?, ?, ?, ?)')
+          .run(foreignUserId, `${TRIP_TITLE_PREFIX} Foreign Owner`, 'cleanup boundary sentinel', 'USD').lastInsertRowid
+      );
+      boundary = { foreignUserId, foreignTripId };
+    } finally {
+      setupDb.close();
+    }
+    if (!boundary) throw new Error('Failed to create the cleanup boundary fixture');
+    assertion(boundary);
   } finally {
-    setupDb.close();
+    cleanupForeignCleanupFixture();
   }
-  if (!boundary) throw new Error('Failed to create the cleanup boundary fixture');
-  const { foreignUserId, foreignTripId } = boundary;
+}
 
-  cleanupPublicShare();
+function assertCleanupKeepsAnotherOwnersMatchingTrip(): void {
+  withForeignCleanupBoundaryFixture(({ foreignUserId, foreignTripId }) => {
+    cleanupPublicShare();
 
-  const verifyDb = new Database(DB_FILE);
-  verifyDb.pragma('foreign_keys = ON');
-  let survived = false;
+    const verifyDb = new Database(DB_FILE);
+    verifyDb.pragma('foreign_keys = ON');
+    try {
+      const survived = !!verifyDb
+        .prepare('SELECT 1 FROM trips WHERE id = ? AND user_id = ?')
+        .get(foreignTripId, foreignUserId);
+      expect(survived).toBe(true);
+    } finally {
+      verifyDb.close();
+    }
+  });
+}
+
+function assertForeignCleanupRunsAfterFailure(): void {
+  const expectedFailure = new Error('synthetic cleanup boundary failure');
+  let caught: unknown;
   try {
-    survived = !!verifyDb
-      .prepare('SELECT 1 FROM trips WHERE id = ? AND user_id = ?')
-      .get(foreignTripId, foreignUserId);
-    verifyDb.prepare('DELETE FROM trips WHERE id = ?').run(foreignTripId);
-    verifyDb.prepare('DELETE FROM users WHERE id = ?').run(foreignUserId);
+    withForeignCleanupBoundaryFixture(() => {
+      cleanupPublicShare();
+      throw expectedFailure;
+    });
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBe(expectedFailure);
+
+  const verifyDb = new Database(DB_FILE, { readonly: true });
+  try {
+    const leftover = verifyDb.prepare('SELECT id FROM users WHERE email = ?').get(FOREIGN_CLEANUP_EMAIL);
+    expect(leftover).toBeUndefined();
   } finally {
     verifyDb.close();
   }
-  expect(survived).toBe(true);
 }
 
 function seedPublicShare(): Seed {
@@ -304,11 +345,16 @@ test.describe.serial('public shared place notes', () => {
 
   test.beforeAll(() => {
     assertCleanupKeepsAnotherOwnersMatchingTrip();
+    assertForeignCleanupRunsAfterFailure();
     seed = seedPublicShare();
   });
 
   test.afterAll(() => {
-    cleanupPublicShare(seed);
+    try {
+      cleanupPublicShare(seed);
+    } finally {
+      cleanupForeignCleanupFixture();
+    }
   });
 
   test('1440 all-days uses the anonymous API projection in a real Leaflet popup', async ({ page }) => {
