@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router'
-import { useAuthStore } from '../../store/authStore'
+import { isAuthAttemptCancelled, useAuthStore } from '../../store/authStore'
 import { useSettingsStore, hasStoredLanguage } from '../../store/settingsStore'
 import { useTranslation, detectBrowserLanguage } from '../../i18n'
 import { startAuthentication } from '@simplewebauthn/browser'
@@ -138,7 +138,7 @@ export function useLogin() {
         .then(async data => {
           window.history.replaceState({}, '', '/login')
           if (data.token) {
-            await loadUser()
+            if (!(await loadUser())) return
             const savedRedirect = sessionStorage.getItem('oidc_redirect') || START_DESTINATION_ROUTE
             sessionStorage.removeItem('oidc_redirect')
             navigate(savedRedirect, { replace: true })
@@ -225,6 +225,7 @@ export function useLogin() {
       await demoLogin()
       takeOff()
     } catch (err: unknown) {
+      if (isAuthAttemptCancelled(err)) return
       setError(err instanceof Error ? err.message : t('login.demoFailed'))
     } finally {
       setIsLoading(false)
@@ -238,7 +239,10 @@ export function useLogin() {
       const options = await authApi.passkey.loginOptions()
       const assertion = await startAuthentication({ optionsJSON: options })
       await authApi.passkey.loginVerify(assertion)
-      await loadUser({ silent: true })
+      if (!(await loadUser({ silent: true }))) {
+        setIsLoading(false)
+        return
+      }
       takeOff()
     } catch (err: unknown) {
       // The user dismissing the native prompt isn't an error worth surfacing.
@@ -263,7 +267,10 @@ export function useLogin() {
         if (newPassword.length < 8) { setError(t('settings.passwordTooShort')); setIsLoading(false); return }
         if (newPassword !== confirmPassword) { setError(t('settings.passwordMismatch')); setIsLoading(false); return }
         await authApi.changePassword({ current_password: savedLoginPassword, new_password: newPassword })
-        await loadUser({ silent: true })
+        if (!(await loadUser({ silent: true }))) {
+          setIsLoading(false)
+          return
+        }
         takeOff()
         return
       }
@@ -312,6 +319,10 @@ export function useLogin() {
       }
       takeOff()
     } catch (err: unknown) {
+      if (isAuthAttemptCancelled(err)) {
+        setIsLoading(false)
+        return
+      }
       setError(getApiErrorMessage(err, t('login.error')))
       setIsLoading(false)
     }

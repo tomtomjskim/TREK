@@ -6,6 +6,7 @@ import { useTripStore } from '../../store/tripStore'
 import { useAddonStore } from '../../store/addonStore'
 import Modal from '../shared/Modal'
 import CustomSelect from '../shared/CustomSelect'
+import { buildAssignmentOptions } from './assignmentOptions'
 import AddressInput from './AddressInput'
 import { Hotel, Utensils, Ticket, FileText, Users, Paperclip, X, ExternalLink, Link2, ParkingSquare } from 'lucide-react'
 import { useToast } from '../shared/Toast'
@@ -31,31 +32,6 @@ const TYPE_OPTIONS = [
   { value: 'parking',    labelKey: 'reservations.type.parking',    Icon: ParkingSquare },
   { value: 'other',      labelKey: 'reservations.type.other',      Icon: FileText },
 ]
-
-function buildAssignmentOptions(days, assignments, t, locale) {
-  const options = []
-  for (const day of (days || [])) {
-    const da = (assignments?.[String(day.id)] || []).slice().sort((a, b) => a.order_index - b.order_index)
-    if (da.length === 0) continue
-    const dayLabel = day.title || t('dayplan.dayN', { n: day.day_number })
-    const dateStr = day.date ? ` · ${formatDate(day.date, locale)}` : ''
-    const groupLabel = `${dayLabel}${dateStr}`
-    options.push({ value: `_header_${day.id}`, label: groupLabel, disabled: true, isHeader: true })
-    for (let i = 0; i < da.length; i++) {
-      const place = da[i].place
-      if (!place) continue
-      const timeStr = place.place_time ? ` · ${place.place_time}${place.end_time ? ' – ' + place.end_time : ''}` : ''
-      options.push({
-        value: da[i].id,
-        label: `  ${i + 1}. ${place.name}${timeStr}`,
-        searchLabel: place.name,
-        groupLabel,
-        dayDate: day.date || null,
-      })
-    }
-  }
-  return options
-}
 
 interface ReservationModalProps {
   isOpen: boolean
@@ -279,7 +255,10 @@ export function ReservationModal({ isOpen, onClose, onSave, reservation, days, p
         // the picked trip place/activity directly on the reservation (#1353).
         place_id: form.type === 'hotel' ? null : (form.place_id || null),
         metadata: Object.keys(metadata).length > 0 ? metadata : null,
-        endpoints: [],
+        // Omitted on an edit: the server replaces the endpoint set whenever the
+        // key is present, and this form never edits endpoints, so sending an
+        // empty list would drop a transit booking's stations (#2216).
+        ...(reservation?.id ? {} : { endpoints: [] }),
         needs_review: false,
       }
       if (form.type === 'hotel' && (form.hotel_start_day || form.hotel_end_day)) {

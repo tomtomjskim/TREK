@@ -435,6 +435,33 @@ describe('PlaceInspector', () => {
     expect(screen.getByText('Museum Ticket')).toBeTruthy();
   });
 
+  it('FE-PLANNER-INSPECTOR-030g: every booking on the stop gets its own strip (#2201)', () => {
+    const onEditReservation = vi.fn();
+    const parking = buildReservation({
+      id: 530, title: 'Parking pass', status: 'confirmed', type: 'parking', assignment_id: 99,
+      reservation_time: '2025-06-01T09:00:00',
+    } as any);
+    const tickets = buildReservation({
+      id: 531, title: 'Zoo tickets', status: 'pending', type: 'activity', assignment_id: 99,
+      reservation_time: '2025-06-01T10:15:00',
+    } as any);
+    const assignmentInDay = [{ id: 99, place, day_id: 1, place_id: place.id, order_index: 0, notes: null }];
+    render(
+      <PlaceInspector
+        {...defaultProps}
+        selectedDayId={1}
+        selectedAssignmentId={99}
+        assignments={{ '1': assignmentInDay }}
+        reservations={[tickets, parking]}
+        onEditReservation={onEditReservation}
+      />
+    );
+    expect(screen.getByText('Parking pass')).toBeTruthy();
+    expect(screen.getByText('Zoo tickets')).toBeTruthy();
+    fireEvent.click(screen.getByText('Zoo tickets').closest('[role="button"]') as HTMLElement);
+    expect(onEditReservation).toHaveBeenCalledWith(tickets);
+  });
+
   it('FE-PLANNER-INSPECTOR-030b: the linked reservation opens its editor (#2012)', () => {
     const onEditReservation = vi.fn();
     const reservation = buildReservation({ title: 'Museum Ticket', status: 'confirmed', assignment_id: 99 } as any);
@@ -1419,6 +1446,55 @@ describe('PlaceInspector', () => {
 
     rerender(<PlaceInspector {...defaultProps} />);
     expect(screen.getByText('Eiffel Tower')).toBeTruthy();
+  });
+
+  // ── Day-specific assignment note (#2163) ─────────────────────────────────────
+
+  it('FE-PLANNER-INSPECTOR-099: the assignment note renders as markdown under its own eyebrow', () => {
+    const assignmentInDay = [{ id: 99, place, day_id: 1, place_id: place.id, order_index: 0, notes: 'Book the **10:00** timed entry' }];
+    render(
+      <PlaceInspector
+        {...defaultProps}
+        selectedDayId={1}
+        selectedAssignmentId={99}
+        assignments={{ '1': assignmentInDay }}
+      />
+    );
+    expect(screen.getByText('Notes for this day')).toBeTruthy();
+    const strong = Array.from(document.querySelectorAll('strong')).find(el => el.textContent === '10:00');
+    expect(strong).toBeTruthy();
+  });
+
+  it('FE-PLANNER-INSPECTOR-100: without a note (or without a day in context) the block stays away', () => {
+    const assignmentInDay = [{ id: 99, place, day_id: 1, place_id: place.id, order_index: 0, notes: null }];
+    const { rerender } = render(
+      <PlaceInspector {...defaultProps} selectedDayId={1} selectedAssignmentId={99} assignments={{ '1': assignmentInDay }} />
+    );
+    expect(screen.queryByText('Notes for this day')).toBeNull();
+    // A note exists but no day is selected — nothing to attribute it to, so no block.
+    rerender(
+      <PlaceInspector {...defaultProps} selectedDayId={null} assignments={{ '1': [{ ...assignmentInDay[0], notes: 'hidden' }] }} />
+    );
+    expect(screen.queryByText('Notes for this day')).toBeNull();
+  });
+
+  it('FE-PLANNER-INSPECTOR-101: the reservation strip opts out of the press-scale (#2158)', () => {
+    // jsdom cannot replay the browser mechanics: the :active scale on the
+    // composite strip slid the links inside out from under the pointer, so the
+    // click landed elsewhere. The data-no-press attribute is the pin.
+    const reservation = buildReservation({ title: 'Museum Ticket', status: 'confirmed', assignment_id: 99 } as any);
+    const assignmentInDay = [{ id: 99, place, day_id: 1, place_id: place.id, order_index: 0, notes: null }];
+    render(
+      <PlaceInspector
+        {...defaultProps}
+        selectedDayId={1}
+        selectedAssignmentId={99}
+        assignments={{ '1': assignmentInDay }}
+        reservations={[reservation]}
+        onEditReservation={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Museum Ticket').closest('[role="button"]')).toHaveAttribute('data-no-press');
   });
 
 });

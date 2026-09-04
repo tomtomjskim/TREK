@@ -139,7 +139,7 @@ describe('prefetchStyleAssets', () => {
 describe('prefetchVectorForPlaces', () => {
   const places = [buildPlace({ lat: 52.52, lng: 13.405 })];
 
-  it('FE-SYNC-GLPF-007: downloads the tiles covering the trip, z10 to z14', async () => {
+  it('FE-SYNC-GLPF-007: downloads the tiles covering the trip, z0 to z14', async () => {
     const result = await prefetchVectorForPlaces(places, STYLE_URL);
     expect(result.template).toBe(TILE_TEMPLATE);
     expect(result.tiles).toBeGreaterThan(0);
@@ -151,7 +151,25 @@ describe('prefetchVectorForPlaces', () => {
     );
     // z14 is the last one OpenFreeMap serves; MapLibre scales it beyond that
     // rather than asking for another, which is why this stops where raster could not.
-    expect([...zooms].sort((a, b) => a - b)).toEqual([10, 11, 12, 13, 14]);
+    // The floor is z0: MapLibre cannot overzoom downward, so the fitBounds view
+    // of a wide trip needs the low zooms cached too (#2180).
+    expect([...zooms].sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+  });
+
+  it('FE-SYNC-GLPF-014: reaches as far as the screen the map opens on, not just the places extent', async () => {
+    // Berlin + Munich: fitBounds is height-limited, so the opening view shows far
+    // more longitude than the places extent, and that band was grey offline (#2180).
+    await prefetchVectorForPlaces([
+      buildPlace({ lat: 52.52, lng: 13.405 }),
+      buildPlace({ lat: 48.14, lng: 11.58 }),
+    ], STYLE_URL);
+
+    const xs = [...cache.store.keys()]
+      .filter(u => u.endsWith('.pbf') && u.includes('/planet/'))
+      .map(u => u.split('/planet/')[1]!.split('/'))
+      .filter(parts => Number(parts[1]) === 7)
+      .map(parts => Number(parts[2]));
+    expect((Math.max(...xs) - Math.min(...xs) + 1) * 256).toBeGreaterThanOrEqual(window.innerWidth);
   });
 
   it('FE-SYNC-GLPF-008: does nothing offline', async () => {

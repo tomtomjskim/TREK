@@ -38,6 +38,7 @@ export class ThingsMcp {
 - `@Resource(options)` — fixed URI (`uri`, `mimeType`, …). Handler: `(uri: URL, ctx)`.
 - `@ResourceTemplate(options)` — `uriTemplate` (RFC 6570). Handler: `(uri: URL, variables, ctx)`. (No `list`/`complete` template callbacks yet — extend when a domain needs them.)
 - `@Prompt(options)` — mirrors `registerPrompt` (`argsSchema` entries must be string-valued Zod schemas). Handler: `(args, ctx)`.
+  Prompt arguments arrive as strings, so every `argsSchema` entry has to accept a string (`PromptArgsShape`): parse numbers with `z.string().regex(...).transform(Number)`, never `z.number()`. The handler receives the transformed values.
 
 `ctx` always takes the SDK `extra` slot — the last handler argument.
 

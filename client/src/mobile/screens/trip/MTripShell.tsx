@@ -40,7 +40,8 @@ export type MTripCollabTab = 'chat' | 'notes' | 'polls'
 /**
  * Currently open bottom/floating sheet. Well-known ids (owned by the sheets
  * screen): 'day' (payload { dayId }), 'days', 'mehr', 'note' (payload
- * { dayId, note? }), 'transport' (payload { reservationId }), 'bract'
+ * { dayId, note? }), 'accommodation' (payload { dayId?, accId?, from? }),
+ * 'transport' (payload { reservationId }), 'bract'
  * (payload { placeId, dayPicker? }), 'import', 'export', 'members',
  * 'tripedit', 'bags', 'task'. The place inspector keys off the planner's
  * place selection instead of a sheet id, and planner-backed editors (place

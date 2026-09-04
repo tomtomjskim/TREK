@@ -10,7 +10,7 @@ import { fmtTransitDuration } from '../../../../components/Planner/transitDispla
 import { formatTime } from '../../../../utils/formatters'
 import { useMPlanTimeline, type MPlanTimelineController } from './useMPlanTimeline'
 import { cityPillsForDay, weatherIconFor } from './planTimelineModel'
-import type { PlanRow } from './planTimelineModel'
+import type { HotelChip, PlanRow } from './planTimelineModel'
 import { useMPlanDragReorder } from './useMPlanDragReorder'
 import { useTouchDragBridge } from '../../../../hooks/useTouchDragBridge'
 import { useIsTouch } from '../../../../hooks/useIsTouch'
@@ -56,6 +56,21 @@ export default function MPlanTimeline({ planner, shell }: MPlanTimelineProps) {
   const daySchedule = usePluginDaySchedule(planner.tripId)
   const day = tl.day
   const dayId = day?.id
+  // A stay chip opens the stay, the same way the stay card in the day sheet
+  // does: the editor for members who may edit days, otherwise the hotel's
+  // place. A stay with neither still leads to the day sheet, so the chip
+  // never goes dead (#2210).
+  const openStay = (chip: HotelChip) => {
+    if (!day) return
+    if (canEdit) shell.openSheet('accommodation', { dayId: day.id, accId: chip.accId, from: 'timeline' })
+    else if (chip.placeId != null) planner.handlePlaceClick(chip.placeId)
+    else shell.openSheet('day', { dayId: day.id })
+  }
+  // The icon alone tells check-out from check-in; the accessible name says it.
+  const stayLabel = (chip: HotelChip) => {
+    const kind = chip.variant === 'checkin' ? t('day.checkIn') : chip.variant === 'checkout' ? t('day.checkOut') : t('mobileTrip.stay')
+    return `${kind} · ${chip.name}${chip.time ? ` · ${chip.time.slice(0, 5)}` : ''}`
+  }
   // Mirrors MDaySheet's own label so the pill and the sheet it opens agree.
   const dayLabel = day
     ? day.title || t('planner.dayN', { n: day.day_number || planner.days.indexOf(day) + 1 })
@@ -153,7 +168,14 @@ export default function MPlanTimeline({ planner, shell }: MPlanTimelineProps) {
             // the pill drops to icon-only there rather than saying it twice.
             dayLabel={editing ? '' : dayLabel}
             openLabel={t('day.overview')}
+            // The chip still opens the day sheet, but its accessible name says
+            // WHERE the forecast is for — a roadtrip day is ambiguous otherwise (#2167).
+            weatherLabel={tl.weatherPlaceName
+              ? `${t('day.overview')} · ${t('day.weatherFor', { name: tl.weatherPlaceName })}`
+              : undefined}
             onOpenDay={() => shell.openSheet('day', { dayId: day.id })}
+            onOpenStay={openStay}
+            stayLabel={stayLabel}
           />
         )}
 
@@ -170,7 +192,7 @@ export default function MPlanTimeline({ planner, shell }: MPlanTimelineProps) {
                   <PlaceRow
                     assignment={row.assignment}
                     fullPlace={tl.fullPlaceOf(row.assignment)}
-                    linkedRes={row.linkedRes}
+                    linkedReservations={row.linkedReservations}
                     chrome={chrome}
                     reorder={reorderFor(row.item)}
                     drag={dragFor(row)}
@@ -391,14 +413,20 @@ function EditHeader({ tl, planner, shell }: {
  * (check-out / check-in / stay) and the weather chip.
  *
  * The day pill leads unconditionally. It used to be the accommodation chip that
- * carried this, which left a day without a stay — and, with no weather either,
- * the whole header — with no way into the day sheet at all (#2004).
+ * carried this, which left a day without a stay (and, with no weather either,
+ * the whole header) with no way into the day sheet at all (#2004). Since then
+ * the stay chips have a target of their own: tapping a hotel opens that stay,
+ * not the day (#2210). Only the weather chip still shares the day pill's target.
  */
-function TimelineHeader({ tl, dayLabel, openLabel, onOpenDay }: {
+function TimelineHeader({ tl, dayLabel, openLabel, weatherLabel, onOpenDay, onOpenStay, stayLabel }: {
   tl: MPlanTimelineController
   dayLabel: string
   openLabel: string
+  /** Weather-chip label naming the forecast's anchor place (#2167); falls back to openLabel. */
+  weatherLabel?: string
   onOpenDay: () => void
+  onOpenStay: (chip: HotelChip) => void
+  stayLabel: (chip: HotelChip) => string
 }) {
   const WeatherIcon = weatherIconFor(tl.weather?.main)
   return (
@@ -421,7 +449,8 @@ function TimelineHeader({ tl, dayLabel, openLabel, onOpenDay }: {
           <button
             key={chip.key}
             type="button"
-            onClick={onOpenDay}
+            onClick={() => onOpenStay(chip)}
+            aria-label={stayLabel(chip)}
             className="flex flex-none items-center gap-[5px] whitespace-nowrap rounded-full bg-[color:var(--m-ic)] px-2.5 py-1 font-geist text-[0.6875rem] font-semibold"
           >
             <HotelChipIcon variant={chip.variant} />
@@ -434,7 +463,8 @@ function TimelineHeader({ tl, dayLabel, openLabel, onOpenDay }: {
         <button
           type="button"
           onClick={onOpenDay}
-          aria-label={openLabel}
+          aria-label={weatherLabel || openLabel}
+          title={tl.weatherPlaceName || undefined}
           className="ml-auto flex flex-none items-center gap-1 whitespace-nowrap px-1.5 py-1 text-[0.71875rem] font-semibold"
         >
           <WeatherIcon size={13} strokeWidth={2} />

@@ -4,8 +4,13 @@ import type { User } from '../../types';
 import { MemoriesService } from './memories.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { AddonGuard } from '../addons/addon.guard';
+import { RequireAddon } from '../addons/require-addon.decorator';
+import { ADDON_IDS } from '../../addons';
 import { getClientIp } from '../audit/client-ip';
 import { ImmichSearchDto, ImmichSettingsDto, ImmichTestDto } from './memories.dto';
+import { PhotoProviderGuard } from './photo-provider.guard';
+import { RequirePhotoProvider } from './require-photo-provider.decorator';
 
 /**
  * /api/integrations/memories/immich — Immich connection, browse/search, asset
@@ -19,7 +24,9 @@ import { ImmichSearchDto, ImmichSettingsDto, ImmichTestDto } from './memories.dt
  * The legacy `canAccessTrip` import there is dead code — intentionally not ported.
  */
 @Controller('api/integrations/memories/immich')
-@UseGuards(JwtAuthGuard)
+@UseGuards(AddonGuard, PhotoProviderGuard, JwtAuthGuard)
+@RequireAddon(ADDON_IDS.JOURNEY, 'Journey')
+@RequirePhotoProvider('immich', 'Immich')
 export class ImmichMemoriesController {
   constructor(private readonly memories: MemoriesService) {}
 

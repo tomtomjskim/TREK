@@ -356,6 +356,8 @@ export interface Journey {
   cover_gradient?: string | null;
   cover_image?: string | null;
   status: 'draft' | 'active' | 'completed' | 'archived';
+  /** Draw the linked trips' GPX tracks on this journey's map (#2194). 0 by default. */
+  show_trip_tracks?: number;
   created_at: number;
   updated_at: number;
 }
@@ -380,6 +382,12 @@ export interface JourneyEntry {
   pros_cons?: string | null;
   visibility: 'private' | 'shared' | 'public';
   sort_order: number;
+  /**
+   * 0/1 as the row holds it. Switched on, the entry stays in the journal but
+   * is left out of the route and the figures Studio prints (discussion #2064).
+   * The wire carries a boolean; journey-entry-row.ts is where the two meet.
+   */
+  stats_excluded: number;
   created_at: number;
   updated_at: number;
 }

@@ -196,6 +196,7 @@ const geoStub = vi.hoisted(() => ({
   position: null as GeoPosition | null,
   mode: 'off' as TrackingMode,
   error: null as string | null,
+  errorCode: null as string | null,
   cycleMode: vi.fn(async () => {}),
   setMode: vi.fn((_m: TrackingMode | ((prev: TrackingMode) => TrackingMode)) => {}),
 }))

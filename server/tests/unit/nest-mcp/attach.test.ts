@@ -8,6 +8,7 @@ import {
   Tool,
   type McpAccessPolicy,
   type McpContext,
+  type PromptArgsShape,
 } from '../../../src/nest-mcp';
 import { createAttachHarness, type AttachHarness, type TestCtx } from './harness';
 
@@ -70,6 +71,17 @@ class FixtureMcp {
   @Prompt({ name: 'fixture_prompt', description: 'Prompts.', argsSchema: { topic: z.string() } })
   async fixturePrompt({ topic }: { topic: string }, ctx: TestCtx) {
     return { messages: [{ role: 'user', content: { type: 'text', text: `${topic} for ${ctx.userId}` } }] };
+  }
+
+  // Arguments reach the server as strings; a numeric one is parsed on the way in.
+  @Prompt({ name: 'fixture_count', argsSchema: { count: z.string().regex(/^\d+$/).transform(Number) } })
+  async fixtureCount({ count }: { count: number }, ctx: TestCtx) {
+    return { messages: [{ role: 'user', content: { type: 'text', text: `${typeof count} ${count + 1} for ${ctx.userId}` } }] };
+  }
+
+  @Prompt({ name: 'fixture_bare', argsSchema: {} })
+  async fixtureBare(args: Record<string, never>, ctx: TestCtx) {
+    return { messages: [{ role: 'user', content: { type: 'text', text: `${Object.keys(args).length} args for ${ctx.userId}` } }] };
   }
 }
 
@@ -143,8 +155,8 @@ describe('McpRegistry.attach', () => {
     expect(resources).toEqual(['fixture_doc']);
     const templates = (await harness.client.listResourceTemplates()).resourceTemplates.map((t) => t.name);
     expect(templates).toEqual(['fixture_item']);
-    const prompts = (await harness.client.listPrompts()).prompts.map((p) => p.name);
-    expect(prompts).toEqual(['fixture_prompt']);
+    const prompts = (await harness.client.listPrompts()).prompts.map((p) => p.name).sort();
+    expect(prompts).toEqual(['fixture_bare', 'fixture_count', 'fixture_prompt']);
   });
 
   it('filters declarative access through the policy per mode', async () => {
@@ -198,6 +210,34 @@ describe('McpRegistry.attach', () => {
     harness = await createAttachHarness(buildRegistry(), { userId: 3 });
     const result = await harness.client.getPrompt({ name: 'fixture_prompt', arguments: { topic: 'packing' } });
     expect(result.messages[0]?.content).toMatchObject({ type: 'text', text: 'packing for 3' });
+  });
+
+  it('hands prompt handlers the transformed argument, not the wire string (#2207)', async () => {
+    harness = await createAttachHarness(buildRegistry(), { userId: 3 });
+    const result = await harness.client.getPrompt({ name: 'fixture_count', arguments: { count: '41' } });
+    expect(result.messages[0]?.content).toMatchObject({ type: 'text', text: 'number 42 for 3' });
+    await expect(harness.client.getPrompt({ name: 'fixture_count', arguments: { count: 'many' } }))
+      .rejects.toThrow(/Invalid arguments for prompt fixture_count/);
+  });
+
+  it('serves a prompt with an empty argsSchema to a request that omits arguments', async () => {
+    harness = await createAttachHarness(buildRegistry(), { userId: 3 });
+    const result = await harness.client.getPrompt({ name: 'fixture_bare' });
+    expect(result.messages[0]?.content).toMatchObject({ type: 'text', text: '0 args for 3' });
+    const listed = (await harness.client.listPrompts()).prompts.find((p) => p.name === 'fixture_bare');
+    expect(listed?.arguments).toBeUndefined();
+  });
+
+  it('only admits string-input schemas as prompt arguments', () => {
+    // Compile-time contract: a z.number() argument can never be satisfied over
+    // the wire, so PromptArgsShape refuses it while string, optional string and
+    // string-to-number transforms all pass.
+    type Admits<S> = S extends PromptArgsShape ? true : false;
+    const numberRefused: Admits<{ tripId: z.ZodNumber }> = false;
+    const stringAdmitted: Admits<{ topic: z.ZodString }> = true;
+    const optionalAdmitted: Admits<{ topic: z.ZodOptional<z.ZodString> }> = true;
+    const transformAdmitted: Admits<{ count: z.ZodPipe<z.ZodString, z.ZodTransform<number, string>> }> = true;
+    expect([numberRefused, stringAdmitted, optionalAdmitted, transformAdmitted]).toEqual([false, true, true, true]);
   });
 
   it('ANDs `when` in front of declarative access (both must pass)', async () => {

@@ -3,7 +3,7 @@
  * unknown permissions, native modules, and http:outbound without egress.
  */
 import { describe, it, expect } from 'vitest';
-import { parseManifest, ManifestError } from '../../../src/nest/plugins/install/manifest';
+import { parseManifest, ManifestError, SETTING_FIELD_KEYS } from '../../../src/nest/plugins/install/manifest';
 
 const base = { id: 'flight-tracker', name: 'Flight', version: '1.2.0', type: 'widget', apiVersion: 1 };
 const withApi = (apiVersion: unknown) => ({ ...base, apiVersion, trek: '>=3.2.0 <4.0.0' });
@@ -330,9 +330,19 @@ describe('settings-page actions', () => {
   it('parses actions with label/hint/danger', () => {
     const m = parseManifest({ ...base, actions: [{ key: 'testConnection', label: 'Test connection', hint: 'Pings the API.' }, { key: 'purge', label: 'Purge', danger: true }] });
     expect(m.actions).toEqual([
-      { key: 'testConnection', label: 'Test connection', hint: 'Pings the API.', danger: false },
-      { key: 'purge', label: 'Purge', hint: undefined, danger: true },
+      { key: 'testConnection', label: 'Test connection', hint: 'Pings the API.', danger: false, scope: 'user' },
+      { key: 'purge', label: 'Purge', hint: undefined, danger: true, scope: 'user' },
     ]);
+  });
+
+  it('defaults an action to the user scope, accepts instance, refuses anything else', () => {
+    const m = parseManifest({ ...base, actions: [{ key: 'ping' }, { key: 'purge', scope: 'instance' }, { key: 'me', scope: 'user' }] });
+    expect(m.actions.map((a) => a.scope)).toEqual(['user', 'instance', 'user']);
+    expect(() => parseManifest({ ...base, actions: [{ key: 'x', scope: 'global' }] })).toThrow(/scope must be "user" or "instance"/);
+    // one key, one form — a duplicate across scopes is still a duplicate
+    expect(() => parseManifest({ ...base, actions: [{ key: 'a', scope: 'user' }, { key: 'a', scope: 'instance' }] })).toThrow(/duplicate action/);
+    // the cap counts both scopes
+    expect(() => parseManifest({ ...base, actions: Array.from({ length: 9 }, (_, i) => ({ key: `a${i}`, scope: i % 2 ? 'instance' : 'user' })) })).toThrow(/at most 8/);
   });
 
   it('defaults the label to the key, and bounds label/hint', () => {
@@ -340,6 +350,11 @@ describe('settings-page actions', () => {
     expect(m.actions[0].label.length).toBe(60);
     expect(m.actions[0].hint!.length).toBe(200);
     expect(parseManifest({ ...base, actions: [{ key: 'sync' }] }).actions[0].label).toBe('sync');
+  });
+
+  it('falls back to the key when label is an empty (or whitespace-only) string, not just null/undefined', () => {
+    expect(parseManifest({ ...base, actions: [{ key: 'sync', label: '' }] }).actions[0].label).toBe('sync');
+    expect(parseManifest({ ...base, actions: [{ key: 'sync', label: '   ' }] }).actions[0].label).toBe('sync');
   });
 
   it('rejects a prototype-chain key, a duplicate, a non-array and too many', () => {
@@ -351,5 +366,19 @@ describe('settings-page actions', () => {
 
   it('defaults to no actions', () => {
     expect(parseManifest(base).actions).toEqual([]);
+  });
+});
+
+describe('SETTING_FIELD_KEYS is the attribute set parseSettings reads', () => {
+  // The SDK mirrors this list (plugin-sdk parity test) to warn on an attribute the host
+  // would silently drop — so every key listed here must actually land in the parsed field.
+  it('a field carrying every key round-trips each one', () => {
+    const field: Record<string, unknown> = {
+      key: 'k', label: 'L', input_type: 'select', placeholder: 'P', hint: 'H', required: true, secret: false,
+      scope: 'user', options: ['a'], oauth: { initPath: '/i' }, default: 'a',
+    };
+    expect(Object.keys(field).sort()).toEqual([...SETTING_FIELD_KEYS].sort());
+    const [parsed] = parseManifest({ id: 'x-plugin', name: 'X', version: '1.0.0', type: 'integration', trek: '>=4.0.0 <5.0.0', settings: [field] }).settings;
+    for (const k of SETTING_FIELD_KEYS) expect(parsed[k as keyof typeof parsed], k).toBeDefined();
   });
 });

@@ -11,6 +11,7 @@ import type { User } from '../types';
 import { getApiErrorMessage } from '../types';
 import { clearSignedOut, markSignedOut } from '../utils/signedOut';
 import { forgetStartDestination } from '../utils/startDestination';
+import { forgetServerLanguage } from './settingsStore';
 import { clearAllPluginSessions } from './pluginStore';
 import { useSystemNoticeStore } from './systemNoticeStore.js';
 
@@ -61,8 +62,13 @@ interface AuthState {
   completeMfaLogin: (mfaToken: string, code: string, rememberMe?: boolean) => Promise<AuthResponse>;
   register: (username: string, email: string, password: string, invite_token?: string) => Promise<AuthResponse>;
   logout: () => Promise<void>;
-  /** Pass `{ silent: true }` to refresh the user without toggling global isLoading (avoids unmounting protected routes). */
-  loadUser: (opts?: { silent?: boolean }) => Promise<void>;
+  /**
+   * Pass `{ silent: true }` to refresh the user without toggling global
+   * isLoading. Resolves false only when a newer auth action/logout supersedes
+   * this continuation, so redirecting callers can stop without surfacing an
+   * error.
+   */
+  loadUser: (opts?: { silent?: boolean }) => Promise<boolean>;
   updateMapsKey: (key: string | null) => Promise<void>;
   updateApiKeys: (keys: Record<string, string | null>) => Promise<void>;
   updateProfile: (profileData: Partial<User>) => Promise<void>;
@@ -85,14 +91,51 @@ interface AuthState {
   demoLogin: () => Promise<AuthResponse>;
 }
 
-// Sequence counter to prevent stale loadUser responses from overwriting fresh auth state
+// One generation for every auth continuation. Starting another attempt or
+// logging out invalidates older responses before they can touch state.
 let authSequence = 0;
+let activeAuthRequest: AbortController | null = null;
+
+export class AuthAttemptCancelledError extends Error {
+  constructor() {
+    super('Authentication attempt was cancelled');
+    this.name = 'AuthAttemptCancelledError';
+  }
+}
+
+export function isAuthAttemptCancelled(error: unknown): boolean {
+  return error instanceof AuthAttemptCancelledError
+    || (!!error && typeof error === 'object' && 'name' in error
+      && (error as { name?: unknown }).name === 'AuthAttemptCancelledError');
+}
+
+function beginAuthAttempt() {
+  const seq = ++authSequence;
+  activeAuthRequest?.abort();
+  const request = new AbortController();
+  activeAuthRequest = request;
+
+  return {
+    signal: request.signal,
+    isCurrent: () => seq === authSequence && activeAuthRequest === request && !request.signal.aborted,
+    finish: () => {
+      if (activeAuthRequest === request) activeAuthRequest = null;
+    },
+  };
+}
+
+function cancelAuthAttempts(): void {
+  authSequence++;
+  activeAuthRequest?.abort();
+  activeAuthRequest = null;
+}
 
 /**
  * Mark the session authenticated and point the offline DB at this user's scoped
  * database before any background sync runs, so cached data never crosses users.
  */
-async function onAuthSuccess(userId: number): Promise<void> {
+async function onAuthSuccess(userId: number, isCurrent: () => boolean = () => true): Promise<boolean> {
+  if (!isCurrent()) return false;
   setAuthed(true);
   // Whatever brought them back in - password, SSO, MFA, demo, a restored
   // session - the tab is no longer "just signed out", so the login page may
@@ -101,12 +144,14 @@ async function onAuthSuccess(userId: number): Promise<void> {
   try {
     await reopenForUser(userId);
   } catch (err) {
-    console.error('[auth] failed to open user-scoped offline DB', err);
+    if (isCurrent()) console.error('[auth] failed to open user-scoped offline DB', err);
   }
+  if (!isCurrent()) return false;
   // logout() tears the triggers down, and App's mount effect never runs again in
   // an SPA session, so a second login in the same tab would leave the mutation
   // queue without a flush trigger. Re-registering is a no-op while they are up.
   registerSyncTriggers();
+  return true;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -134,13 +179,14 @@ export const useAuthStore = create<AuthState>()(
       placesEnrichmentEnabled: true,
 
       login: async (email: string, password: string, rememberMe?: boolean) => {
-        authSequence++;
+        const attempt = beginAuthAttempt();
         set({ isLoading: true, error: null });
         try {
-          const data = (await authApi.login({ email, password, remember_me: rememberMe })) as AuthResponse & {
+          const data = (await authApi.login({ email, password, remember_me: rememberMe }, attempt.signal)) as AuthResponse & {
             mfa_required?: boolean;
             mfa_token?: string;
           };
+          if (!attempt.isCurrent()) throw new AuthAttemptCancelledError();
           if (data.mfa_required && data.mfa_token) {
             set({ isLoading: false, error: null });
             return { mfa_required: true as const, mfa_token: data.mfa_token };
@@ -152,7 +198,9 @@ export const useAuthStore = create<AuthState>()(
             isLoading: false,
             error: null,
           });
-          await onAuthSuccess(data.user.id);
+          if (!(await onAuthSuccess(data.user.id, attempt.isCurrent)) || !attempt.isCurrent()) {
+            throw new AuthAttemptCancelledError();
+          }
           connect();
           tripSyncManager.syncAll().catch(console.error);
           if (!data.user?.must_change_password) {
@@ -160,21 +208,25 @@ export const useAuthStore = create<AuthState>()(
           }
           return data as AuthResponse;
         } catch (err: unknown) {
+          if (!attempt.isCurrent() || isAuthAttemptCancelled(err)) throw new AuthAttemptCancelledError();
           const error = getApiErrorMessage(err, 'Login failed');
           set({ isLoading: false, error });
           throw new Error(error);
+        } finally {
+          attempt.finish();
         }
       },
 
       completeMfaLogin: async (mfaToken: string, code: string, rememberMe?: boolean) => {
-        authSequence++;
+        const attempt = beginAuthAttempt();
         set({ isLoading: true, error: null });
         try {
           const data = await authApi.verifyMfaLogin({
             mfa_token: mfaToken,
             code: code.replace(/\s/g, ''),
             remember_me: rememberMe,
-          });
+          }, attempt.signal);
+          if (!attempt.isCurrent()) throw new AuthAttemptCancelledError();
           set({
             user: data.user,
             isAuthenticated: true,
@@ -182,7 +234,9 @@ export const useAuthStore = create<AuthState>()(
             isLoading: false,
             error: null,
           });
-          await onAuthSuccess(data.user.id);
+          if (!(await onAuthSuccess(data.user.id, attempt.isCurrent)) || !attempt.isCurrent()) {
+            throw new AuthAttemptCancelledError();
+          }
           connect();
           tripSyncManager.syncAll().catch(console.error);
           if (!data.user?.must_change_password) {
@@ -190,17 +244,21 @@ export const useAuthStore = create<AuthState>()(
           }
           return data as AuthResponse;
         } catch (err: unknown) {
+          if (!attempt.isCurrent() || isAuthAttemptCancelled(err)) throw new AuthAttemptCancelledError();
           const error = getApiErrorMessage(err, 'Verification failed');
           set({ isLoading: false, error });
           throw new Error(error);
+        } finally {
+          attempt.finish();
         }
       },
 
       register: async (username: string, email: string, password: string, invite_token?: string) => {
-        authSequence++;
+        const attempt = beginAuthAttempt();
         set({ isLoading: true, error: null });
         try {
-          const data = await authApi.register({ username, email, password, invite_token });
+          const data = await authApi.register({ username, email, password, invite_token }, attempt.signal);
+          if (!attempt.isCurrent()) throw new AuthAttemptCancelledError();
           set({
             user: data.user,
             isAuthenticated: true,
@@ -208,26 +266,34 @@ export const useAuthStore = create<AuthState>()(
             isLoading: false,
             error: null,
           });
-          await onAuthSuccess(data.user.id);
+          if (!(await onAuthSuccess(data.user.id, attempt.isCurrent)) || !attempt.isCurrent()) {
+            throw new AuthAttemptCancelledError();
+          }
           connect();
           tripSyncManager.syncAll().catch(console.error);
           useSystemNoticeStore.getState().fetch();
           return data;
         } catch (err: unknown) {
+          if (!attempt.isCurrent() || isAuthAttemptCancelled(err)) throw new AuthAttemptCancelledError();
           const error = getApiErrorMessage(err, 'Registration failed');
           set({ isLoading: false, error });
           throw new Error(error);
+        } finally {
+          attempt.finish();
         }
       },
 
       logout: async () => {
+        // Invalidate every pending loadUser continuation before teardown starts.
+        // Without this, an older /auth/me response can revive a completed logout.
+        cancelAuthAttempts();
         // 1. Gate first so any in-flight flush/syncAll bails before we wipe the DB.
         setAuthed(false);
         // Flagged in the same update that drops the session: clearing isAuthenticated
         // re-renders ProtectedRoute for whatever page is still on screen, and without
         // this it would stamp a ?redirect= back to it — which then beats the user's
         // startup destination on the next login.
-        set({ isAuthenticated: false, loggingOut: true });
+        set({ isAuthenticated: false, loggingOut: true, isLoading: false });
         // The same fact, in the one place that survives ProtectedRoute's stateless
         // <Navigate replace> and a full document load — without it an OIDC-only
         // install silently signs the user straight back in (#2123). Set here rather
@@ -245,8 +311,11 @@ export const useAuthStore = create<AuthState>()(
         // but sessionStorage outlives a logout within the tab.
         clearAllPluginSessions();
         // And the startup-destination mirror, or the next account on this browser
-        // gets bounced into a trip it may not even be able to see.
-        forgetStartDestination();
+      // gets bounced into a trip it may not even be able to see.
+      forgetStartDestination();
+      // Clear the server-language mirror so the next account in this browser
+      // cannot inherit this user's locale.
+      forgetServerLanguage();
         // 4. Tell server to clear the httpOnly cookie (best-effort).
         await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
         // 5. Clear service worker caches containing sensitive data.
@@ -266,11 +335,12 @@ export const useAuthStore = create<AuthState>()(
 
       loadUser: async (opts?: { silent?: boolean }) => {
         const seq = authSequence;
+        const isCurrent = () => seq === authSequence;
         const silent = !!opts?.silent;
         if (!silent) set({ isLoading: true });
         try {
           const data = await authApi.me();
-          if (seq !== authSequence) return; // stale response — a login/register happened meanwhile
+          if (!isCurrent()) return false; // stale response — login/register/logout happened meanwhile
           set({
             user: data.user,
             isAuthenticated: true,
@@ -278,10 +348,11 @@ export const useAuthStore = create<AuthState>()(
             isLoading: false,
             authCheckFailed: false,
           });
-          await onAuthSuccess(data.user.id);
+          if (!(await onAuthSuccess(data.user.id, isCurrent)) || !isCurrent()) return false;
           connect();
+          return true;
         } catch (err: unknown) {
-          if (seq !== authSequence) return; // stale response — ignore
+          if (!isCurrent()) return false; // stale response — ignore
           const status =
             err && typeof err === 'object' && 'response' in err
               ? (err as { response?: { status?: number } }).response?.status
@@ -305,6 +376,7 @@ export const useAuthStore = create<AuthState>()(
             // page that looks like the user's trips were lost. #1283
             set({ isLoading: false, authCheckFailed: true });
           }
+          return true;
         }
       },
 
@@ -380,10 +452,11 @@ export const useAuthStore = create<AuthState>()(
       setPlacesEnrichmentEnabled: (val: boolean) => set({ placesEnrichEnabled: val, placesEnrichmentEnabled: val }),
 
       demoLogin: async () => {
-        authSequence++;
+        const attempt = beginAuthAttempt();
         set({ isLoading: true, error: null });
         try {
-          const data = await authApi.demoLogin();
+          const data = await authApi.demoLogin(attempt.signal);
+          if (!attempt.isCurrent()) throw new AuthAttemptCancelledError();
           set({
             user: data.user,
             isAuthenticated: true,
@@ -392,13 +465,18 @@ export const useAuthStore = create<AuthState>()(
             demoMode: true,
             error: null,
           });
-          await onAuthSuccess(data.user.id);
+          if (!(await onAuthSuccess(data.user.id, attempt.isCurrent)) || !attempt.isCurrent()) {
+            throw new AuthAttemptCancelledError();
+          }
           connect();
           return data;
         } catch (err: unknown) {
+          if (!attempt.isCurrent() || isAuthAttemptCancelled(err)) throw new AuthAttemptCancelledError();
           const error = getApiErrorMessage(err, 'Demo login failed');
           set({ isLoading: false, error });
           throw new Error(error);
+        } finally {
+          attempt.finish();
         }
       },
     }),

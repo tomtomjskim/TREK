@@ -21,12 +21,49 @@ export interface ManifestSettingField {
   scope?: 'instance' | 'user';
   options?: Array<string | number | { value: string | number; label?: string }>;
   oauth?: { initPath?: string; callbackPath?: string };
+  /** The field's value wherever nobody set one: the settings form pre-fills it AND the
+   * runtime resolves it (`ctx.config` / `ctx.settings.get()`), so the plugin works before
+   * anyone opens the form. Satisfies `required`. Not accepted on a `secret` field (the
+   * manifest is public); must be a boolean for a `checkbox` and one of `options` when
+   * those are declared. */
+  default?: string | number | boolean;
+}
+
+/** Every attribute a settings-field object may carry — the host silently drops anything else.
+ *  Mirrors `SETTING_FIELD_KEYS` in the host's install/manifest.ts (parity-tested in
+ *  test/permissions-parity.test.ts); change both together. */
+export const SETTING_FIELD_KEYS = [
+  'key', 'label', 'input_type', 'placeholder', 'hint', 'required', 'secret', 'scope', 'options', 'oauth', 'default',
+] as const;
+/**
+ * The `default`s a manifest declares for one settings scope, keyed by field — the
+ * host's effective value for any field nobody set. `trek-plugin dev` seeds `ctx.config`
+ * (instance) and `ctx.settings.get()` (user) from this so dev matches production.
+ * Secrets are skipped even if present (the host never resolves a secret from a default).
+ */
+export function settingDefaults(manifest: unknown, scope: 'instance' | 'user'): Record<string, string | number | boolean> {
+  const settings = (manifest as { settings?: unknown } | null)?.settings;
+  const out: Record<string, string | number | boolean> = {};
+  if (!Array.isArray(settings)) return out;
+  for (const s of settings as unknown[]) {
+    if (!s || typeof s !== 'object') continue;
+    const f = s as Record<string, unknown>;
+    if (typeof f.key !== 'string' || !f.key || f.secret === true) continue;
+    if ((f.scope === 'user' ? 'user' : 'instance') !== scope) continue;
+    const d = f.default;
+    if (typeof d === 'string' || typeof d === 'number' || typeof d === 'boolean') out[f.key] = d;
+  }
+  return out;
 }
 export interface ManifestAction {
   key: string;
   label?: string;
   hint?: string;
   danger?: boolean;
+  /** Which settings form renders the button: `'user'` (default) on the user Settings
+   * tab, run as the clicking user; `'instance'` in the admin instance-settings dialog,
+   * run as the clicking admin. Unlike settings fields, the default is `'user'`. */
+  scope?: 'user' | 'instance';
 }
 export interface ManifestCapabilities {
   settingsUi?: boolean;
@@ -380,6 +417,23 @@ export function validateManifest(raw: unknown): ValidationResult {
           }
         }
       }
+      if (s.default !== undefined) {
+        const d = s.default;
+        if (typeof d !== 'string' && typeof d !== 'number' && typeof d !== 'boolean') {
+          errors.push(`settings["${key}"].default must be a string, number or boolean`);
+        } else if (s.secret === true) {
+          errors.push(`settings["${key}"].default is not allowed on a secret field (the manifest is public — it would ship the secret in plaintext)`);
+        } else if (s.input_type === 'checkbox' && typeof d !== 'boolean') {
+          errors.push(`settings["${key}"].default must be a boolean for a checkbox field`);
+        } else if (Array.isArray(s.options) && s.options.length > 0) {
+          const values = (s.options as unknown[]).map((o) =>
+            o && typeof o === 'object' ? String((o as { value?: unknown }).value) : String(o),
+          );
+          if (!values.includes(String(d))) {
+            errors.push(`settings["${key}"].default must be one of the declared options (${values.join(', ')})`);
+          }
+        }
+      }
     }
   }
   // Settings-page action buttons ("Test connection"). Keys share the settings-key rules.
@@ -396,6 +450,9 @@ export function validateManifest(raw: unknown): ValidationResult {
         if (seen.has(key)) errors.push(`duplicate action "${key}"`);
         seen.add(key);
         if (a.label !== undefined && typeof a.label !== 'string') errors.push(`action "${key}" label must be a string`);
+        if (a.scope !== undefined && a.scope !== 'user' && a.scope !== 'instance') {
+          errors.push(`action "${key}".scope must be "user" or "instance"`);
+        }
       }
     }
   }

@@ -166,8 +166,8 @@ describe('planTimelineModel — buildPlanRows', () => {
       merged: [placeItem(museum), placeItem(park)], reservations: [dinner], routeSegments: [], dayId: 2,
     })
     const [first, second] = rows.filter(r => r.kind === 'place')
-    expect(first.kind === 'place' && first.linkedRes).toBe(dinner)
-    expect(second.kind === 'place' && second.linkedRes).toBeNull()
+    expect(first.kind === 'place' && first.linkedReservations[0]).toBe(dinner)
+    expect(second.kind === 'place' && second.linkedReservations.length === 0).toBe(true)
   })
 
   it('FE-MOB-PTLM-014: keys a synthetic leg row by its leg index', () => {
@@ -259,16 +259,16 @@ describe('planTimelineModel — buildPlanRows', () => {
 })
 
 describe('planTimelineModel — hotel chips and legs', () => {
-  it('FE-MOB-PTLM-022: orders check-out before check-in before an ongoing stay', () => {
+  it('FE-MOB-PTLM-022: orders check-out before check-in before an ongoing stay, each chip naming its stay (#2210)', () => {
     const chips = hotelChipsForDay(DAY2, DAYS, [
       accommodation({ id: 1, start_day_id: 1, end_day_id: 3, place_name: 'Long Stay' }),
-      accommodation({ id: 2, start_day_id: 2, end_day_id: 3, place_name: 'New Hotel', check_in: '15:00' }),
+      accommodation({ id: 2, start_day_id: 2, end_day_id: 3, place_name: 'New Hotel', check_in: '15:00', place_id: 102 }),
       accommodation({ id: 3, start_day_id: 1, end_day_id: 2, place_name: 'Old Hotel', check_out: '11:00' }),
     ])
     expect(chips).toEqual([
-      { key: 'out-3', variant: 'checkout', name: 'Old Hotel', time: '11:00' },
-      { key: 'in-2', variant: 'checkin', name: 'New Hotel', time: '15:00' },
-      { key: 'stay-1', variant: 'stay', name: 'Long Stay', time: null },
+      { key: 'out-3', variant: 'checkout', name: 'Old Hotel', time: '11:00', accId: 3, placeId: null },
+      { key: 'in-2', variant: 'checkin', name: 'New Hotel', time: '15:00', accId: 2, placeId: 102 },
+      { key: 'stay-1', variant: 'stay', name: 'Long Stay', time: null, accId: 1, placeId: null },
     ])
   })
 
@@ -277,7 +277,7 @@ describe('planTimelineModel — hotel chips and legs', () => {
       accommodation({ id: 4, place_name: null, reservation_title: 'Airbnb Wieden' }),
       accommodation({ id: 5, place_name: null, reservation_title: null }),
     ])
-    expect(chips).toEqual([{ key: 'stay-4', variant: 'stay', name: 'Airbnb Wieden', time: null }])
+    expect(chips).toEqual([{ key: 'stay-4', variant: 'stay', name: 'Airbnb Wieden', time: null, accId: 4, placeId: null }])
   })
 
   it('FE-MOB-PTLM-042: leaves the chip time empty when the stay has no check-in or check-out', () => {

@@ -25,12 +25,14 @@ import { ImmichPhotoProvider } from './providers/immich.provider';
 import { SynologyPhotoProvider } from './providers/synology.provider';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { StorageModule } from '../storage/storage.module';
+import { PhotoProviderGuard } from './photo-provider.guard';
 
 /**
  * Memories (photo-providers) domain — mounted at /api/integrations/memories.
  *
- * No module-level addon gate: enablement is per-provider-row inside the
- * services, exactly as the legacy mount had it. TrekPhotosModule supplies the
+ * No blanket module-level gate: the provider controllers declare their own
+ * Journey + provider-row guards, while the unified trip-side service keeps a
+ * second fail-closed check for non-HTTP callers. TrekPhotosModule supplies the
  * trek_photos repository — storage lives there, provider dispatch here.
  *
  * RealtimeModule is imported explicitly even though it is @Global: an e2e
@@ -50,6 +52,7 @@ import { StorageModule } from '../storage/storage.module';
   imports: [NotificationsModule, AddonsModule, AuditModule, TrekPhotosModule, RealtimeModule, SchedulingModule, StorageModule],
   controllers: [UnifiedMemoriesController, ImmichMemoriesController, SynologyMemoriesController],
   providers: [
+    PhotoProviderGuard,
     MemoriesService,
     MemoriesAccessService,
     ImmichService,

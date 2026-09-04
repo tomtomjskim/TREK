@@ -5,6 +5,7 @@ import {
   demoDenied, errorResult, ok,
 } from '../../nest-mcp';
 import { McpToolGuardsService } from '../mcp-shared/mcp-tool-guards.service';
+import { tripIdPromptArg } from '../mcp-shared/prompt-args';
 import { z } from 'zod';
 import { AuthService } from '../auth/auth.service';
 import { CalendarService } from '../calendar/calendar.service';
@@ -579,7 +580,7 @@ export class TripsMcp {
     title: 'Trip Summary',
     description: 'Load a full summary of a trip for context before planning or modifications',
     argsSchema: {
-      tripId: z.number().int().positive().describe('Trip ID to summarize'),
+      tripId: tripIdPromptArg.describe('Trip ID to summarize'),
     },
   })
   async tripSummaryPrompt({ tripId }: { tripId: number }, ctx: McpContext) {

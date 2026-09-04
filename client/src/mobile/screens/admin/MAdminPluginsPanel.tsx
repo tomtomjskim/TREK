@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import PluginIcon from '../../../components/shared/PluginIcon'
 import { adminApi } from '../../../api/client'
+import { useInstanceSettings } from '../../../components/Admin/useInstanceSettings'
 import { usePluginStore } from '../../../store/pluginStore'
 import { useTranslation } from '../../../i18n'
 import { useToast } from '../../../components/shared/Toast'
@@ -51,6 +52,12 @@ interface PluginRow {
   operatorEgress?: boolean
   /** How many hosts the admin has added — 0 means the plugin can't reach anything yet. */
   egressHostCount?: number
+  /** How many `scope:'instance'` settings fields the plugin declares — gates the
+   * "Instance settings" sheet action without a per-plugin fetch. */
+  instanceSettingsCount?: number
+  /** How many `scope:'instance'` actions the plugin declares — a plugin with actions
+   * but no settings fields still needs the sheet action to run them. */
+  instanceActionsCount?: number
   dependencies?: PluginDependencies
   dependencyStatus?: DependencyStatus
   dependencyIssues?: DependencyIssues
@@ -418,6 +425,8 @@ export default function MAdminPluginsPanel() {
   const [egressDraft, setEgressDraft] = useState('')
   const [egressSaving, setEgressSaving] = useState(false)
   const [egressError, setEgressError] = useState('')
+  // The admin-owned scope:'instance' settings sheet — shared logic with the desktop shell.
+  const settings = useInstanceSettings()
   const [confirmUninstall, setConfirmUninstall] = useState<PluginRow | null>(null)
   // The version picker for an INSTALLED plugin ("Change version…"); versions land async
   // from the registry detail endpoint, which computes each version's compat verdict.
@@ -583,6 +592,11 @@ export default function MAdminPluginsPanel() {
     } finally {
       setEgressSaving(false)
     }
+  }
+
+  const openInstanceSettings = (p: { id: string; status: string }) => {
+    setMenu(null)
+    settings.open(p.id, p.status === 'active')
   }
 
   const openErrors = (id: string) => {
@@ -961,6 +975,7 @@ export default function MAdminPluginsPanel() {
           onRestart={() => restart(rowMenuPlugin.id)}
           onErrors={() => openErrors(rowMenuPlugin.id)}
           onEgress={() => openEgress(rowMenuPlugin.id)}
+          onSettings={() => openInstanceSettings(rowMenuPlugin)}
           onChangeVersion={() => openVersionPicker(rowMenuPlugin)}
           onUninstall={() => { setMenu(null); setConfirmUninstall(rowMenuPlugin) }} />
       )}
@@ -1074,6 +1089,93 @@ export default function MAdminPluginsPanel() {
         </MSheet>
       )}
 
+      {/* Instance-wide settings (the admin-owned scope:'instance' fields) */}
+      {settings.form && (
+        <MSheet open onClose={settings.close} variant="bottom" material="opaque" ariaLabel={t('admin.plugins.instanceSettings')}>
+          <MAdminSheetFrame
+            title={<span className="flex items-center gap-2"><SlidersHorizontal size={15} /> {settings.form.id} — {t('admin.plugins.instanceSettings')}</span>}
+            onClose={settings.close}
+          >
+            <div className="space-y-4">
+              {settings.form.fields.map(f => (
+                <label key={f.key} className="block">
+                  <span className="mb-1 block text-sm font-medium text-m-ink">
+                    {f.label || f.key}{f.required && <span className="text-[color:var(--m-st-danger)]"> *</span>}
+                  </span>
+                  {f.input_type === 'checkbox' ? (
+                    <MToggle
+                      checked={settings.form.values[f.key] === true}
+                      onChange={on => settings.setValue(f.key, on)}
+                      ariaLabel={f.label || f.key}
+                    />
+                  ) : f.input_type === 'select' && f.options ? (
+                    <select
+                      value={String(settings.form.values[f.key] ?? '')}
+                      onChange={e => settings.setValue(f.key, e.target.value)}
+                      className="h-[42px] w-full rounded-xl border border-[color:var(--m-rowbr)] bg-[color:var(--m-ic)] px-3 text-[0.84375rem] text-m-ink outline-none focus:border-[color:var(--m-faint)]"
+                    >
+                      <option value="">—</option>
+                      {f.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      type={f.secret ? 'password' : (f.input_type === 'number' ? 'number' : 'text')}
+                      value={String(settings.form.values[f.key] ?? '')}
+                      placeholder={f.placeholder || ''}
+                      autoComplete={f.secret ? 'new-password' : 'off'}
+                      onChange={e => settings.setValue(f.key, e.target.value)}
+                      className="h-[42px] w-full rounded-xl border border-[color:var(--m-rowbr)] bg-[color:var(--m-ic)] px-3 text-[0.84375rem] text-m-ink outline-none placeholder:text-m-faint focus:border-[color:var(--m-faint)]"
+                    />
+                  )}
+                  {f.hint && <span className="mt-1 block font-geist text-[0.625rem] text-m-faint">{f.hint}</span>}
+                </label>
+              ))}
+              {(() => {
+                const form = settings.form
+                if (!form || form.actions.length === 0) return null
+                return (
+                  <div className="border-t border-[color:var(--m-rowbr)] pt-4">
+                    <span className="mb-2 block font-geist text-[0.625rem] font-bold uppercase tracking-wide text-m-faint">
+                      {t('admin.plugins.actions')}
+                    </span>
+                    {!form.active && (
+                      <p className="mb-2 font-geist text-[0.625rem] text-m-faint">{t('admin.plugins.actions.inactive')}</p>
+                    )}
+                    <div className="flex flex-col gap-2">
+                      {form.actions.map(a => {
+                        const res = settings.actionResult[a.key]
+                        return (
+                          <div key={a.key} className="flex flex-wrap items-center gap-2">
+                            <MAdminButton
+                              variant={a.danger ? 'danger' : 'ghost'}
+                              busy={settings.runningAction === a.key}
+                              disabled={!form.active || settings.runningAction !== null || settings.saving}
+                              onClick={() => settings.runAction(a)}
+                            >
+                              {a.label}
+                            </MAdminButton>
+                            {a.hint && <span className="font-geist text-[0.625rem] text-m-faint">{a.hint}</span>}
+                            {res && (
+                              <span aria-live="polite" className={`text-[0.625rem] font-bold ${res.ok ? 'text-[color:var(--m-st-confirmed)]' : 'text-[color:var(--m-st-danger)]'}`}>
+                                {res.message || (res.ok ? t('common.success') : t('common.error'))}
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })()}
+              {settings.error && <p className="text-[0.6875rem] text-[color:var(--m-st-danger)]">{settings.error}</p>}
+              <MAdminButton disabled={settings.saving || settings.runningAction !== null} onClick={() => void settings.save()} className="h-[42px] w-full">
+                {t('common.save')}
+              </MAdminButton>
+            </div>
+          </MAdminSheetFrame>
+        </MSheet>
+      )}
+
       {/* Uninstall confirm */}
       <MConfirmSheet
         open={!!confirmUninstall}
@@ -1085,6 +1187,18 @@ export default function MAdminPluginsPanel() {
         title={t('admin.plugins.uninstallTitle')}
         message={t('admin.plugins.uninstallBody')}
         confirmLabel={t('common.delete')}
+        cancelLabel={t('common.cancel')}
+        danger
+      />
+
+      {/* Instance action confirm */}
+      <MConfirmSheet
+        open={settings.pendingAction !== null}
+        onClose={settings.cancelPendingAction}
+        onConfirm={settings.confirmPendingAction}
+        title={settings.pendingAction?.label ?? ''}
+        message={t('admin.plugins.actions.confirm')}
+        confirmLabel={settings.pendingAction?.label}
         cancelLabel={t('common.cancel')}
         danger
       />
@@ -1334,9 +1448,9 @@ function InstalledRow({ p, t, busy, hasUpdate, latestVer, newerIncompatible, blo
 }
 
 // Row ⋯ action sheet — the desktop portal menu re-expressed as a bottom sheet.
-function RowActionsSheet({ p, t, onClose, onRestart, onErrors, onEgress, onChangeVersion, onUninstall }: {
+function RowActionsSheet({ p, t, onClose, onRestart, onErrors, onEgress, onSettings, onChangeVersion, onUninstall }: {
   p: PluginRow; t: T; onClose: () => void
-  onRestart: () => void; onErrors: () => void; onEgress: () => void; onChangeVersion: () => void; onUninstall: () => void
+  onRestart: () => void; onErrors: () => void; onEgress: () => void; onSettings: () => void; onChangeVersion: () => void; onUninstall: () => void
 }) {
   const linkable = p.source_repo && p.source_repo !== 'local:upload' && p.source_repo !== 'local:link'
   const rowClass = 'flex w-full items-center gap-2.5 rounded-xl px-3 py-3 text-left text-[0.8125rem] font-semibold text-m-ink'
@@ -1347,8 +1461,18 @@ function RowActionsSheet({ p, t, onClose, onRestart, onErrors, onEgress, onChang
           {p.enabled === 1 && (
             <button type="button" className={rowClass} onClick={onRestart}><RotateCw size={16} /> {t('admin.plugins.restart')}</button>
           )}
+          {/* A plugin gets the action if it declares scope:'instance' fields OR actions —
+              an action-only plugin still needs the sheet to run them. */}
+          {((p.instanceSettingsCount ?? 0) > 0 || (p.instanceActionsCount ?? 0) > 0) && (
+            <button type="button" className={rowClass} onClick={onSettings}><SlidersHorizontal size={16} /> {t('admin.plugins.instanceSettings')}</button>
+          )}
           <button type="button" className={rowClass} onClick={onErrors}><Bug size={16} /> {t('admin.plugins.viewErrors')}</button>
-          <button type="button" className={rowClass} onClick={onEgress}><Globe size={16} /> {t('admin.plugins.allowedHosts')}</button>
+          {/* Only a plugin that DECLARED operatorEgress gets the action — an admin must
+              never be invited to widen egress for a plugin that didn't ask for it
+              (same rule the row's egress chip follows). */}
+          {p.operatorEgress && (
+            <button type="button" className={rowClass} onClick={onEgress}><Globe size={16} /> {t('admin.plugins.allowedHosts')}</button>
+          )}
           {/* Registry plugins only — a sideload/dev-link has no registry versions to pick from. */}
           {isRegistrySourced(p.source_repo) && (
             <button type="button" className={rowClass} onClick={onChangeVersion}><History size={16} /> {t('admin.plugins.changeVersion')}</button>
@@ -1472,6 +1596,8 @@ function RegistryList({ items, onInstall, onOpenDetail, busy, t, installedIds, f
         const offer = installOffer(item, t)
         return (
           <div key={item.id} role="button" tabIndex={0} onClick={() => onOpenDetail(item)}
+            // Same press-scale opt-out as the desktop Discover card (#2158).
+            data-no-press
             onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenDetail(item) } }}
             className="overflow-hidden rounded-[18px] border border-[color:var(--m-rowbr)] bg-[color:var(--m-sheetop)]">
             <div className="relative">
@@ -1784,7 +1910,7 @@ function SignatureBlockSheet({ data, entry, busy, t, onRetrust, onClose }: {
 
   return (
     <MSheet open onClose={onClose} variant="card" material="opaque" ariaLabel={t('admin.plugins.sig.title', { name: data.subject.name })}>
-      <div className="p-[18px]">
+      <div className="flex-none px-[18px] pt-[18px]">
         <div className="flex items-start gap-3">
           <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${CHIP_PENDING}`}><ShieldAlert size={18} /></div>
           <div>
@@ -1792,30 +1918,30 @@ function SignatureBlockSheet({ data, entry, busy, t, onRetrust, onClose }: {
             <p className="mt-1 text-xs text-m-muted">{t(bodyKey as never)}</p>
           </div>
         </div>
-        <div className="mt-4 space-y-4">
-          {/* Fingerprints, not full keys: these exist to be COMPARED by a human — read the
-              new one back to the author over the phone. The full key travels in the request. */}
-          {canRetrust && (
-            <div className="space-y-2">
-              <KeyRow label={t('admin.plugins.sig.pinnedKey')} value={data.subject.keyFingerprint ?? '—'} />
-              <KeyRow label={t('admin.plugins.sig.newKey')} value={fingerprint(newKey) ?? '—'} highlight />
-              <p className="pt-1 text-[11.5px] leading-relaxed text-m-muted">{t('admin.plugins.sig.confirmOutOfBand')}</p>
-            </div>
-          )}
-          {!canRetrust && data.detail && (
-            <p className="break-all rounded-lg bg-[color:var(--m-ic)] px-3 py-2 font-mono text-xs text-m-faint">{data.detail}</p>
-          )}
-        </div>
-        <div className="mt-5 flex items-center justify-end gap-2">
-          <MAdminButton variant="ghost" onClick={onClose}>
-            {offerRetrust ? t('admin.plugins.sig.cancel') : t('common.close')}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-[18px] py-4 space-y-4">
+        {/* Fingerprints, not full keys: these exist to be COMPARED by a human — read the
+            new one back to the author over the phone. The full key travels in the request. */}
+        {canRetrust && (
+          <div className="space-y-2">
+            <KeyRow label={t('admin.plugins.sig.pinnedKey')} value={data.subject.keyFingerprint ?? '—'} />
+            <KeyRow label={t('admin.plugins.sig.newKey')} value={fingerprint(newKey) ?? '—'} highlight />
+            <p className="pt-1 text-[11.5px] leading-relaxed text-m-muted">{t('admin.plugins.sig.confirmOutOfBand')}</p>
+          </div>
+        )}
+        {!canRetrust && data.detail && (
+          <p className="break-all rounded-lg bg-[color:var(--m-ic)] px-3 py-2 font-mono text-xs text-m-faint">{data.detail}</p>
+        )}
+      </div>
+      <div className="flex-none px-[18px] pb-[18px] flex items-center justify-end gap-2">
+        <MAdminButton variant="ghost" onClick={onClose}>
+          {offerRetrust ? t('admin.plugins.sig.cancel') : t('common.close')}
+        </MAdminButton>
+        {offerRetrust && (
+          <MAdminButton variant="danger" busy={busy} onClick={() => onRetrust(version, newKey)}>
+            {t('admin.plugins.sig.retrustConfirm')}
           </MAdminButton>
-          {offerRetrust && (
-            <MAdminButton variant="danger" busy={busy} onClick={() => onRetrust(version, newKey)}>
-              {t('admin.plugins.sig.retrustConfirm')}
-            </MAdminButton>
-          )}
-        </div>
+        )}
       </div>
     </MSheet>
   )
@@ -1846,7 +1972,7 @@ function UpdateConsentSheet({ data, unsigned, t, onApprove, onLater }: {
 }) {
   return (
     <MSheet open onClose={onLater} variant="card" material="opaque" ariaLabel={t('admin.plugins.updateConsentTitle')}>
-      <div className="p-[18px]">
+      <div className="flex-none px-[18px] pt-[18px]">
         <div className="flex items-start gap-3">
           <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${CHIP_PENDING}`}><ShieldCheck size={18} /></div>
           <div>
@@ -1854,39 +1980,39 @@ function UpdateConsentSheet({ data, unsigned, t, onApprove, onLater }: {
             <p className="mt-1 text-xs text-m-muted">{t('admin.plugins.updateConsentBody', { name: data.plugin.name, version: data.version })}</p>
           </div>
         </div>
-        <div className="mt-4 space-y-4">
-          {/* The admin is about to widen what this code may do — so say, right here, that
-              nothing ties this code to its author. One line, no checkbox, no extra click:
-              this informs, it does not block. */}
-          {unsigned && (
-            <p className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${CHIP_PENDING}`}>
-              <ShieldAlert size={13} className="mt-0.5 shrink-0" />
-              <span>{t('admin.plugins.sig.consentUnsigned')}</span>
-            </p>
-          )}
-          {data.newPermissions.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-m-muted">{t('admin.plugins.updateNewPermissions')}</h4>
-              <ul className="mt-2 space-y-1.5">
-                {data.newPermissions.map(perm => (
-                  <li key={perm} className="flex items-start gap-2 text-xs text-m-muted"><Check size={13} className="mt-0.5 shrink-0 text-[color:var(--m-st-pending)]" /><PermLabel perm={perm} t={t} /></li>
-                ))}
-              </ul>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-[18px] py-4 space-y-4">
+        {/* The admin is about to widen what this code may do — so say, right here, that
+            nothing ties this code to its author. One line, no checkbox, no extra click:
+            this informs, it does not block. */}
+        {unsigned && (
+          <p className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-xs ${CHIP_PENDING}`}>
+            <ShieldAlert size={13} className="mt-0.5 shrink-0" />
+            <span>{t('admin.plugins.sig.consentUnsigned')}</span>
+          </p>
+        )}
+        {data.newPermissions.length > 0 && (
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-m-muted">{t('admin.plugins.updateNewPermissions')}</h4>
+            <ul className="mt-2 space-y-1.5">
+              {data.newPermissions.map(perm => (
+                <li key={perm} className="flex items-start gap-2 text-xs text-m-muted"><Check size={13} className="mt-0.5 shrink-0 text-[color:var(--m-st-pending)]" /><PermLabel perm={perm} t={t} /></li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {data.newEgress.length > 0 && (
+          <div>
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-m-muted">{t('admin.plugins.updateNewEgress')}</h4>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {data.newEgress.map(host => <code key={host} className="rounded bg-[color:var(--m-ic)] px-1.5 py-0.5 font-mono text-[11px] text-m-muted">{host}</code>)}
             </div>
-          )}
-          {data.newEgress.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-m-muted">{t('admin.plugins.updateNewEgress')}</h4>
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {data.newEgress.map(host => <code key={host} className="rounded bg-[color:var(--m-ic)] px-1.5 py-0.5 font-mono text-[11px] text-m-muted">{host}</code>)}
-              </div>
-            </div>
-          )}
-        </div>
-        <div className="mt-5 flex items-center justify-end gap-2">
-          <MAdminButton variant="ghost" onClick={onLater}>{t('admin.plugins.updateLater')}</MAdminButton>
-          <MAdminButton onClick={onApprove}>{t('admin.plugins.updateApprove')}</MAdminButton>
-        </div>
+          </div>
+        )}
+      </div>
+      <div className="flex-none px-[18px] pb-[18px] flex items-center justify-end gap-2">
+        <MAdminButton variant="ghost" onClick={onLater}>{t('admin.plugins.updateLater')}</MAdminButton>
+        <MAdminButton onClick={onApprove}>{t('admin.plugins.updateApprove')}</MAdminButton>
       </div>
     </MSheet>
   )
@@ -1906,7 +2032,7 @@ function DependencyResolveSheet({ data, t, busy, installedIds, onDownload, onClo
   ]
   return (
     <MSheet open onClose={onClose} variant="card" material="opaque" ariaLabel={t('admin.plugins.dep.resolveTitle')}>
-      <div className="p-[18px]">
+      <div className="flex-none px-[18px] pt-[18px]">
         <div className="flex items-start gap-3">
           <div className={`grid h-9 w-9 shrink-0 place-items-center rounded-lg ${CHIP_PENDING}`}><Puzzle size={18} /></div>
           <div>
@@ -1914,30 +2040,30 @@ function DependencyResolveSheet({ data, t, busy, installedIds, onDownload, onClo
             <p className="mt-1 text-xs text-m-muted">{t('admin.plugins.dep.resolveBody', { name: data.plugin.name })}</p>
           </div>
         </div>
-        <div className="mt-4 space-y-2.5">
-          {rows.map(r => (
-            <div key={r.id} className="flex items-center gap-3 rounded-xl border border-[color:var(--m-rowbr)] bg-[color:var(--m-ic)] p-3">
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-[13px] font-semibold text-m-ink">{r.id}</div>
-                <div className="mt-0.5 text-[11.5px] text-m-muted">
-                  {r.installed
-                    ? t('admin.plugins.dep.mismatch', { wanted: r.constraint, installed: r.installed })
-                    : t('admin.plugins.dep.requires', { version: r.constraint })}
-                </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-[18px] py-4 space-y-2.5">
+        {rows.map(r => (
+          <div key={r.id} className="flex items-center gap-3 rounded-xl border border-[color:var(--m-rowbr)] bg-[color:var(--m-ic)] p-3">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-semibold text-m-ink">{r.id}</div>
+              <div className="mt-0.5 text-[11.5px] text-m-muted">
+                {r.installed
+                  ? t('admin.plugins.dep.mismatch', { wanted: r.constraint, installed: r.installed })
+                  : t('admin.plugins.dep.requires', { version: r.constraint })}
               </div>
-              <button type="button" onClick={() => onDownload(r.id, r.constraint)} disabled={busy}
-                className={`shrink-0 ${ACT_PILL}`}>
-                <Download size={13} /> {r.installed ? t('admin.plugins.dep.update') : t('admin.plugins.dep.download')}
-              </button>
             </div>
-          ))}
-          {rows.some(r => !installedIds.has(r.id)) && (
-            <p className="pt-1 text-[11.5px] text-m-faint">{t('admin.plugins.dep.resolveHint')}</p>
-          )}
-        </div>
-        <div className="mt-5 flex items-center justify-end">
-          <MAdminButton variant="ghost" onClick={onClose}>{t('common.cancel')}</MAdminButton>
-        </div>
+            <button type="button" onClick={() => onDownload(r.id, r.constraint)} disabled={busy}
+              className={`shrink-0 ${ACT_PILL}`}>
+              <Download size={13} /> {r.installed ? t('admin.plugins.dep.update') : t('admin.plugins.dep.download')}
+            </button>
+          </div>
+        ))}
+        {rows.some(r => !installedIds.has(r.id)) && (
+          <p className="pt-1 text-[11.5px] text-m-faint">{t('admin.plugins.dep.resolveHint')}</p>
+        )}
+      </div>
+      <div className="flex-none px-[18px] pb-[18px] flex items-center justify-end">
+        <MAdminButton variant="ghost" onClick={onClose}>{t('common.cancel')}</MAdminButton>
       </div>
     </MSheet>
   )

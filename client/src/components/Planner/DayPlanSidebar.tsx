@@ -5,7 +5,7 @@ declare global { interface Window { __dragData: DragDataPayload | null } }
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react'
 import { avatarSrc } from '../../utils/avatarSrc'
 import { safeHttpUrl } from '../../utils/safeUrl'
-import { ChevronDown, ChevronRight, ChevronUp, Compass, Navigation, RotateCcw, ExternalLink, Clock, Pencil, GripVertical, Ticket, Plus, FileText, Trash2, Car, Lock, Hotel, Footprints, Route as RouteIcon, Bookmark, TramFront, Zap } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronUp, Compass, Navigation, RotateCcw, ExternalLink, Clock, Pencil, GripVertical, Ticket, Plus, FileText, Trash2, Car, Lock, Hotel, Footprints, Route as RouteIcon, Bookmark, StickyNote, TramFront, Zap } from 'lucide-react'
 import { type PickedPlace } from './TransitSearchPanel'
 import { assignmentsApi, reservationsApi, daysApi } from '../../api/client'
 import { calculateRouteWithLegs, optimizeRoute, generateGoogleMapsUrl, generateCoMapsUrl, type NamedWaypoint } from '../Map/RouteCalculator'
@@ -30,7 +30,8 @@ import { useTranslation } from '../../i18n'
 import { isDayInAccommodationRange, getAccommodationAnchors, getDayBookendHotels, shouldDrawMorningLeg, shouldDrawEveningLeg, type CarrierEdge } from '../../utils/dayOrder'
 import {
   TRANSPORT_TYPES, parseTimeToMinutes, getSpanPhase, hidesOnMiddleDay, getDisplayTimeForDay, getTransportRouteEndpoints,
-  getTransportForDay as _getTransportForDay, getMergedItems as _getMergedItems, isCarrierTransport,
+  getTransportForDay as _getTransportForDay, getMergedItems as _getMergedItems, isCarrierTransport, hasCarrierEndpointOnDay,
+  getAssignmentReservations,
   type MergedItem,
 } from '../../utils/dayMerge'
 import { withinDriveRange } from '../../utils/geo'
@@ -595,8 +596,11 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
       const reachable = (h: { place_lat?: number | null; place_lng?: number | null } | undefined, w: typeof firstWay) =>
         !h || !w || w.isPlace || h.place_lat == null || h.place_lng == null
         || withinDriveRange({ lat: h.place_lat, lng: h.place_lng }, w)
-      const wantTop = !!(startHotel && firstWay && bookends && day && shouldDrawMorningLeg(bookends, day, firstWay)) && reachable(startHotel, firstWay)
-      const wantBottom = !!(endHotel && lastWay && bookends && day && shouldDrawEveningLeg(bookends, day, lastWay)) && reachable(endHotel, lastWay)
+      // Same carrier evidence the map route uses (#2157): with a located carrier
+      // endpoint on the day, the no-time default must not open a hotel leg.
+      const dayHasCarrier = wayPts.some(w => w.carrierEdge != null)
+      const wantTop = !!(startHotel && firstWay && bookends && day && shouldDrawMorningLeg(bookends, day, firstWay, dayHasCarrier)) && reachable(startHotel, firstWay)
+      const wantBottom = !!(endHotel && lastWay && bookends && day && shouldDrawEveningLeg(bookends, day, lastWay, dayHasCarrier)) && reachable(endHotel, lastWay)
       return { runs, startHotel, endHotel, firstWay, lastWay, wantTop, wantBottom }
     }
 
@@ -978,7 +982,11 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
     // hotel, or — on a transfer day — a run from the hotel you leave to the one you arrive at.
     const day = days.find(d => d.id === dayId)
     const anchors = day && useSettingsStore.getState().settings.optimize_from_accommodation !== false
-      ? getAccommodationAnchors(day, days, accommodations)
+      ? getAccommodationAnchors(
+          day, days, accommodations,
+          unlockedWithCoords.map(a => ({ lat: a.place!.lat!, lng: a.place!.lng! })),
+          (mergedItemsMap[dayId] || []).some(i => i.type === 'transport' && hasCarrierEndpointOnDay(i.data, dayId)),
+        )
       : {}
     const optimizedAssignments = unlockedWithCoords.length >= 2
       ? optimizeRoute(unlockedWithCoords.map(a => ({ ...a.place, _assignmentId: a.id })), anchors).map(p => unlockedWithCoords.find(a => a.id === p._assignmentId)).filter(Boolean)
@@ -1042,10 +1050,6 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
     })))
     return formatMoneySum(entries, costBase, locale, fxRates)
   }, [days, assignments, currency, costBase, locale, fxRates])
-
-  // Bester verfügbarer Standort für Wetter: zugewiesene Orte zuerst, dann beliebiger Reiseort
-  const anyGeoAssignment = Object.values(assignments).flatMap(da => da).find(a => a.place?.lat && a.place?.lng)
-  const anyGeoPlace = anyGeoAssignment || (places || []).find(p => p.lat && p.lng)
 
   return {
     tripId,
@@ -1182,8 +1186,6 @@ function useDayPlanSidebar(props: DayPlanSidebarProps) {
     handleOptimize,
     handleDropOnDay,
     totalCostLabel,
-    anyGeoAssignment,
-    anyGeoPlace,
     expandedRouteDayIds,
     setExpandedRouteDayIds,
   }
@@ -1355,8 +1357,6 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
     handleOptimize,
     handleDropOnDay,
     totalCostLabel,
-    anyGeoAssignment,
-    anyGeoPlace,
     expandedRouteDayIds,
     setExpandedRouteDayIds,
   } = S
@@ -1554,7 +1554,12 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
           // routable when accommodation optimization can bookend it with a hotel
           // (hotel → place → hotel, the same line the map draws) — otherwise the tools
           // vanish on such a day (#1330). Purely additive to the 2+ case.
-          const routeBookends = optimizeFromAccommodation !== false ? getDayBookendHotels(day, days, accommodations) : null
+          // The weather anchor below must not depend on the optimize-from-accommodation
+          // setting — where you wake up is a fact about the day, not a routing choice —
+          // so the bookend lookup runs unconditionally (mirrors useMPlanTimeline) while
+          // the route tools keep honoring the setting via routeBookends.
+          const dayBookends = getDayBookendHotels(day, days, accommodations)
+          const routeBookends = optimizeFromAccommodation !== false ? dayBookends : null
           const hasRouteBookend = !!(
             (routeBookends?.morning?.place_lat != null && routeBookends?.morning?.place_lng != null) ||
             (routeBookends?.evening?.place_lat != null && routeBookends?.evening?.place_lng != null)
@@ -1585,11 +1590,14 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
           const dayExportStops = (): NamedWaypoint[] => {
             const dayStops = getDayAssignments(day.id).filter(a => a.place?.lat != null && a.place?.lng != null)
             const stops = dayStops.map(a => ({ lat: a.place!.lat!, lng: a.place!.lng!, name: a.place!.name }))
-            const first = dayStops[0] ? { isPlace: true, time: dayStops[0].place?.place_time ?? null } : undefined
+            const first = dayStops[0] ? { isPlace: true, time: dayStops[0].place?.place_time ?? null, lat: dayStops[0].place!.lat!, lng: dayStops[0].place!.lng! } : undefined
             const lastAssignment = dayStops[dayStops.length - 1]
-            const last = lastAssignment ? { isPlace: true, time: lastAssignment.place?.place_time ?? null } : undefined
-            const drawMorning = !!routeBookends && shouldDrawMorningLeg(routeBookends, day, first)
-            const drawEvening = !!routeBookends && shouldDrawEveningLeg(routeBookends, day, last)
+            const last = lastAssignment ? { isPlace: true, time: lastAssignment.place?.place_time ?? null, lat: lastAssignment.place!.lat!, lng: lastAssignment.place!.lng! } : undefined
+            // Same carrier gate as the drawn route (#2157): the exported link must not
+            // start at a hotel you only reach tonight or lead back to one you left.
+            const dayHasCarrier = (mergedItemsMap[day.id] || []).some(i => i.type === 'transport' && hasCarrierEndpointOnDay(i.data, day.id))
+            const drawMorning = !!routeBookends && shouldDrawMorningLeg(routeBookends, day, first, dayHasCarrier)
+            const drawEvening = !!routeBookends && shouldDrawEveningLeg(routeBookends, day, last, dayHasCarrier)
             const morning = drawMorning && routeBookends?.morning?.place_lat != null && routeBookends?.morning?.place_lng != null
               ? { lat: routeBookends.morning.place_lat, lng: routeBookends.morning.place_lng, name: routeBookends.morning.place_name } : null
             const evening = drawEvening && routeBookends?.evening?.place_lat != null && routeBookends?.evening?.place_lng != null
@@ -1630,6 +1638,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                 // own, hence the key handler only answers for the row — and it
                 // toggles exactly like the click, rather than only selecting.
                 role="button"
+                // No press-scale on the wide row — it would shift the nested
+                // buttons out from under the pointer mid-click (#2158).
+                data-no-press
                 tabIndex={0}
                 onClick={() => toggleDaySelection()}
                 onKeyDown={e => {
@@ -1662,12 +1673,14 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
               >
                 {/* Tages-Badge: Nummer oben, darunter (falls vorhanden) das Wetter des Tages */}
                 {(() => {
-                  // anyGeoPlace is an assignment (has .place) or a bare place — read coords from either.
-                  const geoLat = anyGeoPlace ? ('place' in anyGeoPlace ? anyGeoPlace.place?.lat : anyGeoPlace.lat) : undefined
-                  const geoLng = anyGeoPlace ? ('place' in anyGeoPlace ? anyGeoPlace.place?.lng : anyGeoPlace.lng) : undefined
-                  const wLat = loc?.place?.lat ?? geoLat
-                  const wLng = loc?.place?.lng ?? geoLng
-                  const hasWeather = !!(day.date && anyGeoPlace && wLat != null && wLng != null)
+                  // Day-local anchor only (#2167): the day's first located stop, else the
+                  // hotel you wake up in. No trip-wide fallback — on a roadtrip that
+                  // silently showed another city's weather with nothing naming the place.
+                  const weatherHotel = loc == null ? dayBookends.morning : undefined
+                  const wLat = loc?.place?.lat ?? weatherHotel?.place_lat
+                  const wLng = loc?.place?.lng ?? weatherHotel?.place_lng
+                  const weatherName = loc?.place?.name ?? weatherHotel?.place_name ?? null
+                  const hasWeather = !!(day.date && wLat != null && wLng != null)
                   return (
                     <div style={{
                       // With weather the badge is a tall stack and has to start at
@@ -1694,7 +1707,7 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                         <>
                           <div style={{ width: '64%', height: 1, background: 'currentColor', opacity: 0.25 }} />
                           <div style={{ padding: '3px 0 4px' }}>
-                            <WeatherWidget lat={wLat} lng={wLng} date={day.date} stacked />
+                            <WeatherWidget lat={wLat ?? null} lng={wLng ?? null} date={day.date} stacked locationName={weatherName} />
                           </div>
                         </>
                       )}
@@ -1956,8 +1969,10 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                             // Picking the place out of the day has no other trigger, so
                             // the row is the control. Its grip, lock and arrows are
                             // buttons in their own right, hence the key handler only
-                            // answers for the row itself.
+                            // answers for the row itself. No press-scale — see the
+                            // day header above (#2158).
                             role="button"
+                            data-no-press
                             tabIndex={0}
                             draggable={canEditDays && !dragDisabled}
                             onDragStart={e => {
@@ -2124,87 +2139,107 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                                   <Markdown remarkPlugins={[remarkGfm]}>{place.description || place.address || cat?.name || ''}</Markdown>
                                 </div>
                               )}
+                              {assignment.notes && (
+                                // Day-specific note on this stop (#2163) — one muted
+                                // caption line so the timeline shows the note exists
+                                // without swallowing the row.
+                                <div title={t('places.assignmentNotes')} style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 4, fontSize: 'calc(10px * var(--fs-scale-caption, 1))', color: 'var(--text-faint)', overflow: 'hidden' }}>
+                                  <StickyNote size={9} strokeWidth={2} style={{ flexShrink: 0 }} />
+                                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', lineHeight: 1.2 }}>{assignment.notes}</span>
+                                </div>
+                              )}
                               {(() => {
-                                const res = reservations.find(r => r.assignment_id === assignment.id)
-                                if (!res) return null
-                                const confirmed = res.status === 'confirmed'
-                                const hasEndpoints = onToggleConnection && (res.endpoints || []).length >= 2
-                                const active = hasEndpoints ? visibleConnectionIds.includes(res.id) : false
-                                // The status, the time and the flight/train number used to sit in one
-                                // pill strung together on a middle dot, which read as one run-on
-                                // sentence. They are separate chips now: same tint so they still
-                                // belong together, own outline so the eye can take them one at a time.
-                                const RI = RES_ICONS[res.type] || Ticket
-                                const tint = confirmed ? 'bg-[rgba(22,163,74,0.1)] text-[#16a34a]' : 'bg-[rgba(217,119,6,0.1)] text-[#d97706]'
-                                const chip: React.CSSProperties = {
-                                  display: 'inline-flex', alignItems: 'center', gap: 3,
-                                  padding: '1px 6px', borderRadius: 5,
-                                  fontSize: 'calc(9px * var(--fs-scale-caption, 1))', fontWeight: 600,
-                                  whiteSpace: 'nowrap',
-                                }
-                                const { time: st } = splitReservationDateTime(res.reservation_time)
-                                const { time: et } = splitReservationDateTime(res.reservation_end_time)
-                                const timeLabel = st || et
-                                  ? `${st ? formatTime(st, locale, timeFormat) : ''}${et ? ` – ${formatTime(et, locale, timeFormat)}` : ''}`
-                                  : ''
-                                let meta: any
-                                try { meta = typeof res.metadata === 'string' ? JSON.parse(res.metadata || '{}') : (res.metadata || {}) } catch { meta = {} }
-                                const carrierLabel = meta
-                                  ? (meta.airline && meta.flight_number ? `${meta.airline} ${meta.flight_number}` : meta.flight_number || meta.train_number || '')
-                                  : ''
+                                const linked = getAssignmentReservations(reservations, assignment.id)
+                                if (linked.length === 0) return null
+                                // A stop can carry more than one booking (a parking pass and the
+                                // tickets for the same zoo), and every one of them is kept out of
+                                // the timeline, so this row is where they have to appear (#2201).
+                                // Stacked, because the chip lines are inline-flex and would
+                                // otherwise run together on one.
                                 return (
-                                  // No wrapping: the time belongs to the status it qualifies, so the
-                                  // chips stay on one line even when the row gets narrow.
-                                  <div style={{ marginTop: 3, display: 'inline-flex', alignItems: 'center', gap: 3, flexWrap: 'nowrap' }}>
-                                    <div className={tint} style={chip}>
-                                      <RI size={8} />
-                                      <span className="hidden sm:inline">{confirmed ? t('planner.resConfirmed') : t('planner.resPending')}</span>
-                                    </div>
-                                    {timeLabel && <span className={tint} style={{ ...chip, fontWeight: 500 }}>{timeLabel}</span>}
-                                    {carrierLabel && <span className={tint} style={{ ...chip, fontWeight: 500 }}>{carrierLabel}</span>}
-                                    {hasEndpoints && (
-                                      <button
-                                        type="button"
-                                        onClick={e => { e.stopPropagation(); onToggleConnection!(res.id) }}
-                                        title={t(active ? 'map.hideConnections' : 'map.showConnections')}
-                                        className={active ? 'bg-[#3b82f6] text-[#fff]' : 'bg-transparent text-content-faint'}
-                                        style={{
-                                          flexShrink: 0, appearance: 'none',
-                                          width: 20, height: 20, borderRadius: 4,
-                                          display: 'grid', placeItems: 'center', cursor: 'pointer',
-                                          border: 'none',
-                                          transition: 'color 120ms cubic-bezier(0.23,1,0.32,1), background 120ms cubic-bezier(0.23,1,0.32,1)',
-                                        }}
-                                        onMouseEnter={e => { if (!active) e.currentTarget.style.color = 'var(--text-primary)' }}
-                                        onMouseLeave={e => { if (!active) e.currentTarget.style.color = 'var(--text-faint)' }}
-                                      >
-                                        <RouteIcon size={11} />
-                                      </button>
-                                    )}
-                                    {canEditDays && (() => {
-                                      const isTransport = TRANSPORT_TYPES.has(res.type)
-                                      const handler = isTransport ? onEditTransport : onEditReservation
-                                      if (!handler) return null
+                                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                                    {linked.map(res => {
+                                      const confirmed = res.status === 'confirmed'
+                                      const hasEndpoints = onToggleConnection && (res.endpoints || []).length >= 2
+                                      const active = hasEndpoints ? visibleConnectionIds.includes(res.id) : false
+                                      // The status, the time and the flight/train number used to sit in one
+                                      // pill strung together on a middle dot, which read as one run-on
+                                      // sentence. They are separate chips now: same tint so they still
+                                      // belong together, own outline so the eye can take them one at a time.
+                                      const RI = RES_ICONS[res.type] || Ticket
+                                      const tint = confirmed ? 'bg-[rgba(22,163,74,0.1)] text-[#16a34a]' : 'bg-[rgba(217,119,6,0.1)] text-[#d97706]'
+                                      const chip: React.CSSProperties = {
+                                        display: 'inline-flex', alignItems: 'center', gap: 3,
+                                        padding: '1px 6px', borderRadius: 5,
+                                        fontSize: 'calc(9px * var(--fs-scale-caption, 1))', fontWeight: 600,
+                                        whiteSpace: 'nowrap',
+                                      }
+                                      const { time: st } = splitReservationDateTime(res.reservation_time)
+                                      const { time: et } = splitReservationDateTime(res.reservation_end_time)
+                                      const timeLabel = st || et
+                                        ? `${st ? formatTime(st, locale, timeFormat) : ''}${et ? ` – ${formatTime(et, locale, timeFormat)}` : ''}`
+                                        : ''
+                                      let meta: any
+                                      try { meta = typeof res.metadata === 'string' ? JSON.parse(res.metadata || '{}') : (res.metadata || {}) } catch { meta = {} }
+                                      const carrierLabel = meta
+                                        ? (meta.airline && meta.flight_number ? `${meta.airline} ${meta.flight_number}` : meta.flight_number || meta.train_number || '')
+                                        : ''
                                       return (
-                                        <button
-                                          type="button"
-                                          onClick={e => { e.stopPropagation(); handler(res) }}
-                                          title={t('common.edit')}
-                                          className="bg-transparent text-content-faint"
-                                          style={{
-                                            flexShrink: 0, appearance: 'none',
-                                            width: 20, height: 20, borderRadius: 4,
-                                            display: 'grid', placeItems: 'center', cursor: 'pointer',
-                                            border: 'none',
-                                            transition: 'color 120ms cubic-bezier(0.23,1,0.32,1), background 120ms cubic-bezier(0.23,1,0.32,1)',
-                                          }}
-                                          onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)' }}
-                                          onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-faint)' }}
-                                        >
-                                          <Pencil size={11} />
-                                        </button>
+                                        // No wrapping: the time belongs to the status it qualifies, so the
+                                        // chips stay on one line even when the row gets narrow.
+                                        <div key={res.id} style={{ marginTop: 3, display: 'inline-flex', alignItems: 'center', gap: 3, flexWrap: 'nowrap' }}>
+                                          <div className={tint} style={chip}>
+                                            <RI size={8} />
+                                            <span className="hidden sm:inline">{confirmed ? t('planner.resConfirmed') : t('planner.resPending')}</span>
+                                          </div>
+                                          {timeLabel && <span className={tint} style={{ ...chip, fontWeight: 500 }}>{timeLabel}</span>}
+                                          {carrierLabel && <span className={tint} style={{ ...chip, fontWeight: 500 }}>{carrierLabel}</span>}
+                                          {hasEndpoints && (
+                                            <button
+                                              type="button"
+                                              onClick={e => { e.stopPropagation(); onToggleConnection!(res.id) }}
+                                              title={t(active ? 'map.hideConnections' : 'map.showConnections')}
+                                              className={active ? 'bg-[#3b82f6] text-[#fff]' : 'bg-transparent text-content-faint'}
+                                              style={{
+                                                flexShrink: 0, appearance: 'none',
+                                                width: 20, height: 20, borderRadius: 4,
+                                                display: 'grid', placeItems: 'center', cursor: 'pointer',
+                                                border: 'none',
+                                                transition: 'color 120ms cubic-bezier(0.23,1,0.32,1), background 120ms cubic-bezier(0.23,1,0.32,1)',
+                                              }}
+                                              onMouseEnter={e => { if (!active) e.currentTarget.style.color = 'var(--text-primary)' }}
+                                              onMouseLeave={e => { if (!active) e.currentTarget.style.color = 'var(--text-faint)' }}
+                                            >
+                                              <RouteIcon size={11} />
+                                            </button>
+                                          )}
+                                          {canEditDays && (() => {
+                                            const isTransport = TRANSPORT_TYPES.has(res.type)
+                                            const handler = isTransport ? onEditTransport : onEditReservation
+                                            if (!handler) return null
+                                            return (
+                                              <button
+                                                type="button"
+                                                onClick={e => { e.stopPropagation(); handler(res) }}
+                                                title={t('common.edit')}
+                                                className="bg-transparent text-content-faint"
+                                                style={{
+                                                  flexShrink: 0, appearance: 'none',
+                                                  width: 20, height: 20, borderRadius: 4,
+                                                  display: 'grid', placeItems: 'center', cursor: 'pointer',
+                                                  border: 'none',
+                                                  transition: 'color 120ms cubic-bezier(0.23,1,0.32,1), background 120ms cubic-bezier(0.23,1,0.32,1)',
+                                                }}
+                                                onMouseEnter={e => { e.currentTarget.style.color = 'var(--text-primary)' }}
+                                                onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-faint)' }}
+                                              >
+                                                <Pencil size={11} />
+                                              </button>
+                                            )
+                                          })()}
+                                        </div>
                                       )
-                                    })()}
+                                    })}
                                   </div>
                                 )
                               })()}
@@ -2339,7 +2374,9 @@ const DayPlanSidebar = React.memo(function DayPlanSidebar(props: DayPlanSidebarP
                           <div
                             // Opening the booking has no other trigger, so the row is
                             // the control; the buttons inside it answer for themselves.
+                            // No press-scale — see the day header above (#2158).
                             role="button"
+                            data-no-press
                             tabIndex={0}
                             onClick={openTransportRow}
                             onKeyDown={e => {

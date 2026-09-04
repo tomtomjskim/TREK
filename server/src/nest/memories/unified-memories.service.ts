@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import { ADDON_IDS } from '../../addons';
 import { broadcast } from '../../websocket';
 import { encrypt_api_key } from '../common/crypto/apiKeyCrypto';
+import { AddonsService } from '../addons/addons.service';
 import { DatabaseService } from '../database/database.service';
 import { TrekPhotosRepository } from '../photos/trek-photos.repository';
 import { ImmichService } from './immich.service';
@@ -31,11 +33,16 @@ export class UnifiedMemoriesService {
     private readonly synology: SynologyService,
     private readonly access: MemoriesAccessService,
     private readonly notifications: NotificationsService,
+    private readonly addons: AddonsService,
   ) {}
 
   private _providers(): Array<{id: string; enabled: boolean}> {
+    // A provider only counts as enabled while the journey addon is — its whole
+    // surface lives inside journeys. Covers rows left enabled from before
+    // updateAddon cascaded the journey disable.
+    const journeyOn = this.addons.isAddonEnabled(ADDON_IDS.JOURNEY);
     const rows = this.db.prepare('SELECT id, enabled FROM photo_providers').all() as Array<{id: string; enabled: number}>;
-    return rows.map(r => ({ id: r.id, enabled: r.enabled === 1 }));
+    return rows.map(r => ({ id: r.id, enabled: journeyOn && r.enabled === 1 }));
   }
 
   private _validProvider(provider: string): ServiceResult<string> {
@@ -48,6 +55,17 @@ export class UnifiedMemoriesService {
       return fail(`Provider: "${provider}" is not enabled, contact server administrator`, 400);
     }
     return success(provider);
+  }
+
+  /**
+   * Memories is surfaced through Journey. Keep the gate in this service too,
+   * because these mutation/sync methods are reachable through more than one
+   * controller and must fail closed before any write or provider call.
+   */
+  private _journeyAddonError(): { error: string; status: number } | null {
+    return this.addons.isAddonEnabled(ADDON_IDS.JOURNEY)
+      ? null
+      : { error: 'Journey addon is not enabled', status: 400 };
   }
 
 
@@ -196,6 +214,8 @@ export class UnifiedMemoriesService {
     if (!access) {
       return fail('Trip not found or access denied', 404);
     }
+    const addonError = this._journeyAddonError();
+    if (addonError) return fail(addonError.error, addonError.status);
 
     try {
       this.db.prepare(`
@@ -224,6 +244,8 @@ export class UnifiedMemoriesService {
     if (!access) {
       return fail('Trip not found or access denied', 404);
     }
+    const addonError = this._journeyAddonError();
+    if (addonError) return fail(addonError.error, addonError.status);
 
     try {
       this.db.prepare(`
@@ -289,6 +311,8 @@ export class UnifiedMemoriesService {
     if (!access) {
       return fail('Trip not found or access denied', 404);
     }
+    const addonError = this._journeyAddonError();
+    if (addonError) return fail(addonError.error, addonError.status);
 
     try {
       const linkedPhotos = this.db.prepare('SELECT photo_id FROM trip_photos WHERE trip_id = ? AND album_link_id = ?')
@@ -349,6 +373,12 @@ export class UnifiedMemoriesService {
     userId: number,
     sid: string,
   ): Promise<{ success?: boolean; added?: number; total?: number; error?: string; status?: number }> {
+    if (!this.db.canAccessTrip(tripId, userId)) {
+      return { error: 'Trip not found or access denied', status: 404 };
+    }
+    const addonError = this._journeyAddonError();
+    if (addonError) return addonError;
+
     const collected = await this.immich.collectAlbumSelection(tripId, linkId, userId);
     if ('error' in collected) return { error: collected.error, status: collected.status };
 
@@ -366,6 +396,12 @@ export class UnifiedMemoriesService {
     linkId: string,
     sid: string,
   ): Promise<ServiceResult<SyncAlbumResult>> {
+    if (!this.db.canAccessTrip(tripId, userId)) {
+      return fail('Trip not found or access denied', 404);
+    }
+    const addonError = this._journeyAddonError();
+    if (addonError) return fail(addonError.error, addonError.status);
+
     const collected = await this.synology.collectSynologyAlbumSelection(userId, tripId, linkId);
     if (!collected.success) return collected as ServiceResult<SyncAlbumResult>;
 

@@ -368,13 +368,19 @@ export class McpRegistry {
     ctx: McpContext,
     opts?: McpAttachOptions,
   ): void {
+    // An empty shape means "no arguments", and is registered as such: with a
+    // shape the SDK parses request.params.arguments, which a client that has
+    // nothing to send may omit entirely, and z.object({}) then rejects the
+    // undefined with -32602.
+    const argsSchema =
+      options.argsSchema !== undefined && Object.keys(options.argsSchema).length > 0 ? options.argsSchema : undefined;
     const config: Record<string, unknown> = {
       title: options.title,
       description: options.description,
-      argsSchema: options.argsSchema,
+      argsSchema,
     };
     const cb =
-      options.argsSchema !== undefined
+      argsSchema !== undefined
         ? (args: unknown, _extra: unknown) => {
             opts?.onInvoke?.({ kind: 'prompt', name: options.name });
             return handler.call(instance, args, ctx);

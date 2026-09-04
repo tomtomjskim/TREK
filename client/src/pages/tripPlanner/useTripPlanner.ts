@@ -306,6 +306,12 @@ export function useTripPlanner() {
   const autoShowRoute = useCallback(() => {
     setRouteChoice(prev => (prev === null ? true : prev))
   }, [])
+  // What the planner maps actually draw. The persisted toggle can rehydrate as
+  // true while no day is selected yet (trip re-entry resets the selection, and
+  // a second click on the day header clears it) — without a day context the
+  // per-day transit filter is off, so the map would draw every automated
+  // transport in the trip (#2019).
+  const transitRoutesShown = routeShown && selectedDayId != null
   const [routeProfile, setRouteProfile] = useState<string>('driving')
   const [fitKey, setFitKey] = useState<number>(0)
   const initialFitTripId = useRef<number | null>(null)
@@ -574,12 +580,19 @@ export function useTripPlanner() {
     const pendingFiles = data._pendingFiles
     delete data._pendingFiles
     if (editingPlace) {
-      // Always strip time fields from place update — time is per-assignment only
-      const { place_time, end_time, ...placeData } = data
+      // Always strip time fields from place update — time is per-assignment only.
+      // Same for the day-specific note (#2163): it belongs to the assignment,
+      // never to the pool place.
+      const { place_time, end_time, assignment_notes, ...placeData } = data
       await tripActions.updatePlace(tripId, editingPlace.id, placeData)
       // If editing from assignment context, save time per-assignment
       if (editingAssignmentId) {
         await assignmentsApi.updateTime(tripId, editingAssignmentId, { place_time: place_time || null, end_time: end_time || null })
+        // The form only includes assignment_notes when the user changed it, so
+        // an untouched note never produces a PUT (#2163). '' clears like null.
+        if (assignment_notes !== undefined) {
+          await assignmentsApi.updateNotes(tripId, editingAssignmentId, { notes: assignment_notes || null })
+        }
         await tripActions.refreshDays(tripId)
       }
       // Upload pending files with place_id
@@ -1067,7 +1080,7 @@ export function useTripPlanner() {
     transportModalDayId, setTransportModalDayId,
     transportModalAutomated, setTransportModalAutomated, transitPrefill, setTransitPrefill, transitJourney, setTransitJourney,
     reservationPrefill, transportPrefill, importReviewActive, startImportReview, advanceImportReview,
-    routeShown, setRouteShown, autoShowRoute, routeProfile, setRouteProfile, routeVias, fitKey, setFitKey,
+    routeShown, setRouteShown, autoShowRoute, transitRoutesShown, routeProfile, setRouteProfile, routeVias, fitKey, setFitKey,
     mobileSidebarOpen, setMobileSidebarOpen, mobilePlanScrollTopRef, mobilePlacesScrollTopRef,
     deletePlaceId, setDeletePlaceId, deletePlaceIds, setDeletePlaceIds,
     visibleConnections, toggleConnection, allConnectionsShown, toggleAllConnections, mapTransportDetail, setMapTransportDetail,

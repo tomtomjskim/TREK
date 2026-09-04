@@ -10,14 +10,14 @@ import { useTranslation } from '../../i18n'
 import { budgetApi } from '../../api/client'
 import { useExchangeRates } from '../../hooks/useExchangeRates'
 import { useIsMobile } from '../../hooks/useIsMobile'
-import { formatMoney, currencyDecimals, currencyLocale, localizeAmountInput, cleanAmount } from '../../utils/formatters'
+import { formatMoney, currencyDecimals, currencyLocale, localizeAmountInput, amountToInputString } from '../../utils/formatters'
 import { downloadBlob } from '../../utils/fileDownload'
 import Modal from '../shared/Modal'
 import CustomSelect from '../shared/CustomSelect'
 import { CustomDatePicker } from '../shared/CustomDateTimePicker'
 import { localToday } from '../Planner/today'
 import { SYMBOLS, currenciesWith, SPLIT_COLORS } from './BudgetPanel.constants'
-import { calculateTicketShares, hasTicketSplit, NOTE_MAX, payersBalanced, readTicketItems, readUserNote, rebalancePayers, splitEqualShares, writeTicketItems, type TicketItem } from './CostsPanel.helpers'
+import { amountPattern, calculateTicketShares, hasTicketSplit, NOTE_MAX, payersBalanced, readTicketItems, readUserNote, rebalancePayers, splitEqualShares, writeTicketItems, type TicketItem } from './CostsPanel.helpers'
 import { COST_CATEGORY_LIST, catMeta } from './costsCategories'
 import type { BudgetItem } from '../../types'
 import type { TripMember } from './BudgetPanelMemberChips'
@@ -134,8 +134,9 @@ export default function CostsPanel({ tripId, tripMembers = [] }: CostsPanelProps
     return convert(myShare, curOf(e))
   }
   // "Unfinished": a recorded total nobody has paid yet — counts toward the trip
-  // total but stays out of settlements until who-paid is filled in.
-  const isUnfinished = (e: BudgetItem) => baseTotal(e) > 0 && (e.payers || []).filter(p => p.amount > 0).length === 0
+  // total but stays out of settlements until who-paid is filled in. A negative
+  // total (a refund, #2176) is just as unfinished until its recipient is named.
+  const isUnfinished = (e: BudgetItem) => baseTotal(e) !== 0 && (e.payers || []).filter(p => p.amount !== 0).length === 0
 
   const totals = useMemo(() => {
     const totalSpend = budgetItems.reduce((a, e) => a + baseTotal(e), 0)
@@ -717,7 +718,7 @@ export default function CostsPanel({ tripId, tripMembers = [] }: CostsPanelProps
     const c = catMeta(e.category)
     const Icon = c.Icon
     const cur = curOf(e)
-    const payers = (e.payers || []).filter(p => p.amount > 0)
+    const payers = (e.payers || []).filter(p => p.amount !== 0)
     const net = round2(myPaidOf(e) - myShareOf(e))
     const unfinished = isUnfinished(e)
     const note = readUserNote(e)
@@ -878,9 +879,12 @@ export default function CostsPanel({ tripId, tripMembers = [] }: CostsPanelProps
   }
 
   function CategoryBreakdown() {
+    // Categories net refunds against spend (#2176): a negative entry lowers its
+    // category's sum, and a category that nets negative keeps its own row —
+    // just without a bar, since the bars rank positive spend.
     const tot: Record<string, number> = {}
     for (const e of budgetItems) { const k = catMeta(e.category).key; tot[k] = (tot[k] || 0) + baseTotal(e) }
-    const rows = COST_CATEGORY_LIST.filter(c => (tot[c.key] || 0) > 0).sort((a, b) => (tot[b.key] || 0) - (tot[a.key] || 0))
+    const rows = COST_CATEGORY_LIST.filter(c => (tot[c.key] || 0) !== 0).sort((a, b) => (tot[b.key] || 0) - (tot[a.key] || 0))
     if (rows.length === 0) return <div className="text-content-faint" style={{ fontSize: 'calc(12.5px * var(--fs-scale-body, 1))' }}>{t('costs.noCategories')}</div>
     // Bars are scaled relative to the most expensive category (the top row fills the
     // bar), not to the trip grand total — makes the relative ranking readable.
@@ -888,7 +892,7 @@ export default function CostsPanel({ tripId, tripMembers = [] }: CostsPanelProps
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {rows.map(c => {
-          const v = tot[c.key]; const pct = maxCat ? v / maxCat * 100 : 0
+          const v = tot[c.key]; const pct = maxCat > 0 && v > 0 ? v / maxCat * 100 : 0
           return (
             <div key={c.key} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr auto', gap: 10, alignItems: 'center' }}>
               <span style={{ width: 10, height: 10, borderRadius: 3, background: c.color }} />
@@ -966,7 +970,9 @@ function SettlementModal({ tripId, people, me, editing, currency, onClose, onSav
   const otherDefault = people.find(p => p.id !== me)?.id ?? me
   const [fromId, setFromId] = useState<string>(String(editing?.from_user_id ?? me))
   const [toId, setToId] = useState<string>(String(editing?.to_user_id ?? otherDefault))
-  const [amount, setAmount] = useState<string>(editing ? String(editing.amount) : '')
+  // Seeded with the transfer's own currency decimals, so a reopened 4,90 reads
+  // "4.90" and not "4.9" (#2175) — and a JPY transfer gets no fake decimals.
+  const [amount, setAmount] = useState<string>(editing ? amountToInputString(editing.amount, (editing.currency || currency).toUpperCase()) : '')
   const [cur, setCur] = useState<string>((editing?.currency || currency).toUpperCase())
   const [saving, setSaving] = useState(false)
 
@@ -1051,9 +1057,13 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
   const [currency, setCurrency] = useState((editing?.currency || base).toUpperCase())
   const [day, setDay] = useState(editing?.expense_date || localToday())
   const [note, setNote] = useState(() => readUserNote(editing))
+  // Edit and prefill seeds are padded to the currency's decimals (#2175): the DB
+  // returns numbers, so a saved 4,90 would otherwise reopen as "4,9" and a saved
+  // 5,00 as "5". A prefill has no currency of its own — it is read as `base`,
+  // which is also what the currency field starts on.
   const [total, setTotal] = useState<string>(() => {
-    if (editing) return editing.total_price ? String(cleanAmount(editing.total_price)) : ''
-    if (prefill?.amount != null) return String(prefill.amount)
+    if (editing) return editing.total_price ? amountToInputString(editing.total_price, (editing.currency || base).toUpperCase()) : ''
+    if (prefill?.amount != null) return amountToInputString(prefill.amount, base)
     return ''
   })
   const [participants, setParticipants] = useState<Set<number>>(() =>
@@ -1064,8 +1074,9 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
   // next". The single-payer dropdown stays the default path; multiPayer swaps in a
   // per-person amount editor. 0 represents "Nobody (planning entry)"; on an
   // existing expense a missing payer is a deliberate choice, so only a brand-new
-  // one defaults to me.
-  const initialPayers = (editing?.payers || []).filter(p => p.amount > 0)
+  // one defaults to me. A negative payer (the recipient of a refund, #2176) is a
+  // real payer — filtering on > 0 here would silently drop them on save.
+  const initialPayers = (editing?.payers || []).filter(p => p.amount !== 0)
 
   const [payerId, setPayerId] = useState<number>(() => {
     const existingPayer = initialPayers[0]
@@ -1076,7 +1087,7 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
   const [payerIds, setPayerIds] = useState<Set<number>>(() => new Set(initialPayers.map(p => p.user_id)))
   const [payerAmounts, setPayerAmounts] = useState<Record<number, string>>(() => {
     const m: Record<number, string> = {}
-    for (const p of initialPayers) m[p.user_id] = String(p.amount)
+    for (const p of initialPayers) m[p.user_id] = amountToInputString(p.amount, currency)
     return m
   })
   // Payers the user typed an amount for: rebalance leaves these alone and makes
@@ -1101,7 +1112,7 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
     if (editing && editing.members) {
       for (const member of editing.members) {
         if (member.amount !== null && member.amount !== undefined) {
-          m[member.user_id] = String(member.amount)
+          m[member.user_id] = amountToInputString(member.amount, currency)
         }
       }
     }
@@ -1119,6 +1130,10 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
   const totalNum = isTicketMode ? ticketInfo.total : (Number.parseFloat(total) || 0)
   const splitSum = [...participants].reduce((sum, id) => sum + (Number.parseFloat(customAmounts[id]) || 0), 0)
   const customBalanced = Math.round(splitSum * 100) === Math.round(totalNum * 100)
+  // How much is still to be handed out, read on the total's own side: on a refund
+  // (#2176) the shares run negative, so a plain total minus sum flips under and
+  // over around and sends the user the wrong way.
+  const splitShortfall = totalNum < 0 ? splitSum - totalNum : totalNum - splitSum
   const each = participants.size > 0 ? totalNum / participants.size : 0
   const equalShares = useMemo(() => {
     return splitEqualShares(totalNum, [...participants].map(id => ({ user_id: id })), editing?.id || 0)
@@ -1131,17 +1146,22 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
     const enteredSum = [...participants]
       .filter(id => customAmounts[id])
       .reduce((sum, id) => sum + (Number.parseFloat(customAmounts[id]) || 0), 0)
-    const remaining = Math.max(0, totalNum - enteredSum)
+    // Clamped toward zero on the total's own side, so an over-entered positive
+    // split never suggests negative leftovers — while a negative total (#2176)
+    // still previews its negative equal shares.
+    const rest = totalNum - enteredSum
+    const remaining = totalNum >= 0 ? Math.max(0, rest) : Math.min(0, rest)
 
     return splitEqualShares(remaining, emptyParts.map(id => ({ user_id: id })), editing?.id || 0)
   }, [totalNum, participants, customAmounts, editing])
-  
+
   const ticketValid = ticketItems.length > 0 && ticketItems.every(item => item.name.trim().length > 0 && (Number.parseFloat(item.price) || 0) > 0 && item.participants.size > 0)
   const payersOk = !multiPayer || (payerIds.size > 0 && payersBalanced(payerAmounts, payerIds, totalNum))
+  // A negative total is a valid entry (a refund, #2176); only zero has nothing to say.
   const valid = name.trim().length > 0 && payersOk && (
     isTicketMode
       ? ticketValid
-      : totalNum > 0 && (participants.size === 0 || splitMode === 'equally' || customBalanced)
+      : totalNum !== 0 && (participants.size === 0 || splitMode === 'equally' || customBalanced)
   )
 
   const onTotalChange = (v: string) => {
@@ -1196,7 +1216,7 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
 
   const handleCustomAmountChange = (id: number, val: string) => {
     val = val.replace(',', '.')
-    if (/^\d*\.?\d{0,2}$/.test(val) || val === '') {
+    if (val === '' || amountPattern(currency, true).test(val)) {
       setCustomAmounts(prev => ({ ...prev, [id]: val }))
     }
   }
@@ -1219,7 +1239,7 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
 
   const handleUpdateItemPrice = (id: string, price: string) => {
     price = price.replace(',', '.')
-    if (/^\d*\.?\d{0,2}$/.test(price) || price === '') {
+    if (price === '' || amountPattern(currency, false).test(price)) {
       setTicketItems(prev => prev.map(item => item.id === id ? { ...item, price } : item))
     }
   }
@@ -1264,7 +1284,7 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
     const payerList = multiPayer
       ? [...payerIds]
           .map(id => ({ user_id: id, amount: Number.parseFloat(payerAmounts[id]) || 0 }))
-          .filter(p => p.amount > 0)
+          .filter(p => p.amount !== 0)
       : payerId > 0 ? [{ user_id: payerId, amount: totalNum }] : []
     // A receipt line can name somebody who is not ticked as a participant. Sending
     // only the ticked set would drop their share, leaving the member sum short of
@@ -1334,8 +1354,9 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
           <label className={labelCls}>{t('costs.totalAmount')}</label>
           <div className="bg-surface-input border border-edge" style={{ height: FIELD_H, boxSizing: 'border-box', display: 'flex', alignItems: 'center', borderRadius: 10, padding: '0 12px', opacity: isTicketMode ? 0.6 : 1 }}>
             <span className="text-content-faint" style={{ fontSize: 'calc(15px * var(--fs-scale-subtitle, 1))' }}>{sym(currency)}</span>
-            <NumericInput mode="decimal" placeholder={localizeAmountInput('0.00', currency)} value={localizeAmountInput(isTicketMode ? ticketInfo.total.toFixed(2) : total, currency)}
+            <NumericInput mode="signed-decimal" placeholder={localizeAmountInput('0.00', currency)} value={localizeAmountInput(isTicketMode ? ticketInfo.total.toFixed(2) : total, currency)}
               onValueChange={onTotalChange}
+              signToggleLabel={t('costs.toggleSign')}
               disabled={isTicketMode}
               className="text-content" style={{ flex: 1, border: 0, background: 'none', outline: 'none', fontSize: 'calc(15px * var(--fs-scale-subtitle, 1))', fontWeight: 600, paddingLeft: 6, width: '100%' }} />
           </div>
@@ -1353,7 +1374,7 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
           </div>
         </div>
 
-        {currency !== base && totalNum > 0 && (
+        {currency !== base && totalNum !== 0 && (
           <div className="bg-surface-secondary border border-edge text-content-muted" style={{ borderRadius: 10, padding: '10px 12px', fontSize: 'calc(12.5px * var(--fs-scale-body, 1))', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span>{formatMoney(totalNum, currency, locale)}</span>
             <span className="text-content-faint">≈</span>
@@ -1422,7 +1443,7 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
                       {on ? (
                         <div className="bg-surface-input border border-edge" style={{ display: 'flex', alignItems: 'center', gap: 4, borderRadius: 8, padding: '0 10px' }}>
                           <span className="text-content-faint" style={{ fontSize: 'calc(13px * var(--fs-scale-body, 1))' }}>{sym(currency)}</span>
-                          <NumericInput mode="decimal" placeholder={localizeAmountInput('0.00', currency)} data-testid="payer-amount"
+                          <NumericInput mode="signed-decimal" placeholder={localizeAmountInput('0.00', currency)} data-testid="payer-amount"
                             value={localizeAmountInput(payerAmounts[p.id] || '', currency)}
                             onValueChange={v => onPayerAmountChange(p.id, v)}
                             className="text-content"
@@ -1591,7 +1612,7 @@ export function ExpenseModal({ tripId, base, people, me, editing, prefill, onClo
                   <span style={{ fontWeight: 600, color: customBalanced ? '#16a34a' : '#dc2626' }}>
                     {customBalanced
                       ? t('costs.splitBalanced')
-                      : t(totalNum - splitSum > 0 ? 'costs.splitSumUnder' : 'costs.splitSumOver', {
+                      : t(splitShortfall > 0 ? 'costs.splitSumUnder' : 'costs.splitSumOver', {
                           sum: sym(currency) + splitSum.toFixed(2),
                           total: sym(currency) + totalNum.toFixed(2),
                           diff: sym(currency) + Math.abs(totalNum - splitSum).toFixed(2),

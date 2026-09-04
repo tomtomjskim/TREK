@@ -17,7 +17,7 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 type PackingSchema = 'legacy' | 'scoped' | 'scope-only' | 'owner-only' | 'drifted';
-type OfficialImageVersion = 171 | 172 | 173 | 175 | 'latest';
+type OfficialImageVersion = 171 | 172 | 173 | 175 | 200 | 'latest';
 
 interface FixtureOptions {
   marker?: number;
@@ -110,6 +110,12 @@ function buildOfficialImages(): void {
     }
 
     db = new Database(officialImages.get(175)!);
+    db.exec('PRAGMA foreign_keys = ON');
+    advanceOfficialSchemaTo(db, 200);
+    officialImages.set(200, db.serialize());
+    db.close();
+
+    db = new Database(officialImages.get(200)!);
     db.exec('PRAGMA foreign_keys = ON');
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation((code) => {
       throw new Error(`unexpected process.exit(${String(code)}) while generating latest official schema`);
@@ -332,9 +338,14 @@ function migrationIds(db: Database.Database): string[] {
 
 function expectIntegrated(db: Database.Database, bridgeExpected: boolean, expectedForeignKeys = 1): void {
   expect(schemaVersion(db)).toBe(latestOfficialVersion);
+  expect(latestOfficialVersion).toBe(205);
   expect(columnNames(db, 'plugins')).toEqual(
     expect.arrayContaining(['update_block_code', 'update_block_detail', 'update_block_version', 'trek_range']),
   );
+  expect(columnNames(db, 'journeys')).toContain('show_trip_tracks');
+  expect(columnNames(db, 'plugin_settings_fields')).toContain('default_value');
+  expect(columnNames(db, 'plugin_actions')).toContain('scope');
+  expect(columnNames(db, 'journey_entries')).toContain('stats_excluded');
   expect(columnNames(db, 'packing_templates')).toEqual(expect.arrayContaining(['scope', 'owner_id']));
   expect(columnNames(db, 'google_api_usage')).toEqual(
     expect.arrayContaining(['period', 'sku', 'attempts', 'updated_at']),
@@ -389,12 +400,49 @@ describe('fork migration runner — generated official schema matrix', () => {
     runTwiceAndExpectStable(createFreshFixture());
   });
 
-  it.each([171, 172, 173, 175] as const)(
+  it.each([171, 172, 173, 175, 200] as const)(
     'DB-STOCK-%i migrates the source-derived official image and remains stable on replay',
     (version) => {
       runTwiceAndExpectStable(createFixture({ officialImageVersion: version }));
     },
   );
+
+  it('DB-STOCK-200 applies official migrations 201-205 with preserved defaults before fork migrations', () => {
+    const db = createFixture({ officialImageVersion: 200 });
+    expect(schemaVersion(db)).toBe(200);
+
+    const addonUpdate = db.prepare("UPDATE addons SET type = 'trip' WHERE id = 'naver_list_import'").run();
+    expect(addonUpdate.changes).toBe(1);
+    db.prepare(
+      "INSERT INTO journeys (id, user_id, title, created_at, updated_at) VALUES (4242, 1, 'Migration fixture', 1, 1)",
+    ).run();
+    db.prepare(
+      "INSERT INTO journey_entries (id, journey_id, author_id, type, entry_date, created_at, updated_at) VALUES (4243, 4242, 1, 'entry', '2026-09-04', 1, 1)",
+    ).run();
+    db.prepare(
+      "INSERT INTO plugin_settings_fields (plugin_id, field_key, input_type) VALUES ('fixture', 'endpoint', 'text')",
+    ).run();
+    db.prepare(
+      "INSERT INTO plugin_actions (plugin_id, action_key, label) VALUES ('fixture', 'sync', 'Sync')",
+    ).run();
+
+    runTwiceAndExpectStable(db);
+
+    expect(schemaVersion(db)).toBe(205);
+    expect(db.prepare("SELECT type FROM addons WHERE id = 'naver_list_import'").get()).toEqual({
+      type: 'integration',
+    });
+    expect(db.prepare('SELECT show_trip_tracks FROM journeys WHERE id = 4242').get()).toEqual({
+      show_trip_tracks: 0,
+    });
+    expect(db.prepare("SELECT default_value FROM plugin_settings_fields WHERE plugin_id = 'fixture'").get()).toEqual({
+      default_value: null,
+    });
+    expect(db.prepare("SELECT scope FROM plugin_actions WHERE plugin_id = 'fixture'").get()).toEqual({ scope: 'user' });
+    expect(db.prepare('SELECT stats_excluded FROM journey_entries WHERE id = 4243').get()).toEqual({
+      stats_excluded: 0,
+    });
+  });
 
   it('DB-LEGACY-172 rewinds the collision marker, preserves usage, and replays official migrations', () => {
     const db = createFixture({ marker: 172, googleUsage: 'valid' });

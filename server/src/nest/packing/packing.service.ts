@@ -9,7 +9,22 @@ import { DatabaseService, type TripAccess } from '../database/database.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
 /** Privacy fields stamped on a packing item (#858). */
-type PrivacyFields = { is_private?: number; owner_id?: number | null };
+type PrivacyFields = { is_private?: number; owner_id?: number | null; recipients?: { user_id: number }[] };
+
+/**
+ * Rejection sentinel for a body-referenced bag that does not exist on the trip
+ * (#2154). The packing_bags FK only guarantees the id exists somewhere: a
+ * cross-trip bag_id used to be accepted silently and a dead one surfaced as an
+ * SQLite FK error. Returned by createItem/updateItem so REST, MCP and the
+ * plugin RPC all map it to their surface's 400/BadParams.
+ */
+export interface InvalidBagRef {
+  invalidBag: true;
+}
+
+export function isInvalidBagRef(result: unknown): result is InvalidBagRef {
+  return !!result && typeof result === 'object' && (result as { invalidBag?: unknown }).invalidBag === true;
+}
 
 type Trip = TripAccess;
 
@@ -37,6 +52,19 @@ interface ImportItem {
 }
 
 const BAG_COLORS = ['#6366f1', '#ec4899', '#f97316', '#10b981', '#06b6d4', '#8b5cf6', '#ef4444', '#f59e0b', '#3b82f6', '#84cc16', '#d946ef', '#14b8a6', '#f43f5e', '#a855f7', '#eab308', '#64748b'];
+
+function normalizePackingQuantity(value: unknown): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return Math.max(1, Math.min(999, Math.trunc(numeric)));
+}
+
+function normalizePackingGrams(value: unknown): number | null {
+  if (value == null) return null;
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return Math.trunc(numeric);
+}
 
 /**
  * Packing domain service — owns the packing SQL (moved from the legacy
@@ -109,6 +137,23 @@ export class PackingService {
   }
 
   /**
+   * Tell the whole room its bag weights moved (#2191).
+   *
+   * Deliberately NOT excluding the originating socket, which every other
+   * broadcast here does: the payload carries nothing to echo, and the sender's
+   * own client cannot recompute a server-side total from the item it just
+   * wrote either. Everyone refetches, everyone gets numbers.
+   *
+   * Called for item writes, and for a bag DELETE: packing_items.bag_id is
+   * ON DELETE SET NULL, so deleting a bag moves everything in it to the
+   * unassigned pile and moves both figures. A bag create or rename does not,
+   * and already broadcasts its own row.
+   */
+  broadcastBagTotals(tripId: string): void {
+    this.broadcast(tripId, 'packing:bag-totals', {}, undefined);
+  }
+
+  /**
    * The four public/private transitions after an update (#858). `wasPrivate` must be
    * read BEFORE the write: getting it wrong leaks a freshly-privatized item to the
    * whole room.
@@ -127,10 +172,10 @@ export class PackingService {
     const nowPrivate = !!item.is_private;
     if (nowPrivate) {
       if (wasPrivate) {
-        this.broadcastItem(tripId, 'packing:updated', { item } as TrekWsPayload<'packing:updated'>, item, socketId);
+        this.emitToViewers(tripId, 'packing:updated', { item } as TrekWsPayload<'packing:updated'>, item, socketId);
       } else {
         this.broadcast(tripId, 'packing:deleted', { itemId: Number(id) }, socketId);
-        this.broadcastItem(tripId, 'packing:created', { item } as TrekWsPayload<'packing:created'>, item, socketId);
+        this.emitToViewers(tripId, 'packing:created', { item } as TrekWsPayload<'packing:created'>, item, socketId);
       }
     } else {
       if (wasPrivate) {
@@ -228,15 +273,17 @@ export class PackingService {
     data: { name: string; category?: string; checked?: boolean; quantity?: number; weight_grams?: number | null; bag_id?: number | null; is_private?: boolean; visibility?: PackingVisibility; recipient_ids?: number[] },
     ownerId?: number,
   ) {
+    if (data.bag_id != null && !this.bagInTrip(tripId, data.bag_id)) return { invalidBag: true } as const;
     const maxOrder = this.db.get<{ max: number | null }>('SELECT MAX(sort_order) as max FROM packing_items WHERE trip_id = ?', tripId)!;
     const sortOrder = (maxOrder.max !== null ? maxOrder.max : -1) + 1;
-    const qty = Math.max(1, Math.min(999, Number(data.quantity) || 1));
+    const qty = normalizePackingQuantity(data.quantity);
+    const weight = normalizePackingGrams(data.weight_grams);
     const isPrivate = this.visibilityToPrivate(data.visibility, data.is_private);
 
     const itemId = this.db.transaction(() => {
       const result = this.db.run(
         'INSERT INTO packing_items (trip_id, name, checked, category, sort_order, quantity, weight_grams, bag_id, is_private, owner_id, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
-        tripId, data.name, data.checked ? 1 : 0, data.category || 'Other', sortOrder, qty, data.weight_grams ?? null, data.bag_id ?? null, isPrivate, ownerId ?? null
+        tripId, data.name, data.checked ? 1 : 0, data.category || 'Other', sortOrder, qty, weight, data.bag_id ?? null, isPrivate, ownerId ?? null
       );
       const id = Number(result.lastInsertRowid);
       // "Shared with specific people" — record the recipients it covers.
@@ -282,6 +329,11 @@ export class PackingService {
     if (changesPrivacy && item.owner_id != null && item.owner_id !== actingUserId) {
       return { forbidden: true };
     }
+    // A non-null bag about to be bound must belong to this trip (#2154) — the
+    // FK alone let any member point an item at another trip's bag.
+    if (bodyKeys.includes('bag_id') && data.bag_id != null && !this.bagInTrip(tripId, data.bag_id)) {
+      return { invalidBag: true } as const;
+    }
 
     // Privatizing an unowned (legacy) item stamps the acting user as its owner so
     // the visibility filter still has someone to match (#858).
@@ -305,11 +357,11 @@ export class PackingService {
       data.checked ? 1 : 0,
       data.category || null,
       bodyKeys.includes('weight_grams') ? 1 : 0,
-      data.weight_grams ?? null,
+      normalizePackingGrams(data.weight_grams),
       bodyKeys.includes('bag_id') ? 1 : 0,
       data.bag_id ?? null,
       bodyKeys.includes('quantity') ? 1 : 0,
-      Math.max(1, Math.min(999, Number(data.quantity) || 1)),
+      normalizePackingQuantity(data.quantity),
       changesPrivacy ? 1 : 0,
       data.is_private ? 1 : 0,
       claimOwner ? 1 : 0,
@@ -410,6 +462,12 @@ export class PackingService {
     return this.enrichItems([this.db.get('SELECT * FROM packing_items WHERE id = ?', id)])[0];
   }
 
+  /** True when the bag exists AND belongs to the trip — the referenced-id rule
+   *  the FK cannot enforce (it only checks existence). */
+  private bagInTrip(tripId: string | number, bagId: number): boolean {
+    return !!this.db.get('SELECT id FROM packing_bags WHERE id = ? AND trip_id = ?', bagId, tripId);
+  }
+
   /**
    * A copy keeps the original's bag only when that bag is the caller's to pack: one nobody
    * owns, or one they belong to. Inheriting someone else's bag would drop the copy into
@@ -477,7 +535,7 @@ export class PackingService {
       for (const item of items) {
         if (!item.name?.trim()) continue;
         const checked = item.checked ? 1 : 0;
-        const weight = item.weight_grams ? Number.parseInt(String(item.weight_grams)) || null : null;
+        const weight = normalizePackingGrams(item.weight_grams);
 
         // Resolve bag by name if provided
         let bagId = null;
@@ -493,7 +551,7 @@ export class PackingService {
           }
         }
 
-        const qty = Math.max(1, Math.min(999, Number(item.quantity) || 1));
+        const qty = normalizePackingQuantity(item.quantity);
         const result = stmt.run(tripId, item.name.trim(), checked, item.category?.trim() || 'Other', weight, bagId, sortOrder++, qty, item.is_private ? 1 : 0, ownerId ?? null);
         created.push(this.db.get('SELECT * FROM packing_items WHERE id = ?', result.lastInsertRowid));
       }
@@ -504,7 +562,66 @@ export class PackingService {
 
   // ── Bags ───────────────────────────────────────────────────────────────────
 
+  /**
+   * What each bag actually weighs (#2191).
+   *
+   * Every weight TREK showed used to be a client-side sum over `listItems`,
+   * which is privacy-filtered — so a bag's "total" silently omitted the private
+   * items of every other member, and no one but their owner could ever see the
+   * real figure. That number is then measured against `weight_limit_grams`, an
+   * absolute airline limit, which makes a per-viewer subtotal not merely
+   * incomplete but wrong: a shared bag could sit over its limit and warn nobody.
+   *
+   * So the sum is computed here, over EVERY row, and only integers cross the
+   * wire. A member learns that a bag is heavier than the items they can see —
+   * never a name, category, quantity or owner. That is a deliberate, bounded
+   * disclosure and the point of the issue.
+   *
+   * Keyed by bag id, with the unassigned pile under `null` — the same shape the
+   * "no bag" row on every packing surface needs.
+   */
+  private bagWeightTotals(tripId: string | number): Map<number | null, number> {
+    const rows = this.db.all<{ bag_id: number | null; total: number | null }>(`
+      SELECT bag_id,
+        SUM(
+          CASE WHEN typeof(weight_grams) IN ('integer', 'real') AND weight_grams >= 0
+            THEN CAST(weight_grams AS INTEGER) ELSE 0 END
+          * CASE
+              WHEN typeof(quantity) NOT IN ('integer', 'real') OR quantity < 1 THEN 1
+              WHEN quantity > 999 THEN 999
+              ELSE CAST(quantity AS INTEGER)
+            END
+        ) AS total
+        FROM packing_items
+       WHERE trip_id = ?
+       GROUP BY bag_id
+    `, tripId);
+    return new Map(rows.map(r => [r.bag_id, r.total ?? 0]));
+  }
+
+  /** The weight of everything in the trip that is in no bag (#2191). */
+  unassignedWeightGrams(tripId: string | number): number {
+    return this.bagWeightTotals(tripId).get(null) ?? 0;
+  }
+
+  /**
+   * The bags plus the unassigned pile, from ONE pass over the aggregate.
+   *
+   * The REST list route wants both, and the WS ping (#2191) makes that route
+   * fire on every item write for every connected client — running the same
+   * SUM…GROUP BY twice per request is not a cost worth paying for a nicer
+   * method list.
+   */
+  listBagsWithWeights(tripId: string | number): { bags: unknown[]; unassigned_weight_grams: number } {
+    const totals = this.bagWeightTotals(tripId);
+    return { bags: this.decorateBags(tripId, totals), unassigned_weight_grams: totals.get(null) ?? 0 };
+  }
+
   listBags(tripId: string | number) {
+    return this.decorateBags(tripId, this.bagWeightTotals(tripId));
+  }
+
+  private decorateBags(tripId: string | number, totals: Map<number | null, number>) {
     const bags = this.db.all<any>('SELECT * FROM packing_bags WHERE trip_id = ? ORDER BY sort_order, id', tripId);
     const members = this.db.all<{ bag_id: number; user_id: number; username: string; avatar: string | null }>(`
     SELECT bm.bag_id, bm.user_id, COALESCE(u.display_name, u.username) AS username, u.avatar
@@ -521,6 +638,7 @@ export class PackingService {
     return bags.map(b => ({
       ...b,
       members: (membersByBag.get(b.id) || []).map(m => ({ ...m, avatar: avatarUrl(m) })),
+      total_weight_grams: totals.get(b.id) ?? 0,
     }));
   }
 
@@ -552,10 +670,10 @@ export class PackingService {
     return rows.map(m => ({ ...m, avatar: avatarUrl(m) }));
   }
 
-  createBag(tripId: string | number, data: { name: string; color?: string }) {
+  createBag(tripId: string | number, data: { name: string; color?: string; weight_limit_grams?: number | null }) {
     const maxOrder = this.db.get<{ max: number | null }>('SELECT MAX(sort_order) as max FROM packing_bags WHERE trip_id = ?', tripId)!;
-    const result = this.db.run('INSERT INTO packing_bags (trip_id, name, color, sort_order) VALUES (?, ?, ?, ?)',
-      tripId, data.name.trim(), data.color || '#6366f1', (maxOrder.max ?? -1) + 1
+    const result = this.db.run('INSERT INTO packing_bags (trip_id, name, color, sort_order, weight_limit_grams) VALUES (?, ?, ?, ?, ?)',
+      tripId, data.name.trim(), data.color || '#6366f1', (maxOrder.max ?? -1) + 1, normalizePackingGrams(data.weight_limit_grams)
     );
     return this.db.get('SELECT * FROM packing_bags WHERE id = ?', result.lastInsertRowid);
   }
@@ -582,7 +700,7 @@ export class PackingService {
       data.name?.trim() || null,
       data.color || null,
       bodyKeys?.includes('weight_limit_grams') ? 1 : 0,
-      data.weight_limit_grams ?? null,
+      normalizePackingGrams(data.weight_limit_grams),
       bodyKeys?.includes('user_id') ? 1 : 0,
       assignUser,
       bagId

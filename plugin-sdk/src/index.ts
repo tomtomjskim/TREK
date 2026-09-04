@@ -30,10 +30,14 @@ export interface User { id: number; username?: string; display_name?: string | n
  * A legitimate plugin never hits the generous burst. See README § Runtime limits. */
 export interface PluginContext {
   readonly id: string;
+  /** Your `scope:'instance'` settings as the admin saved them, secrets decrypted, frozen
+   * at activation (a save re-spawns you). A field nobody set resolves to its manifest
+   * `default` — only a field with neither is absent. */
   readonly config: Readonly<Record<string, unknown>>;
   /** The ACTING USER's own value for one of this plugin's `scope:'user'` settings fields
-   * (decrypted host-side). Undefined for an unset value or a userless context (job/onLoad)
-   * — fall back to `config` (the admin-owned instance settings) there. */
+   * (decrypted host-side), or the field's manifest `default` when they never set it.
+   * Undefined for a field with neither, and in a userless context (job/onLoad) — fall
+   * back to `config` (the admin-owned instance settings) there. */
   settings: {
     get(key: string): Promise<unknown>;
   };
@@ -105,7 +109,7 @@ export interface PluginContext {
     /** A trip's packing items (hydrated bags/assignees). Needs `db:read:packing`. */
     list(tripId: number): Promise<PackingItem[]>;
     /** Add a packing item (owner = acting user). Needs `db:write:packing` + packing_edit. */
-    create(tripId: number, input: { name: string; category?: string; checked?: boolean; is_private?: boolean; visibility?: 'common' | 'personal' | 'shared'; recipient_ids?: number[] }): Promise<PackingItem>;
+    create(tripId: number, input: { name: string; category?: string; checked?: boolean; weight_grams?: number | null; bag_id?: number | null; quantity?: number; is_private?: boolean; visibility?: 'common' | 'personal' | 'shared'; recipient_ids?: number[] }): Promise<PackingItem>;
     /** Update a packing item. Needs `db:write:packing` + packing_edit. */
     update(tripId: number, itemId: number, input: Record<string, unknown>): Promise<PackingItem>;
     /** Delete a packing item. Needs `db:write:packing` + packing_edit. */
@@ -114,7 +118,7 @@ export interface PluginContext {
     // `db:write:packing` + packing_edit.
     /** Needs 'db:write:packing' (intentional — bags are the write-side structure; packing.list is the read surface). */
     listBags(tripId: number): Promise<unknown[]>;
-    createBag(tripId: number, input: { name: string; color?: string }): Promise<unknown>;
+    createBag(tripId: number, input: { name: string; color?: string; weight_limit_grams?: number }): Promise<unknown>;
     updateBag(tripId: number, bagId: number, input: Record<string, unknown>): Promise<unknown>;
     deleteBag(tripId: number, bagId: number): Promise<{ deleted: boolean }>;
     setBagMembers(tripId: number, bagId: number, userIds: number[]): Promise<unknown>;
@@ -809,13 +813,15 @@ export interface PluginDefinition {
   exportUserData?(input: { userId: number }, ctx: PluginContext): Promise<unknown> | unknown;
   events?: PluginEventSubscription[];
   /**
-   * Buttons on the plugin's own settings page ("Test connection", "Sync now"). The key
-   * must match an entry in the manifest's `actions`.
+   * Buttons on the plugin's settings forms ("Test connection", "Sync now", "Purge
+   * cache"). The key must match an entry in the manifest's `actions`; that entry's
+   * `scope` decides WHERE the button renders — `'user'` (default) on the user Settings
+   * tab, `'instance'` in the admin instance-settings dialog.
    *
-   * USER-INITIATED, so unlike the notificationChannel hook there IS an acting user — the
-   * person who clicked. `ctx.settings.get()` returns THEIR value and trip reads are
-   * membership-checked against them, which is what makes a "test my credentials" button
-   * possible at all.
+   * USER-INITIATED either way, so unlike the notificationChannel hook there IS an acting
+   * user — the person who clicked (a user, or an admin for an instance action).
+   * `ctx.settings.get()` returns THEIR value, `ctx.config` is the instance config, and
+   * trip reads are membership-checked against them.
    */
   actions?: Record<string, (ctx: PluginContext) => Promise<PluginActionResult | void> | PluginActionResult | void>;
   hooks?: {
@@ -849,6 +855,8 @@ export function definePlugin(def: PluginDefinition): PluginDefinition {
 
 export {
   validateManifest,
+  settingDefaults,
+  SETTING_FIELD_KEYS,
   CHANNEL_EVENTS,
   type PluginManifest,
   type NormalizedManifest,

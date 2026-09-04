@@ -199,7 +199,7 @@ vi.mock('../../src/utils/ssrfGuard', async () => {
 import { buildApp } from '../../src/bootstrap';
 import { createTables } from '../../src/db/schema';
 import { runMigrations } from '../../src/db/migrationRunner';
-import { resetTestDb, resetRateLimits } from '../helpers/test-db';
+import { resetTestDb, resetRateLimits, setAddonEnabled } from '../helpers/test-db';
 import { createUser, createTrip, addTripMember, addTripPhoto, setSynologyCredentials } from '../helpers/factories';
 import { authCookie } from '../helpers/auth';
 import { safeFetch } from '../../src/utils/ssrfGuard';
@@ -219,6 +219,8 @@ beforeAll(async () => {
 beforeEach(() => {
   resetTestDb(testDb);
   resetRateLimits(nestApp);
+  // Provider routes are Journey-owned and require the addon to be enabled.
+  setAddonEnabled(testDb, 'journey', true);
 });
 
 afterAll(async () => {
@@ -712,7 +714,9 @@ describe('Synology syncSynologyAlbumLink', () => {
     const trip = createTrip(testDb, user.id);
     setSynologyCredentials(testDb, user.id, 'https://synology.example.com', 'admin', 'pass');
     // The migration inserts synologyphotos with enabled=0; ensure it is enabled for this test.
+    // A provider only counts as enabled under an enabled journey addon (also seeded off).
     testDb.prepare("UPDATE photo_providers SET enabled = 1 WHERE id = 'synologyphotos'").run();
+    setAddonEnabled(testDb, 'journey', true);
     // album_id must be a numeric string so getAlbumIdFromLink returns it and
     // syncSynologyAlbumLink passes Number(album_id) to the API.
     const link = addAlbumLink(testDb, trip.id, user.id, 'synologyphotos', '1', 'Summer Trip');
@@ -772,6 +776,7 @@ describe('Synology syncSynologyAlbumLink', () => {
     const trip = createTrip(testDb, user.id);
     setSynologyCredentials(testDb, user.id, 'https://synology.example.com', 'admin', 'pass');
     testDb.prepare("UPDATE photo_providers SET enabled = 1 WHERE id = 'synologyphotos'").run();
+    setAddonEnabled(testDb, 'journey', true);
 
     // Insert a link with an encrypted passphrase directly into the DB.
     const rawPassphrase = 'syno-share-pass-abc';

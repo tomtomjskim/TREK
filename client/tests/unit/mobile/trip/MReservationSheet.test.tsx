@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import MReservationSheet from '../../../../src/mobile/screens/trip/sheets/MReservationSheet'
 import { useAddonStore } from '../../../../src/store/addonStore'
 import { useTripStore } from '../../../../src/store/tripStore'
-import type { Accommodation, Day, Place, Reservation, TripMember } from '../../../../src/types'
+import type { Accommodation, Assignment, Day, Place, Reservation, TripMember } from '../../../../src/types'
 import { buildPlanner } from '../../../helpers/mobileTrip'
 import { resetAllStores } from '../../../helpers/store'
 import { fireEvent, render, screen, waitFor } from '../../../helpers/render'
@@ -75,6 +75,11 @@ const PLACES = [
 const ACCOMMODATIONS = [
   { id: 77, trip_id: 5, place_id: 101, start_day_id: 12, end_day_id: 13 },
 ] as unknown as Accommodation[]
+
+const ASSIGNMENT = {
+  id: 11, day_id: 12, order_index: 0, place_id: 102,
+  place: { id: 102, name: 'Cafe Central', place_time: '19:30' },
+} as unknown as Assignment
 
 const MEMBERS = [
   { id: 7, username: 'Ana', avatar_url: '/uploads/ana.png' },
@@ -207,6 +212,61 @@ describe('MReservationSheet', () => {
       assignment_id: null, accommodation_id: null, place_id: null,
       metadata: null, endpoints: [], needs_review: false,
     })
+  })
+
+  it('FE-MOB-RESSH-054: editing a booking keeps the stop it was linked to (#2216)', async () => {
+    const linked = { ...DINNER, id: 71, assignment_id: 11, title: 'Zoo tickets' } as unknown as Reservation
+    const planner = makePlanner({ editingReservation: linked, assignments: { 12: [ASSIGNMENT] } })
+    setup(planner)
+
+    fireEvent.click(submitBtn())
+
+    await waitFor(() => expect(planner.handleSaveReservation).toHaveBeenCalled())
+    // Saving without touching the picker used to send null and erase the link.
+    expect(savedPayload(planner).assignment_id).toBe(11)
+    // And the endpoint set is left alone rather than replaced by an empty one.
+    expect(savedPayload(planner)).not.toHaveProperty('endpoints')
+  })
+
+  it('FE-MOB-RESSH-055: the picker shows the plan and can unlink the booking (#2216)', async () => {
+    const linked = { ...DINNER, id: 71, assignment_id: 11 } as unknown as Reservation
+    const planner = makePlanner({ editingReservation: linked, assignments: { 12: [ASSIGNMENT] } })
+    setup(planner)
+
+    expect(screen.getByText('reservations.linkAssignment')).toBeInTheDocument()
+    const picker = selects().find(s => s.getAttribute('data-value') === '11')
+    expect(picker).toBeTruthy()
+
+    pick(picker!, '')
+    fireEvent.click(submitBtn())
+    await waitFor(() => expect(planner.handleSaveReservation).toHaveBeenCalled())
+    expect(savedPayload(planner).assignment_id).toBeNull()
+  })
+
+  it('FE-MOB-RESSH-056: a booking created for a stop still saves that stop', async () => {
+    const planner = makePlanner({ bookingForAssignmentId: 11, assignments: { 12: [ASSIGNMENT] } })
+    setup(planner)
+    type(titleField(), 'Zoo tickets')
+    fireEvent.click(submitBtn())
+
+    await waitFor(() => expect(planner.handleSaveReservation).toHaveBeenCalled())
+    expect(savedPayload(planner).assignment_id).toBe(11)
+    // A create still declares the endpoint set, which is what the server expects.
+    expect(savedPayload(planner).endpoints).toEqual([])
+  })
+
+  it('FE-MOB-RESSH-057: the files already on the booking are listed, not just this session\'s picks (#2217)', () => {
+    const linked = { ...DINNER, id: 71 } as unknown as Reservation
+    const files = [
+      { id: 4, trip_id: 5, reservation_id: 71, original_name: 'voucher.pdf', url: '/uploads/voucher.pdf', deleted_at: null },
+      { id: 5, trip_id: 5, reservation_id: 99, original_name: 'other.pdf', url: '/uploads/other.pdf', deleted_at: null },
+      { id: 6, trip_id: 5, linked_reservation_ids: [71], original_name: 'linked.pdf', url: '/uploads/linked.pdf', deleted_at: null },
+    ]
+    setup(makePlanner({ editingReservation: linked, files }))
+
+    expect(screen.getByText('voucher.pdf')).toBeInTheDocument()
+    expect(screen.getByText('linked.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('other.pdf')).not.toBeInTheDocument()
   })
 
   it('FE-MOB-RESSH-007: the type chips switch the form between event and hotel layout', () => {

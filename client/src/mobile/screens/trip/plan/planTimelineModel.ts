@@ -1,6 +1,6 @@
 import { Cloud, CloudDrizzle, CloudLightning, CloudRain, CloudSnow, Sun, Wind } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import { getDisplayTimeForDay, getSpanPhase, hidesOnMiddleDay, parseTimeToMinutes } from '../../../../utils/dayMerge'
+import { getAssignmentReservations, getDisplayTimeForDay, getSpanPhase, hidesOnMiddleDay, parseTimeToMinutes } from '../../../../utils/dayMerge'
 import { getDayBookendHotels, isDayInAccommodationRange } from '../../../../utils/dayOrder'
 import type { MergedItem } from '../../../../utils/dayMerge'
 import type { TransitLegDisplay } from '../../../../components/Planner/transitDisplay'
@@ -24,7 +24,7 @@ export interface TransitMeta {
 }
 
 export type PlanRow =
-  | { key: string; kind: 'place'; item: MergedItem; assignment: Assignment; linkedRes: Reservation | null }
+  | { key: string; kind: 'place'; item: MergedItem; assignment: Assignment; linkedReservations: Reservation[] }
   | { key: string; kind: 'transport'; item: MergedItem; res: TransportEntry }
   | { key: string; kind: 'transit'; item: MergedItem; res: TransportEntry; transit: TransitMeta }
   | { key: string; kind: 'note'; item: MergedItem; note: DayNote }
@@ -100,7 +100,10 @@ export function buildPlanRows(opts: {
         kind: 'place',
         item,
         assignment,
-        linkedRes: reservations.find(r => r.assignment_id === assignment.id) ?? null,
+        // All of them: a stop can carry a parking pass and the tickets for the same
+        // attraction, and getTransportForDay keeps every linked booking out of the
+        // timeline, so anything dropped here is gone from the plan tab (#2201).
+        linkedReservations: getAssignmentReservations(reservations, assignment.id),
       })
     } else if (item.type === 'note') {
       const note = item.data as DayNote
@@ -150,6 +153,9 @@ export interface HotelChip {
   variant: 'checkout' | 'checkin' | 'stay'
   name: string
   time: string | null
+  /** The stay behind the chip, so a tap can open it rather than the day (#2210). */
+  accId: number
+  placeId: number | null
 }
 
 const accommodationName = (a: Accommodation): string => a.place_name || a.reservation_title || ''
@@ -159,12 +165,13 @@ export function hotelChipsForDay(day: Day, days: Day[], accommodations: Accommod
   const inRange = accommodations.filter(a => isDayInAccommodationRange(day, a.start_day_id, a.end_day_id, days))
   const chips: HotelChip[] = []
   for (const a of inRange) {
+    const stay = { name: accommodationName(a), accId: a.id, placeId: a.place_id ?? null }
     if (a.end_day_id === day.id) {
-      chips.push({ key: `out-${a.id}`, variant: 'checkout', name: accommodationName(a), time: a.check_out || null })
+      chips.push({ ...stay, key: `out-${a.id}`, variant: 'checkout', time: a.check_out || null })
     } else if (a.start_day_id === day.id) {
-      chips.push({ key: `in-${a.id}`, variant: 'checkin', name: accommodationName(a), time: a.check_in || null })
+      chips.push({ ...stay, key: `in-${a.id}`, variant: 'checkin', time: a.check_in || null })
     } else {
-      chips.push({ key: `stay-${a.id}`, variant: 'stay', name: accommodationName(a), time: null })
+      chips.push({ ...stay, key: `stay-${a.id}`, variant: 'stay', time: null })
     }
   }
   const rank = { checkout: 0, checkin: 1, stay: 2 }

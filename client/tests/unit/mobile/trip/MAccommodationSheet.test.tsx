@@ -189,6 +189,24 @@ describe('MAccommodationSheet', () => {
     expect(shell.openSheet).toHaveBeenCalledWith('day', { dayId: 12 })
   })
 
+  it('FE-MOB-ACCSH-011c: opened from the timeline chip, cancel and X close instead of reopening the day (#2210)', () => {
+    const { shell } = setup(makePlanner(), makeShell({ dayId: 12, accId: 77, from: 'timeline' }))
+    expect(screen.getByRole('dialog', { name: 'Edit accommodation' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(shell.closeSheet).toHaveBeenCalledTimes(2)
+    expect(shell.openSheet).not.toHaveBeenCalled()
+  })
+
+  it('FE-MOB-ACCSH-011d: a save from the timeline lands back on the timeline', async () => {
+    vi.spyOn(accommodationsApi, 'update').mockResolvedValue({})
+    const { planner, shell } = setup(makePlanner(), makeShell({ dayId: 12, accId: 77, from: 'timeline' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(planner.loadAccommodations).toHaveBeenCalled())
+    expect(shell.closeSheet).toHaveBeenCalledTimes(1)
+    expect(shell.openSheet).not.toHaveBeenCalled()
+  })
+
   it('FE-MOB-ACCSH-012: the All chip spans the whole trip and reaches the payload', async () => {
     const create = vi.spyOn(accommodationsApi, 'create').mockResolvedValue({})
     setup()

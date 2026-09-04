@@ -40,8 +40,10 @@ vi.mock('../../../src/websocket', () => ({ broadcast: vi.fn() }));
 
 import { createTables } from '../../../src/db/schema';
 import { runMigrations } from '../../../src/db/migrationRunner';
-import { resetTestDb } from '../../helpers/test-db';
-import { createUser, createTrip } from '../../helpers/factories';
+import { resetTestDb, setAddonEnabled } from '../../helpers/test-db';
+import { addAlbumLink, addTripPhoto, createUser, createTrip } from '../../helpers/factories';
+import { ADDON_IDS } from '../../../src/addons';
+import { AddonsService } from '../../../src/nest/addons/addons.service';
 import { UnifiedMemoriesService } from '../../../src/nest/memories/unified-memories.service';
 import { MemoriesAccessService } from '../../../src/nest/memories/memories-access.service';
 import { TrekPhotosRepository } from '../../../src/nest/photos/trek-photos.repository';
@@ -60,6 +62,7 @@ const svc = new UnifiedMemoriesService(
   {} as SynologyService,
   new MemoriesAccessService(dbs),
   notificationsStub(),
+  new AddonsService(dbs),
 );
 
 // Legacy free-function names bound to the service, so the moved cases read as before.
@@ -80,6 +83,8 @@ beforeEach(() => {
   resetTestDb(testDb);
   // Ensure default providers are enabled (resetTestDb seeds them but doesn't reset enabled flag)
   testDb.prepare('UPDATE photo_providers SET enabled = 1').run();
+  // Providers only count as enabled under an enabled journey addon (migration 84 seeds it off).
+  setAddonEnabled(testDb, ADDON_IDS.JOURNEY, true);
 });
 
 afterAll(() => {
@@ -101,6 +106,18 @@ describe('listTripPhotos', () => {
 
     // Disable all providers
     testDb.prepare('UPDATE photo_providers SET enabled = 0').run();
+
+    const result = listTripPhotos(String(trip.id), user.id);
+    expect(result.success).toBe(false);
+    expect((result as any).error.status).toBe(400);
+    expect((result as any).error.message).toMatch(/no photo providers enabled/i);
+  });
+
+  it('MEM-UNIFIED-013: treats enabled providers as disabled while the journey addon is off', () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+
+    setAddonEnabled(testDb, ADDON_IDS.JOURNEY, false);
 
     const result = listTripPhotos(String(trip.id), user.id);
     expect(result.success).toBe(false);
@@ -187,6 +204,21 @@ describe('setTripPhotoSharing', () => {
     expect(result.success).toBe(false);
     expect((result as any).error.status).toBe(404);
   });
+
+  it('MEM-UNIFIED-014: Journey addon off refuses sharing without mutating the row', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const photo = addTripPhoto(testDb, trip.id, user.id, 'asset-addon-off-sharing', 'immich');
+    const photoId = (testDb.prepare('SELECT id FROM trek_photos WHERE provider = ? AND asset_id = ?').get('immich', photo.asset_id) as { id: number }).id;
+    setAddonEnabled(testDb, ADDON_IDS.JOURNEY, false);
+
+    const result = await svc.setTripPhotoSharing(String(trip.id), user.id, photoId, true);
+
+    expect(result.success).toBe(false);
+    expect((result as any).error.status).toBe(400);
+    expect((result as any).error.message).toMatch(/journey addon is not enabled/i);
+    expect((testDb.prepare('SELECT shared FROM trip_photos WHERE trip_id = ? AND photo_id = ?').get(trip.id, photoId) as { shared: number }).shared).toBe(0);
+  });
 });
 
 // ── removeTripPhoto ───────────────────────────────────────────────────────────
@@ -196,6 +228,22 @@ describe('removeTripPhoto', () => {
     const result = removeTripPhoto('9999', 1, 'immich', 'asset-1');
     expect(result.success).toBe(false);
     expect((result as any).error.status).toBe(404);
+  });
+
+  it('MEM-UNIFIED-015: Journey addon off refuses removal without deleting the row', () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const photo = addTripPhoto(testDb, trip.id, user.id, 'asset-addon-off-remove', 'immich');
+    const photoId = (testDb.prepare('SELECT id FROM trek_photos WHERE provider = ? AND asset_id = ?').get('immich', photo.asset_id) as { id: number }).id;
+    setAddonEnabled(testDb, ADDON_IDS.JOURNEY, false);
+
+    const result = svc.removeTripPhoto(String(trip.id), user.id, photoId);
+
+    expect(result.success).toBe(false);
+    expect((result as any).error.status).toBe(400);
+    expect((result as any).error.message).toMatch(/journey addon is not enabled/i);
+    expect(testDb.prepare('SELECT 1 FROM trip_photos WHERE trip_id = ? AND photo_id = ?').get(trip.id, photoId)).toBeTruthy();
+    expect(testDb.prepare('SELECT 1 FROM trek_photos WHERE id = ?').get(photoId)).toBeTruthy();
   });
 });
 
@@ -229,5 +277,54 @@ describe('removeAlbumLink', () => {
     const result = removeAlbumLink('9999', '1', 1);
     expect(result.success).toBe(false);
     expect((result as any).error.status).toBe(404);
+  });
+
+  it('MEM-UNIFIED-016: Journey addon off refuses album unlink without deleting link or photos', () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const link = addAlbumLink(testDb, trip.id, user.id, 'immich', 'album-addon-off');
+    const photo = addTripPhoto(testDb, trip.id, user.id, 'asset-addon-off-link', 'immich', { albumLinkId: link.id });
+    const photoId = (testDb.prepare('SELECT id FROM trek_photos WHERE provider = ? AND asset_id = ?').get('immich', photo.asset_id) as { id: number }).id;
+    setAddonEnabled(testDb, ADDON_IDS.JOURNEY, false);
+
+    const result = svc.removeAlbumLink(String(trip.id), String(link.id), user.id);
+
+    expect(result.success).toBe(false);
+    expect((result as any).error.status).toBe(400);
+    expect((result as any).error.message).toMatch(/journey addon is not enabled/i);
+    expect(testDb.prepare('SELECT 1 FROM trip_album_links WHERE id = ?').get(link.id)).toBeTruthy();
+    expect(testDb.prepare('SELECT 1 FROM trip_photos WHERE trip_id = ? AND photo_id = ?').get(trip.id, photoId)).toBeTruthy();
+  });
+});
+
+describe('album sync addon gate', () => {
+  it('MEM-UNIFIED-017: Journey addon off refuses Immich sync before collecting provider assets', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const collect = vi.fn();
+    (svc as any).immich = { collectAlbumSelection: collect };
+    setAddonEnabled(testDb, ADDON_IDS.JOURNEY, false);
+
+    const result = await svc.syncImmichAlbum(String(trip.id), 'missing-link', user.id, 'sid');
+
+    expect(result.success).not.toBe(true);
+    expect(result.status).toBe(400);
+    expect(result.error).toMatch(/journey addon is not enabled/i);
+    expect(collect).not.toHaveBeenCalled();
+  });
+
+  it('MEM-UNIFIED-018: Journey addon off refuses Synology sync before collecting provider assets', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    const collect = vi.fn();
+    (svc as any).synology = { collectSynologyAlbumSelection: collect };
+    setAddonEnabled(testDb, ADDON_IDS.JOURNEY, false);
+
+    const result = await svc.syncSynologyAlbum(user.id, String(trip.id), 'missing-link', 'sid');
+
+    expect(result.success).toBe(false);
+    expect((result as any).error.status).toBe(400);
+    expect((result as any).error.message).toMatch(/journey addon is not enabled/i);
+    expect(collect).not.toHaveBeenCalled();
   });
 });

@@ -26,6 +26,8 @@ const { db } = vi.hoisted(() => {
   // StorageRegistryService (behind StorageModule, now in this module chain) reads
   // this at onModuleInit.
   tmp.exec('CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT);');
+  tmp.exec(`CREATE TABLE addons (id TEXT PRIMARY KEY, name TEXT, type TEXT, icon TEXT, enabled INTEGER, sort_order INTEGER);`);
+  tmp.exec(`CREATE TABLE photo_providers (id TEXT PRIMARY KEY, name TEXT, icon TEXT, enabled INTEGER, sort_order INTEGER);`);
   return { db: tmp };
 });
 
@@ -73,6 +75,42 @@ const UNIFIED = `${BASE}/unified`;
 const IMMICH = `${BASE}/immich`;
 const SYNO = `${BASE}/synologyphotos`;
 
+type ProviderRoute = {
+  method: 'get' | 'put' | 'post';
+  path: string;
+  body?: Record<string, unknown>;
+};
+
+const providerRoutes = {
+  immich: [
+    { method: 'get', path: `${IMMICH}/settings` },
+    { method: 'put', path: `${IMMICH}/settings`, body: { immich_url: 'https://immich.example', immich_api_key: 'key' } },
+    { method: 'get', path: `${IMMICH}/status` },
+    { method: 'post', path: `${IMMICH}/test`, body: { immich_url: 'https://immich.example', immich_api_key: 'key' } },
+    { method: 'get', path: `${IMMICH}/browse` },
+    { method: 'post', path: `${IMMICH}/search`, body: {} },
+    { method: 'get', path: `${IMMICH}/assets/5/asset-1/1/info` },
+    { method: 'get', path: `${IMMICH}/assets/5/asset-1/1/thumbnail` },
+    { method: 'get', path: `${IMMICH}/assets/5/asset-1/1/original` },
+    { method: 'get', path: `${IMMICH}/albums` },
+    { method: 'get', path: `${IMMICH}/albums/al/photos` },
+    { method: 'post', path: `${IMMICH}/trips/5/album-links/7/sync` },
+  ],
+  synologyphotos: [
+    { method: 'get', path: `${SYNO}/settings` },
+    { method: 'put', path: `${SYNO}/settings`, body: { synology_url: 'https://nas.example', synology_username: 'user', synology_password: 'password' } },
+    { method: 'get', path: `${SYNO}/status` },
+    { method: 'post', path: `${SYNO}/test`, body: { synology_url: 'https://nas.example', synology_username: 'user', synology_password: 'password' } },
+    { method: 'get', path: `${SYNO}/albums` },
+    { method: 'get', path: `${SYNO}/albums/al/photos` },
+    { method: 'post', path: `${SYNO}/search`, body: {} },
+    { method: 'post', path: `${SYNO}/trips/5/album-links/7/sync` },
+    { method: 'get', path: `${SYNO}/assets/5/asset-1/1/info` },
+    { method: 'get', path: `${SYNO}/assets/5/asset-1/1/thumbnail` },
+    { method: 'get', path: `${SYNO}/assets/5/asset-1/1/original` },
+  ],
+} satisfies Record<string, readonly ProviderRoute[]>;
+
 describe('Memories e2e (real auth guard + temp SQLite)', () => {
   let server: Server;
   let app: Awaited<ReturnType<typeof build>>;
@@ -93,6 +131,9 @@ describe('Memories e2e (real auth guard + temp SQLite)', () => {
 
   beforeAll(async () => {
     seedUser(db as never, { id: 1 });
+    db.prepare("INSERT INTO addons (id, name, type, enabled, sort_order) VALUES ('journey', 'Journey', 'global', 1, 1)").run();
+    db.prepare("INSERT INTO photo_providers (id, name, enabled, sort_order) VALUES ('immich', 'Immich', 1, 1)").run();
+    db.prepare("INSERT INTO photo_providers (id, name, enabled, sort_order) VALUES ('synologyphotos', 'Synology Photos', 1, 2)").run();
     app = await build();
     server = app.getHttpServer();
   });
@@ -103,8 +144,54 @@ describe('Memories e2e (real auth guard + temp SQLite)', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    db.prepare("UPDATE addons SET enabled = CASE id WHEN 'journey' THEN 1 ELSE enabled END").run();
+    db.prepare('UPDATE photo_providers SET enabled = 1').run();
     canAccessUserPhoto.mockReturnValue(true);
     immich.isValidAssetId.mockReturnValue(true);
+  });
+
+  async function requestRoute(route: ProviderRoute, withCookie: boolean) {
+    let req;
+    if (route.method === 'get') req = request(server).get(route.path);
+    else if (route.method === 'put') req = request(server).put(route.path);
+    else req = request(server).post(route.path);
+    if (withCookie) req.set('Cookie', sessionCookie(1));
+    if ('body' in route) req.send(route.body);
+    return req;
+  }
+
+  async function expectProviderRoutesHidden(
+    provider: keyof typeof providerRoutes,
+    journeyEnabled: boolean,
+    providerEnabled: boolean,
+  ) {
+    db.prepare("UPDATE addons SET enabled = ? WHERE id = 'journey'").run(journeyEnabled ? 1 : 0);
+    db.prepare('UPDATE photo_providers SET enabled = ? WHERE id = ?').run(providerEnabled ? 1 : 0, provider);
+    for (const route of providerRoutes[provider]) {
+      const res = await requestRoute(route, true);
+      expect(res.status, `${route.method.toUpperCase()} ${route.path}`).toBe(404);
+    }
+    for (const service of [immich, synology, unified]) {
+      for (const fn of Object.values(service)) expect(fn).not.toHaveBeenCalled();
+    }
+  }
+
+  describe('provider capability gate', () => {
+    it.each([
+      ['immich', false, true],
+      ['immich', true, false],
+      ['synologyphotos', false, true],
+      ['synologyphotos', true, false],
+    ] as const)('404s every %s route when journey=%s provider=%s', async (provider, journeyEnabled, providerEnabled) => {
+      await expectProviderRoutesHidden(provider, journeyEnabled, providerEnabled);
+    });
+
+    it('hides a disabled provider from anonymous callers before JWT auth', async () => {
+      db.prepare("UPDATE photo_providers SET enabled = 0 WHERE id = 'immich'").run();
+      const res = await request(server).get(`${IMMICH}/settings`);
+      expect(res.status).toBe(404);
+      expect(immich.getConnectionSettings).not.toHaveBeenCalled();
+    });
   });
 
   // ── Auth ───────────────────────────────────────────────────────────────────

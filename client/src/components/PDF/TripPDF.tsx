@@ -223,7 +223,7 @@ export async function downloadTripPDF({ trip, days, places, assignments = {}, ca
   const allCostEntries: MoneyEntry[] = Object.values(assignments)
     .flatMap(a => a)
     .map(a => ({ amount: Number(a.place?.price) || 0, currency: a.place?.currency || tripCur }))
-  const needsFx = allCostEntries.some(e => e.amount > 0 && e.currency.toUpperCase() !== tripCur)
+  const needsFx = allCostEntries.some(e => e.amount !== 0 && e.currency.toUpperCase() !== tripCur)
   const fxRates = needsFx ? await fetchExchangeRates(tripCur) : null
   const totalCostLabel = formatMoneySum(allCostEntries, tripCur, loc || 'en', fxRates)
 
@@ -442,6 +442,7 @@ export async function downloadTripPDF({ trip, days, places, assignments = {}, ca
                 ${place.description ? `<div class="info-row"><span class="info-spacer"></span><span class="info-text muted italic">${escHtml(place.description)}</span></div>` : ''}
                 ${chips ? `<div class="chips">${chips}</div>` : ''}
                 ${place.notes ? `<div class="info-row"><span class="info-spacer"></span><span class="info-text muted italic">${escHtml(place.notes)}</span></div>` : ''}
+                ${item.data.notes ? `<div class="info-row"><span class="info-spacer"></span><span class="info-text muted italic">${escHtml(item.data.notes)}</span></div>` : ''}
               </div>
             </div>`
       }).join('')

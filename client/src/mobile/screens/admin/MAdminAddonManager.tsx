@@ -83,18 +83,15 @@ export default function MAdminAddonManager({ bagTrackingEnabled, onToggleBagTrac
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    loadAddons()
+    loadAddons().finally(() => setLoading(false))
   }, [])
 
   const loadAddons = async () => {
-    setLoading(true)
     try {
       const data = await adminApi.addons()
       setAddons(data.addons)
     } catch (err: unknown) {
       toast.error(t('admin.addons.toast.error'))
-    } finally {
-      setLoading(false)
     }
   }
 
@@ -104,13 +101,18 @@ export default function MAdminAddonManager({ bagTrackingEnabled, onToggleBagTrac
     setAddons(prev => prev.map(a => a.id === addon.id ? { ...a, enabled: newEnabled } : a))
     try {
       await adminApi.updateAddon(addon.id, { enabled: newEnabled })
-      refreshGlobalAddons()
-      toast.success(t('admin.addons.toast.updated'))
     } catch (err: unknown) {
       // Rollback
       setAddons(prev => prev.map(a => a.id === addon.id ? { ...a, enabled: !newEnabled } : a))
       toast.error(t('admin.addons.toast.error'))
+      return
     }
+    refreshGlobalAddons()
+    // Journey off disables every photo provider with it, and the response carries
+    // only Journey. Without re-reading, switching Journey back on brings the shelf
+    // up with providers the database has long since turned off.
+    if (addon.id === 'journey') await loadAddons()
+    toast.success(t('admin.addons.toast.updated'))
   }
 
   const isPhotoProviderAddon = (addon: Addon) => {
@@ -220,8 +222,8 @@ export default function MAdminAddonManager({ bagTrackingEnabled, onToggleBagTrac
               {globalAddons.map((addon, i) => (
                 <div key={addon.id}>
                   <MAddonRow addon={addon} onToggle={handleToggle} t={t} first={i === 0} />
-                  {/* Memories providers as sub-items under Journey addon */}
-                  {addon.id === 'journey' && providerOptions.length > 0 && (
+                  {/* Memories providers as sub-items under Journey addon — only while it is on */}
+                  {addon.id === 'journey' && addon.enabled && providerOptions.length > 0 && (
                     <>
                       {providerOptions.map(provider => {
                         const ProviderIcon = PROVIDER_ICONS[provider.key]

@@ -4176,6 +4176,87 @@ function runMigrations(db: Database.Database): void {
         db.exec("ALTER TABLE mcp_tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'mcp'");
       }
     },
+    /**
+     * `naver_list_import` was typed 'trip', but a trip addon is one that earns its own
+     * tab inside a trip — this one has no tab (it is not in tripTabs.ts) and no page. It
+     * calls an external service to pull places into the sidebar, which is exactly what
+     * 'integration' means here.
+     *
+     * The type is presentational: only `type === 'global'` is read anywhere
+     * (client navItems.ts), so this moves the tile between admin groups and changes
+     * nothing about how the import behaves.
+     *
+     * Appended LAST: the array is index-addressed against schema_version.
+     */
+    () => {
+      db.prepare("UPDATE addons SET type = 'integration' WHERE id = 'naver_list_import'").run();
+    },
+    /**
+     * Whether a journey's map draws the GPX tracks of the trips behind it (#2194).
+     *
+     * #1260 added those tracks unconditionally and with nothing to switch off,
+     * on the reasoning that a route imported into a linked trip is part of the
+     * journey's story. For a trip carrying a season of recorded drives it is
+     * instead a map nobody asked for, drawn from places that never became an
+     * entry — so it becomes a journey-level setting.
+     *
+     * DEFAULT 0, i.e. off: the tracks are opt-in from here on. That is a
+     * deliberate behaviour change rather than a preserved default — a journal
+     * should show what its author put in it, and #1260's set is everything the
+     * linked trips happen to contain. Owners who want them back have one
+     * switch in Journey Settings.
+     */
+    () => {
+      const cols = db.prepare("SELECT name FROM pragma_table_info('journeys')").all() as Array<{ name: string }>;
+      if (!cols.some(c => c.name === 'show_trip_tracks')) {
+        db.exec('ALTER TABLE journeys ADD COLUMN show_trip_tracks INTEGER NOT NULL DEFAULT 0');
+      }
+    },
+    /**
+     * Settings-field defaults (#plugins, PR-87 feedback). A manifest `default` is the
+     * field's effective value when nothing is stored — the settings form pre-fills it and
+     * the runtime resolves it (settings-defaults.ts); it was previously accepted by the
+     * manifest and silently dropped here. JSON-encoded so string/number/boolean round-trip.
+     *
+     * Appended LAST: the array is index-addressed against schema_version.
+     */
+    () => {
+      const cols = db.prepare("SELECT name FROM pragma_table_info('plugin_settings_fields')").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'default_value')) {
+        db.exec('ALTER TABLE plugin_settings_fields ADD COLUMN default_value TEXT');
+      }
+    },
+
+    // Settings-form actions gain a scope (#plugins): 'user' renders on the user Settings
+    // tab, 'instance' in the admin instance-settings dialog. Existing rows predate the
+    // column and were all user-tab buttons, so the default keeps them where they were.
+    () => {
+      const cols = db.prepare("SELECT name FROM pragma_table_info('plugin_actions')").all() as Array<{ name: string }>;
+      if (cols.length > 0 && !cols.some((c) => c.name === 'scope')) {
+        db.exec("ALTER TABLE plugin_actions ADD COLUMN scope TEXT NOT NULL DEFAULT 'user'");
+      }
+    },
+    /**
+     * A journal entry that is not a stop (discussion #2064).
+     *
+     * Studio draws its route and prints its distance from every entry that
+     * carries coordinates, and that is right until the journal starts at the
+     * home airport: the night before the flight, the stopover, the place the
+     * trip was planned from all become stops, and the distance counts the legs
+     * to and from them. The traveller knows which of those are the journey and
+     * which are the way there, so the switch sits on the entry. The entry stays
+     * in the journal; it is only left out of the arithmetic.
+     *
+     * DEFAULT 0: every existing entry keeps counting, which is what it did.
+     *
+     * Appended LAST: the array is index-addressed against schema_version.
+     */
+    () => {
+      const cols = db.prepare("SELECT name FROM pragma_table_info('journey_entries')").all() as Array<{ name: string }>;
+      if (!cols.some((c) => c.name === 'stats_excluded')) {
+        db.exec('ALTER TABLE journey_entries ADD COLUMN stats_excluded INTEGER NOT NULL DEFAULT 0');
+      }
+    },
   ];
 
   if (currentVersion < migrations.length) {

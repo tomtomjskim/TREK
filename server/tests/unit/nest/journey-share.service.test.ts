@@ -672,6 +672,72 @@ describe('getPublicJourney', () => {
     expect((result.entries[0] as Record<string, unknown>).photos).toEqual([]); // inline photos withheld too
   });
 
+  // #2200: the reader of a shared journey gets the same chronology as the owner,
+  // so the public gallery cannot fall back to upload order.
+  it('JOURNEY-SHARE-031: the public gallery reads in capture order, not upload order', () => {
+    const { user } = createUser(testDb);
+    const journey = createJourney(testDb, user.id);
+    const day1 = createJourneyEntry(testDb, journey.id, user.id, {
+      type: 'entry', title: 'Day 1', entry_date: '2026-05-01', visibility: 'shared',
+    });
+    const day2 = createJourneyEntry(testDb, journey.id, user.id, {
+      type: 'entry', title: 'Day 2', entry_date: '2026-05-02', visibility: 'shared',
+    });
+
+    const late = insertJourneyPhoto(day2.id, { filePath: '/photos/day2.jpg' });
+    const early = insertJourneyPhoto(day1.id, { filePath: '/photos/day1.jpg' });
+    testDb.prepare('UPDATE trek_photos SET taken_at = ? WHERE id = ?').run('2026-05-02T16:00:00.000Z', late);
+
+    const { token } = svc.createOrUpdateJourneyShareLink(journey.id, user.id, {
+      share_timeline: true, share_gallery: true, share_map: true,
+    });
+
+    const gallery = svc.getPublicJourney(token)!.gallery as Record<string, unknown>[];
+    // `file_path` is provider/storage metadata and is intentionally excluded
+    // from the anonymous DTO. Assert chronology through the public photo id.
+    expect(gallery.map(p => p.photo_id)).toEqual([early, late]);
+  });
+
+  it('JOURNEY-SHARE-036: hidden earlier entries do not reorder a public photo without capture time', () => {
+    const { user } = createUser(testDb);
+    const journey = createJourney(testDb, user.id);
+    const hiddenPrivate = createJourneyEntry(testDb, journey.id, user.id, {
+      type: 'entry', entry_date: '2026-04-01', visibility: 'private',
+    });
+    const hiddenSkeleton = createJourneyEntry(testDb, journey.id, user.id, {
+      type: 'skeleton', entry_date: '2026-04-02', visibility: 'shared',
+    });
+    const visibleMiddle = createJourneyEntry(testDb, journey.id, user.id, {
+      type: 'entry', entry_date: '2026-05-02', visibility: 'shared',
+    });
+    const visibleTarget = createJourneyEntry(testDb, journey.id, user.id, {
+      type: 'entry', entry_date: '2026-05-03', visibility: 'public',
+    });
+
+    const middlePhoto = insertJourneyPhoto(visibleMiddle.id, { filePath: '/photos/middle.jpg' });
+    const targetPhoto = insertJourneyPhoto(visibleTarget.id, { filePath: '/photos/target.jpg' });
+    const targetGallery = testDb.prepare(
+      'SELECT id FROM journey_photos WHERE journey_id = ? AND photo_id = ?',
+    ).get(journey.id, targetPhoto) as { id: number };
+
+    // Imported data can attach one gallery photo to multiple entries. The
+    // public order must ignore these private/skeleton chronology anchors.
+    testDb.prepare(`
+      INSERT INTO journey_entry_photos (entry_id, journey_photo_id, sort_order, created_at)
+      VALUES (?, ?, 0, ?), (?, ?, 1, ?)
+    `).run(
+      hiddenPrivate.id, targetGallery.id, Date.now(),
+      hiddenSkeleton.id, targetGallery.id, Date.now(),
+    );
+
+    const { token } = svc.createOrUpdateJourneyShareLink(journey.id, user.id, {
+      share_timeline: true, share_gallery: true, share_map: true,
+    });
+
+    const gallery = svc.getPublicJourney(token)!.gallery as Record<string, unknown>[];
+    expect(gallery.map(p => p.photo_id)).toEqual([middlePhoto, targetPhoto]);
+  });
+
   it('JOURNEY-SHARE-030: never returns a CARTO credential in the public payload (#2054)', () => {
     const { user } = createUser(testDb);
     const journey = createJourney(testDb, user.id);

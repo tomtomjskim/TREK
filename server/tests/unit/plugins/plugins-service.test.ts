@@ -12,7 +12,7 @@ const { testDb } = vi.hoisted(() => {
     status TEXT, enabled INTEGER DEFAULT 0, last_error TEXT, reviewed_at TEXT, source_repo TEXT, config TEXT DEFAULT '{}', permissions TEXT DEFAULT '[]', granted_permissions TEXT DEFAULT '[]', capabilities TEXT DEFAULT '{}', dependencies TEXT DEFAULT '{}', operator_egress INTEGER DEFAULT 0, updated_at TEXT,
     author_pubkey TEXT, update_block_code TEXT, update_block_detail TEXT, update_block_version TEXT,
     trek_range TEXT, sort_order INTEGER DEFAULT 0, update_hold INTEGER NOT NULL DEFAULT 0);
-    CREATE TABLE plugin_settings_fields (plugin_id TEXT, field_key TEXT, scope TEXT, secret INTEGER);
+    CREATE TABLE plugin_settings_fields (plugin_id TEXT, field_key TEXT, scope TEXT, secret INTEGER, required INTEGER DEFAULT 0, input_type TEXT DEFAULT 'text', default_value TEXT);
     CREATE TABLE plugin_error_log (id INTEGER PRIMARY KEY AUTOINCREMENT, plugin_id TEXT, level TEXT, message TEXT, ts TEXT DEFAULT '2026-01-01');`);
   return { testDb: db };
 });
@@ -222,6 +222,7 @@ describe('PluginsFeedController (client feed)', () => {
 describe('PluginsController M2 endpoints', () => {
   const svc = {
     getInstanceConfig: vi.fn(() => ({ a: 1 })),
+    instanceSettingsFields: vi.fn(() => [{ key: 'a' }]),
     updateInstanceConfig: vi.fn(() => ({ a: 2 })),
   } as unknown as PluginsService;
   // None of the endpoints below carry the marker, so the ordinary install is the
@@ -234,11 +235,11 @@ describe('PluginsController M2 endpoints', () => {
     process.env.TREK_PLUGINS_ENABLED = 'true';
   });
 
-  it('get/update config delegate to the service', () => {
-    const rt = { activate: vi.fn(), deactivate: vi.fn(), isActive: vi.fn() } as never;
+  it('get/update config delegate to the service (get carries the form fields, update the restart)', async () => {
+    const rt = { activate: vi.fn(), deactivate: vi.fn(), isActive: vi.fn(), respawnIfActive: vi.fn(async () => false), actionsOf: vi.fn(() => []) } as never;
     const c = new PluginsController(svc, rt, {} as never, envStub);
-    expect(c.getConfig('x')).toEqual({ config: { a: 1 } });
-    expect(c.updateConfig('x', { a: 2 })).toEqual({ config: { a: 2 } });
+    expect(c.getConfig('x')).toEqual({ fields: [{ key: 'a' }], config: { a: 1 }, actions: [] });
+    expect(await c.updateConfig('x', { a: 2 })).toEqual({ config: { a: 2 }, restarted: false });
   });
 
   it('activate spawns via the runtime when enabled', async () => {

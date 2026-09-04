@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import crypto from 'crypto';
 import { DatabaseService } from '../database/database.service';
 import { JourneyDomainService } from './journey-domain.service';
+import { decodeEntryRow } from './journey-entry-row';
+import { PUBLIC_GALLERY_CHRONOLOGICAL_ORDER } from './journey-gallery-order';
 
 interface JourneySharePermissions {
   share_timeline?: boolean;
@@ -201,7 +203,7 @@ export class JourneyShareService {
       ? this.db.prepare(`
           SELECT je.id, je.type, je.title, je.story, je.entry_date, je.entry_time,
                  je.location_name, je.location_lat, je.location_lng, je.mood,
-                 je.weather, je.tags, je.pros_cons
+                 je.weather, je.tags, je.pros_cons, je.stats_excluded
           FROM journey_entries je
           WHERE je.journey_id = ? AND je.type != 'skeleton'
             AND je.visibility IN ('shared', 'public')
@@ -234,12 +236,12 @@ export class JourneyShareService {
     const gallery = shareGallery
       ? this.db.prepare(`
           SELECT gp.id, gp.photo_id, gp.caption,
-                 tkp.media_type, tkp.duration_ms, tkp.taken_at, tkp.lat, tkp.lng
+                 tp.media_type, tp.duration_ms, tp.taken_at, tp.lat, tp.lng
           FROM journey_photos gp
-          JOIN trek_photos tkp ON tkp.id = gp.photo_id
+          JOIN trek_photos tp ON tp.id = gp.photo_id
           WHERE gp.journey_id = ?
           ${PUBLIC_GALLERY_PHOTO_SCOPE}
-          ORDER BY gp.sort_order
+          ${PUBLIC_GALLERY_CHRONOLOGICAL_ORDER}
         `).all(row.journey_id) as any[]
       : [];
 
@@ -312,20 +314,21 @@ export class JourneyShareService {
 }
 
 function projectPublicEntry(entry: any): Record<string, unknown> {
+  const decoded = decodeEntryRow(entry);
   return {
-    id: entry.id,
-    type: entry.type,
-    title: entry.title,
-    story: entry.story,
-    entry_date: entry.entry_date,
-    entry_time: entry.entry_time,
-    location_name: entry.location_name,
-    location_lat: entry.location_lat,
-    location_lng: entry.location_lng,
-    mood: entry.mood,
-    weather: entry.weather,
-    tags: entry.tags ? JSON.parse(entry.tags) : [],
-    pros_cons: entry.pros_cons ? JSON.parse(entry.pros_cons) : null,
+    id: decoded.id,
+    type: decoded.type,
+    title: decoded.title,
+    story: decoded.story,
+    entry_date: decoded.entry_date,
+    entry_time: decoded.entry_time,
+    location_name: decoded.location_name,
+    location_lat: decoded.location_lat,
+    location_lng: decoded.location_lng,
+    mood: decoded.mood,
+    weather: decoded.weather,
+    tags: decoded.tags,
+    pros_cons: decoded.pros_cons,
   };
 }
 

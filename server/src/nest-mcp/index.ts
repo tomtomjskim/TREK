@@ -35,6 +35,7 @@ export {
   type McpModuleOptions,
   type McpRegistryListing,
   type McpZodSchema,
+  type PromptArgsShape,
   type PromptOptions,
   type ResourceOptions,
   type ResourceTemplateOptions,

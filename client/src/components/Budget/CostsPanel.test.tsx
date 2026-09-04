@@ -518,8 +518,9 @@ describe('CostsPanel — settlements in the ledger', () => {
     await user.click(screen.getByTitle('Edit'))
 
     // Loading used to be payers.find(...), which silently dropped the second payer.
+    // Seeded with two decimals since #2175, localized for EUR.
     const amounts = await screen.findAllByTestId('payer-amount')
-    expect(amounts.map(i => (i as HTMLInputElement).value)).toEqual(['45', '45'])
+    expect(amounts.map(i => (i as HTMLInputElement).value)).toEqual(['45,00', '45,00'])
 
     await user.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(put).toBeTruthy())
@@ -705,8 +706,9 @@ describe('CostsPanel — settlements in the ledger', () => {
     await screen.findByText('Payment')
     await user.click(screen.getByTitle('Edit'))
 
-    // The stored USD amount comes back as-is, not silently reread as euros.
-    expect((await screen.findByPlaceholderText('0.00') as HTMLInputElement).value).toBe('30')
+    // The stored USD amount comes back as-is (padded to two decimals, #2175),
+    // not silently reread as euros.
+    expect((await screen.findByPlaceholderText('0.00') as HTMLInputElement).value).toBe('30.00')
     expect(screen.getByText(/^USD/)).toBeInTheDocument()
   })
 })
@@ -1300,8 +1302,9 @@ describe('CostsPanel — expense modal', () => {
     await screen.findByText('Dinner')
     await user.click(screen.getByTitle('Edit'))
 
-    expect((await screen.findByDisplayValue('70')).tagName).toBe('INPUT')
-    expect(screen.getByDisplayValue('30')).toBeInTheDocument()
+    // Custom shares reopen padded to two decimals (#2175), localized for EUR.
+    expect((await screen.findByDisplayValue('70,00')).tagName).toBe('INPUT')
+    expect(screen.getByDisplayValue('30,00')).toBeInTheDocument()
 
     // Excluding Bob drops his amount; the split no longer matches the total.
     await user.click(screen.getByRole('button', { name: /bob/i }))
@@ -1430,7 +1433,8 @@ describe('CostsPanel — expense modal', () => {
     )
 
     expect(screen.getByDisplayValue('Hotel Astoria')).toBeInTheDocument()
-    expect(screen.getByDisplayValue('240')).toBeInTheDocument()
+    // The prefilled amount is padded to the base currency's decimals (#2175).
+    expect(screen.getByDisplayValue('240,00')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Add expense' }))
 
     await waitFor(() => expect(posted).toBeTruthy())
@@ -1640,7 +1644,8 @@ describe('CostsPanel — remaining paths', () => {
     await screen.findByText('Mining rig')
     await user.click(screen.getByTitle('Edit'))
 
-    expect(await screen.findByDisplayValue('2')).toBeInTheDocument()
+    // XBT is unknown to the locale map → dot separator, two decimals (#2175).
+    expect(await screen.findByDisplayValue('2.00')).toBeInTheDocument()
     expect(screen.getAllByText('XBT').length).toBeGreaterThanOrEqual(2)
   })
 
@@ -1859,6 +1864,173 @@ describe('CostsPanel — mobile extras', () => {
 
     await screen.findByText('Mystery')
     expect(screen.getByText('Total trip spend').parentElement).toHaveTextContent('90.00 XX')
+  })
+})
+
+// ── #2175: edit inputs are padded to the currency's decimals ────────────────
+describe('CostsPanel — decimal padding on edit (#2175)', () => {
+  beforeEach(() => {
+    seedAlice()
+    clearExchangeRateCache()
+  })
+  afterEach(clearExchangeRateCache)
+
+  it('FE-W5COSTS-066: reopens 4,90 as "4,90" and 5,00 as "5,00", not "4,9" and "5"', async () => {
+    const user = userEvent.setup()
+    mount([
+      expense({ id: 301, name: 'Coffee', category: 'food', total_price: 4.9, payers: [{ user_id: 1, amount: 4.9 }], members: [{ user_id: 1, username: 'alice' }] }),
+      expense({ id: 302, name: 'Toll', category: 'transport', total_price: 5, payers: [{ user_id: 1, amount: 5 }], members: [{ user_id: 1, username: 'alice' }] }),
+    ])
+
+    await screen.findByText('Coffee')
+    await user.click(screen.getAllByTitle('Edit')[0])
+    expect(await screen.findByDisplayValue('4,90')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    await user.click(screen.getAllByTitle('Edit')[1])
+    expect(await screen.findByDisplayValue('5,00')).toBeInTheDocument()
+  })
+
+  it('FE-W5COSTS-071: a three-decimal currency seeds three places and the split field still takes input', async () => {
+    const user = userEvent.setup()
+    render(<ExpenseModal tripId={1} base="KWD" people={tripMembers} me={1} onClose={() => {}} onSaved={vi.fn()}
+      editing={expense({
+        id: 340, name: 'Museum', category: 'activities', currency: 'KWD', total_price: 3,
+        payers: [{ user_id: 1, amount: 3 }],
+        members: [{ user_id: 1, username: 'alice', amount: 1.5 }, { user_id: 2, username: 'bob', amount: 1.5 }],
+      })} />)
+
+    expect(await screen.findByDisplayValue('3.000')).toBeInTheDocument()
+    const shares = screen.getAllByDisplayValue('1.500') as HTMLInputElement[]
+
+    // The seed is three decimals, so a two-decimal guard would reject every further
+    // keystroke, including one typed in front of the decimal point.
+    await user.type(shares[0], '2', { initialSelectionStart: 0, initialSelectionEnd: 0 })
+    expect(shares[0].value).toBe('21.500')
+
+    // A fourth decimal is still not a fils.
+    await user.clear(shares[1])
+    await user.type(shares[1], '1.5005')
+    expect(shares[1].value).toBe('1.500')
+  })
+})
+
+// ── #2176: negative amounts record partial reimbursements ───────────────────
+describe('CostsPanel — negative amounts (#2176)', () => {
+  beforeEach(() => {
+    seedAlice()
+    clearExchangeRateCache()
+  })
+  afterEach(clearExchangeRateCache)
+
+  it('FE-W5COSTS-067: "-100" can be typed and saves a negative expense with its payer', async () => {
+    const user = userEvent.setup()
+    let posted: Record<string, unknown> | null = null
+    server.use(http.post('/api/trips/1/budget', async ({ request }) => {
+      posted = await request.json() as Record<string, unknown>
+      return HttpResponse.json({ item: { ...buildBudgetItem({ trip_id: 1, name: 'Hotel refund' }), id: 12 } })
+    }))
+    mount([])
+
+    await user.click(await screen.findByRole('button', { name: 'Add expense' }))
+    await user.type(await screen.findByPlaceholderText('e.g. Dinner, souvenirs, gas…'), 'Hotel refund')
+    // The reported symptom: the '-' was stripped on input, so this was untypeable.
+    await user.type(screen.getAllByPlaceholderText('0,00')[0], '-100')
+
+    const submits = screen.getAllByRole('button', { name: 'Add expense' })
+    expect(submits[submits.length - 1]).not.toBeDisabled()
+    await user.click(submits[submits.length - 1])
+
+    await waitFor(() => expect(posted).toBeTruthy())
+    expect(posted!.total_price).toBe(-100)
+    expect(posted!.payers).toEqual([{ user_id: 1, amount: -100 }])
+    expect(posted!.member_ids).toEqual([1, 2])
+  })
+
+  it('FE-W5COSTS-068: a refund reopens with its negative payer intact and saves it back', async () => {
+    const user = userEvent.setup()
+    let put: Record<string, unknown> | null = null
+    server.use(http.put('/api/trips/1/budget/310', async ({ request }) => {
+      put = await request.json() as Record<string, unknown>
+      return HttpResponse.json({ item: dinner() })
+    }))
+    mount([expense({
+      id: 310, name: 'Hotel refund', category: 'lodging', total_price: -100,
+      payers: [{ user_id: 1, amount: -100 }],
+      members: [{ user_id: 1, username: 'alice' }, { user_id: 2, username: 'bob' }],
+    })])
+
+    // The row shows the amount twice — total pill and the payer chip, which used
+    // to be filtered to positive amounts and left the refund's recipient invisible.
+    const row = (await screen.findByText('Hotel refund')).closest('.exp-row') as HTMLElement
+    expect(within(row).getAllByText(/100,00/).length).toBeGreaterThanOrEqual(2)
+    // Not "Unfinished": the refund has its recipient recorded.
+    expect(within(row).queryByText('Unfinished')).toBeNull()
+
+    await user.click(screen.getByTitle('Edit'))
+    // The negative payer reopens selected instead of resetting to "Nobody",
+    // and the total is seeded signed and padded.
+    expect(await screen.findByRole('button', { name: 'You' })).toBeInTheDocument()
+    expect(screen.getByDisplayValue('-100,00')).toBeInTheDocument()
+
+    // Saving untouched must not silently drop the negative payer.
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(put).toBeTruthy())
+    expect(put!.total_price).toBe(-100)
+    expect(put!.payers).toEqual([{ user_id: 1, amount: -100 }])
+  })
+
+  it('FE-W5COSTS-069: a payer-less refund is marked Unfinished like a payer-less bill', async () => {
+    mount([expense({ id: 320, name: 'Pending refund', category: 'misc', total_price: -50, payers: [], members: [{ user_id: 1, username: 'alice' }] })])
+
+    await screen.findByText('Pending refund')
+    expect(screen.getByText('Unfinished')).toBeInTheDocument()
+  })
+
+  it('FE-W5COSTS-070: the category breakdown nets refunds and keeps a net-negative category listed', async () => {
+    mount([
+      expense({ id: 330, name: 'Dinner', category: 'food', total_price: 90, payers: [{ user_id: 1, amount: 90 }], members: [{ user_id: 1, username: 'alice' }] }),
+      expense({ id: 331, name: 'Meal refund', category: 'food', total_price: -30, payers: [{ user_id: 1, amount: -30 }], members: [{ user_id: 1, username: 'alice' }] }),
+      expense({ id: 332, name: 'Cancelled tour', category: 'activities', total_price: -20, payers: [{ user_id: 1, amount: -20 }], members: [{ user_id: 1, username: 'alice' }] }),
+    ])
+
+    await screen.findByText('Dinner')
+    const breakdown = screen.getByText('By category').parentElement as HTMLElement
+    // Food nets 90 − 30 = 60; the fully refunded tour keeps a row of its own.
+    expect(within(breakdown).getByText('60 €')).toBeInTheDocument()
+    expect(within(breakdown).getByText(/[-−]20\s*€/)).toBeInTheDocument()
+  })
+
+  it('FE-W5COSTS-072: the custom-split hint reads under and over the right way round on a refund', async () => {
+    const user = userEvent.setup()
+    render(<ExpenseModal tripId={1} base="EUR" people={tripMembers} me={1} onClose={() => {}} onSaved={vi.fn()}
+      editing={expense({
+        id: 341, name: 'Hotel refund', category: 'accommodation', total_price: -100,
+        payers: [{ user_id: 1, amount: -100 }],
+        members: [{ user_id: 1, username: 'alice', amount: -70 }, { user_id: 2, username: 'bob' }],
+      })} />)
+
+    // -70 of -100: 30 still to hand out, not 30 too much.
+    expect(await screen.findByText('Sum of splits: €-70.00 of €-100.00 (under by €30.00)')).toBeInTheDocument()
+
+    await user.type(screen.getByPlaceholderText('-30,00'), '-40')
+    expect(screen.getByText('Sum of splits: €-110.00 of €-100.00 (over by €10.00)')).toBeInTheDocument()
+  })
+
+  it('FE-W5COSTS-073: the total can be turned into a refund without a minus key', async () => {
+    const user = userEvent.setup()
+    render(<ExpenseModal tripId={1} base="EUR" people={tripMembers} me={1} editing={null}
+      onClose={() => {}} onSaved={vi.fn()} />)
+
+    const total = (await screen.findAllByPlaceholderText('0,00'))[0] as HTMLInputElement
+    await user.type(total, '100')
+
+    // The iOS decimal pad has no minus key, so the sign has to be reachable without one.
+    const toggle = screen.getByRole('button', { name: 'Switch between expense and refund' })
+    await user.click(toggle)
+
+    expect(total.value).toBe('-100')
+    expect(toggle).toHaveAttribute('aria-pressed', 'true')
   })
 })
 

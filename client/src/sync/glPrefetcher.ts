@@ -15,12 +15,15 @@
  * The style, sprite and glyphs are per device rather than per trip: about
  * 980 KB once, not per journey.
  */
-import { computeBbox, lngToTileX, latToTileY, type TileBbox } from './tilePrefetcher'
+import { computeBbox, tileRange, type TileBbox } from './tilePrefetcher'
 import type { Place } from '../types'
 
 /** OpenFreeMap serves vector tiles up to z14 and overzooms from there. */
 const VECTOR_MAX_ZOOM = 14
-const VECTOR_MIN_ZOOM = 10
+// Zoom 0, not 10: MapLibre can only overzoom upward, so a wide trip opening at
+// its fitBounds zoom (z6–9) rendered nothing offline with a z10 floor (#2180).
+// The low zooms cost a few dozen tiles at most.
+const VECTOR_MIN_ZOOM = 0
 
 /** Requests in flight, kept low for the same reason the raster side keeps it low. */
 const CONCURRENCY = 6
@@ -106,12 +109,11 @@ async function openVectorCache(): Promise<Cache | null> {
 function enumerateVectorTiles(bbox: TileBbox, minZoom: number, maxZoom: number): [number, number, number][] {
   const out: [number, number, number][] = []
   for (let z = minZoom; z <= maxZoom; z++) {
-    const x0 = lngToTileX(bbox.minLng, z)
-    const x1 = lngToTileX(bbox.maxLng, z)
-    const y0 = latToTileY(bbox.maxLat, z)
-    const y1 = latToTileY(bbox.minLat, z)
-    for (let x = Math.min(x0, x1); x <= Math.max(x0, x1); x++) {
-      for (let y = Math.min(y0, y1); y <= Math.max(y0, y1); y++) {
+    // Same screen-widened rectangle as the raster side: the opening fitBounds
+    // view shows more than the places extent on the non-limiting axis (#2180).
+    const { minX, maxX, minY, maxY } = tileRange(bbox, z)
+    for (let x = minX; x <= maxX; x++) {
+      for (let y = minY; y <= maxY; y++) {
         out.push([z, x, y])
         if (out.length >= MAX_VECTOR_TILES) return out
       }

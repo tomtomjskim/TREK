@@ -87,7 +87,9 @@ vi.mock('../../hooks/useDayNotes', () => ({
 }))
 
 vi.mock('../Weather/WeatherWidget', () => ({
-  default: () => <span data-testid="weather-widget" />,
+  default: (props: { locationName?: string | null }) => (
+    <span data-testid="weather-widget" data-location={props.locationName ?? ''} />
+  ),
 }))
 
 // A stable toast object so tests can assert on the messages the sidebar raises.
@@ -403,6 +405,14 @@ describe('DayPlanSidebar', () => {
     const assignment = buildAssignment({ id: 99, day_id: 10, order_index: 0, place })
     render(<DayPlanSidebar {...makeDefaultProps({ days: [day], places: [place], assignments: { '10': [assignment] } })} />)
     expect(screen.getByText(/10:00/)).toBeInTheDocument()
+  })
+
+  it('FE-PLANNER-DAYPLAN-012b: the day-specific assignment note shows as a caption line in the row (#2163)', () => {
+    const place = buildPlace({ name: 'Louvre Museum' })
+    const day = buildDay({ id: 10, date: '2025-06-01', title: 'Day 1' })
+    const assignment = buildAssignment({ id: 99, day_id: 10, order_index: 0, place, notes: 'Book the 10:00 timed entry' })
+    render(<DayPlanSidebar {...makeDefaultProps({ days: [day], places: [place], assignments: { '10': [assignment] } })} />)
+    expect(screen.getByText('Book the 10:00 timed entry')).toBeInTheDocument()
   })
 
   it('FE-PLANNER-DAYPLAN-013: clicking a place calls onPlaceClick', async () => {
@@ -2892,11 +2902,34 @@ describe('DayPlanSidebar', () => {
     expect(onReorder).not.toHaveBeenCalled()
   })
 
-  it('FE-PLANNER-DAYPLAN-130: the weather badge falls back to any located trip place', () => {
+  // #2167 — the badge used to borrow ANY located trip place, so a roadtrip day
+  // without stops silently showed another city's weather. Day-local only now.
+  it('FE-PLANNER-DAYPLAN-130: no weather badge for a day without located stops or a bookend hotel (#2167)', () => {
     const located = buildPlace({ id: 5, name: 'Somewhere', lat: 48.85, lng: 2.35 })
     const day = buildDay({ id: 10, date: '2025-06-01', title: 'Day 1' })
     render(<DayPlanSidebar {...makeDefaultProps({ days: [day], places: [located] })} />)
-    expect(screen.getByTestId('weather-widget')).toBeInTheDocument()
+    expect(screen.queryByTestId('weather-widget')).not.toBeInTheDocument()
+  })
+
+  it('FE-PLANNER-DAYPLAN-130b: the weather badge anchors to the day bookend hotel, independent of the optimize setting (#2167)', () => {
+    // The hotel fallback is unconditional (matching the mobile timeline) — turn the
+    // route-optimization setting OFF to prove the weather anchor ignores it.
+    seedStore(useSettingsStore, { settings: { time_format: '24h', temperature_unit: 'celsius', optimize_from_accommodation: false } } as any)
+    const day = buildDay({ id: 10, date: '2025-06-01', title: 'Day 1' })
+    const day2 = buildDay({ id: 11, date: '2025-06-02', title: 'Day 2' })
+    const accommodations = [{ id: 1, start_day_id: 10, end_day_id: 11, place_name: 'Hotel Roma', place_lat: 41.9, place_lng: 12.5 }]
+    render(<DayPlanSidebar {...makeDefaultProps({ days: [day, day2], accommodations: accommodations as any })} />)
+    const widgets = screen.getAllByTestId('weather-widget')
+    expect(widgets.length).toBeGreaterThan(0)
+    expect(widgets[0]).toHaveAttribute('data-location', 'Hotel Roma')
+  })
+
+  it('FE-PLANNER-DAYPLAN-130c: the weather badge names the day-local stop it is anchored to (#2167)', () => {
+    const place = buildPlace({ id: 5, name: 'Louvre', lat: 48.86, lng: 2.34 })
+    const day = buildDay({ id: 10, date: '2025-06-01', title: 'Day 1' })
+    const a = buildAssignment({ id: 99, day_id: 10, order_index: 0, place })
+    render(<DayPlanSidebar {...makeDefaultProps({ days: [day], places: [place], assignments: { '10': [a] } })} />)
+    expect(screen.getByTestId('weather-widget')).toHaveAttribute('data-location', 'Louvre')
   })
 
   it('FE-PLANNER-DAYPLAN-131: a read-only trip drops the edit affordances from day and note rows', () => {
@@ -3498,6 +3531,34 @@ describe('DayPlanSidebar', () => {
     })} />)
     expect(screen.getAllByText('ICE 599').length).toBeGreaterThan(0)
     expect(screen.getByText(/Reservation pending/)).toBeInTheDocument()
+  })
+
+  it('FE-PLANNER-DAYPLAN-163b: every booking on the stop gets its own chip line (#2201)', async () => {
+    const user = userEvent.setup()
+    const place = buildPlace({ id: 1, name: 'Zoo' })
+    const day = buildDay({ id: 10, date: '2025-06-01', title: 'Day 1' })
+    const a = buildAssignment({ id: 11, day_id: 10, order_index: 0, place })
+    const parking = buildReservation({
+      id: 530, type: 'parking', title: 'Parking pass', status: 'confirmed', assignment_id: 11,
+      reservation_time: '2025-06-01T09:00:00', reservation_end_time: '2025-06-01T09:30:00',
+    } as any)
+    const tickets = buildReservation({
+      id: 531, type: 'activity', title: 'Zoo tickets', status: 'pending', assignment_id: 11,
+      reservation_time: '2025-06-01T10:15:00',
+    } as any)
+    const onEditReservation = vi.fn()
+    render(<DayPlanSidebar {...makeDefaultProps({
+      // Newest first, the order the store hands them over after a local create.
+      days: [day], places: [place], assignments: { '10': [a] }, reservations: [tickets, parking],
+      onEditReservation,
+    })} />)
+    expect(screen.getByText('09:00 – 09:30')).toBeInTheDocument()
+    expect(screen.getByText('10:15')).toBeInTheDocument()
+    expect(screen.getByText(/Reservation confirmed/)).toBeInTheDocument()
+    expect(screen.getByText(/Reservation pending/)).toBeInTheDocument()
+    // Earliest first, so the first pencil belongs to the parking pass.
+    await user.click(screen.getAllByTitle('Edit')[0])
+    expect(onEditReservation).toHaveBeenCalledWith(parking)
   })
 
   it('FE-PLANNER-DAYPLAN-164: travellers on a place row are shown as avatars with an overflow count', () => {

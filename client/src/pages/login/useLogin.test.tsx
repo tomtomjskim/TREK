@@ -35,13 +35,19 @@ function authOk(user: Record<string, unknown> = {}): AuthOk {
   } as unknown as AuthOk;
 }
 
+function authCancelled(): Error {
+  const error = new Error('Authentication attempt was cancelled');
+  error.name = 'AuthAttemptCancelledError';
+  return error;
+}
+
 function makeAuthMocks() {
   return {
     login: vi.fn(async (_email: string, _password: string, _remember?: boolean): Promise<LoginResult> => authOk()),
     register: vi.fn(async (_username: string, _email: string, _password: string, _invite?: string) => authOk()),
     demoLogin: vi.fn(async () => authOk()),
     completeMfaLogin: vi.fn(async (_token: string, _code: string, _remember?: boolean) => authOk()),
-    loadUser: vi.fn(async (_opts?: { silent?: boolean }) => {}),
+    loadUser: vi.fn(async (_opts?: { silent?: boolean }) => true),
   };
 }
 
@@ -331,6 +337,19 @@ describe('useLogin — OIDC callback', () => {
     expect(mockNavigate).toHaveBeenCalledTimes(1);
   });
 
+  it('does not navigate when logout invalidates the OIDC session reload', async () => {
+    auth.loadUser.mockResolvedValueOnce(false);
+    setSearch('?oidc_code=stale-code');
+    server.use(http.get('/api/auth/oidc/exchange', () => HttpResponse.json({ token: 'tok' })));
+
+    const { result } = renderLogin();
+
+    await waitFor(() => expect(auth.loadUser).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.error).toBe('');
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
   it('FE-LOGIN-HOOK-017: surfaces the error the exchange endpoint reports', async () => {
     setSearch('?oidc_code=code-2');
     server.use(http.get('/api/auth/oidc/exchange', () => HttpResponse.json({ error: 'State mismatch' })));
@@ -505,6 +524,25 @@ describe('useLogin — demo login', () => {
 
     expect(result.current.error).toBe('Demo login failed');
   });
+
+  it('silently stops when demo login is superseded by logout', async () => {
+    useAuthStore.setState({
+      demoLogin: vi.fn(async () => {
+        throw authCancelled();
+      }),
+    });
+
+    const { result } = renderLogin();
+    await ready(result);
+    await act(async () => {
+      await result.current.handleDemoLogin();
+    });
+
+    expect(result.current.error).toBe('');
+    expect(result.current.showTakeoff).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
 });
 
 describe('useLogin — passkey login', () => {
@@ -581,6 +619,22 @@ describe('useLogin — passkey login', () => {
 
     expect(result.current.error).toBe('Passkey sign-in failed. Please try again.');
   });
+
+  it('does not take off when logout invalidates the passkey session reload', async () => {
+    vi.mocked(startAuthentication).mockResolvedValue({ id: 'cred-1' } as never);
+    auth.loadUser.mockResolvedValueOnce(false);
+    const { result } = renderLogin();
+    await ready(result);
+
+    await act(async () => {
+      await result.current.handlePasskeyLogin();
+    });
+
+    expect(result.current.error).toBe('');
+    expect(result.current.showTakeoff).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
 });
 
 describe('useLogin — register submit', () => {
@@ -655,6 +709,31 @@ describe('useLogin — register submit', () => {
     });
 
     expect(auth.register).toHaveBeenCalledWith('newuser', 'new@example.com', 'password123', undefined);
+  });
+
+  it('silently stops when registration is superseded by logout', async () => {
+    useAuthStore.setState({
+      register: vi.fn(async () => {
+        throw authCancelled();
+      }),
+    });
+    const { result } = renderLogin();
+    await ready(result);
+    act(() => {
+      result.current.setMode('register');
+      result.current.setUsername('newuser');
+      result.current.setEmail('new@example.com');
+      result.current.setPassword('password123');
+    });
+
+    await act(async () => {
+      await result.current.handleSubmit(formEvent());
+    });
+
+    expect(result.current.error).toBe('');
+    expect(result.current.showTakeoff).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });
 
@@ -769,6 +848,26 @@ describe('useLogin — password submit', () => {
 
     expect(result.current.error).toBe('Login failed. Please check your credentials.');
   });
+
+  it('silently stops when password login is superseded by logout', async () => {
+    useAuthStore.setState({
+      login: vi.fn(async () => {
+        throw authCancelled();
+      }),
+    });
+    const { result } = renderLogin();
+    await ready(result);
+
+    await act(async () => {
+      await result.current.handleSubmit(formEvent());
+    });
+
+    expect(result.current.error).toBe('');
+    expect(result.current.mfaStep).toBe(false);
+    expect(result.current.showTakeoff).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
 });
 
 describe('useLogin — MFA step', () => {
@@ -833,6 +932,28 @@ describe('useLogin — MFA step', () => {
     expect(result.current.passwordChangeStep).toBe(true);
     expect(result.current.showTakeoff).toBe(false);
     expect(result.current.isLoading).toBe(false);
+  });
+
+  it('silently stays on the MFA step when verification is superseded by logout', async () => {
+    const result = await reachMfaStep();
+    act(() => {
+      useAuthStore.setState({
+        completeMfaLogin: vi.fn(async () => {
+          throw authCancelled();
+        }),
+      });
+      result.current.setMfaCode('123456');
+    });
+
+    await act(async () => {
+      await result.current.handleSubmit(formEvent());
+    });
+
+    expect(result.current.error).toBe('');
+    expect(result.current.mfaStep).toBe(true);
+    expect(result.current.showTakeoff).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });
 
@@ -936,6 +1057,27 @@ describe('useLogin — forced password change', () => {
 
     expect(result.current.error).toBe('Current password is wrong');
     expect(result.current.showTakeoff).toBe(false);
+  });
+
+  it('does not take off when logout invalidates the post-password-change reload', async () => {
+    server.use(
+      http.put('/api/auth/me/password', () => HttpResponse.json({ success: true })),
+    );
+    auth.loadUser.mockResolvedValueOnce(false);
+    const result = await reachPasswordChange();
+    act(() => {
+      result.current.setNewPassword('newpassword123');
+      result.current.setConfirmPassword('newpassword123');
+    });
+
+    await act(async () => {
+      await result.current.handleSubmit(formEvent());
+    });
+
+    expect(result.current.error).toBe('');
+    expect(result.current.showTakeoff).toBe(false);
+    expect(result.current.isLoading).toBe(false);
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });
 

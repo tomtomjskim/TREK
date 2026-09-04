@@ -1,4 +1,4 @@
-// FE-PAGE-TPW-001 to FE-PAGE-TPW-060
+// FE-PAGE-TPW-001 to FE-PAGE-TPW-061
 //
 // The planner page is a wiring container: everything stateful lives in
 // useTripPlanner (covered in src/pages/tripPlanner/useTripPlanner.test.tsx).
@@ -220,6 +220,7 @@ function baseState(): HookState {
     advanceImportReview: vi.fn(),
     routeShown: false,
     setRouteShown: vi.fn(),
+    transitRoutesShown: false,
     routeProfile: 'driving',
     setRouteProfile: vi.fn(),
     routeVias: [],
@@ -355,7 +356,7 @@ describe('TripPlannerPage — shell', () => {
 
 describe('TripPlannerPage — plan tab', () => {
   it('FE-PAGE-TPW-008: the map receives the filtered markers, the tile url, the panel widths and the selected day', () => {
-    renderPage()
+    renderPage({ transitRoutesShown: true })
 
     expect(props('map').places).toEqual([place])
     expect(props('map').tileUrl).toBe('https://tiles/{z}/{x}/{y}.png')
@@ -365,6 +366,9 @@ describe('TripPlannerPage — plan tab', () => {
     // transport in the trip as soon as any day's route is on (#2019).
     expect(props('map').days).toEqual([day])
     expect(props('map').selectedDayId).toBe(7)
+    // Transit visibility rides the hook's day-aware derivation, not the raw
+    // toggle — routeShown is still false in this fixture (#2019).
+    expect(props('map').showTransitRoutes).toBe(true)
   })
 
   it('FE-PAGE-TPW-009: collapsed panels report a zero width to the map', () => {
@@ -589,11 +593,11 @@ describe('TripPlannerPage — day detail and inspector', () => {
     expect(hookState.loadAccommodations).toHaveBeenCalled()
   })
 
-  it('FE-PAGE-TPW-025: a day without geo stops falls back to any place with coordinates', () => {
+  it('FE-PAGE-TPW-025: a day without geo stops gets no weather anchor from other days (#2167)', () => {
     renderPage({ showDayDetail: { ...day, id: 99 }, assignments: {} })
 
-    expect(props('dayDetail').lat).toBe(34.9)
-    expect(props('dayDetail').lng).toBe(135.7)
+    expect(props('dayDetail').lat).toBeNull()
+    expect(props('dayDetail').lng).toBeNull()
   })
 
   it('FE-PAGE-TPW-026: the desktop inspector edits, deletes and rates through the hook', async () => {
@@ -1112,6 +1116,22 @@ describe('TripPlannerPage — modals', () => {
     act(() => { props('transitModal').onChangeRoute() })
     expect(hookState.setTransitPrefill).toHaveBeenCalledWith({ from: null, to: null })
     expect(hookState.setTransportModalDayId).toHaveBeenCalledWith(null)
+  })
+
+  it('FE-PAGE-TPW-061: edit details hands the fresh reservation to the full transport editor', () => {
+    const stale = buildReservation({ id: 9, type: 'transit', day_id: 7 })
+    // The store copy may be newer than the journey held in state — the fresh
+    // one must win.
+    const fresh = { ...stale, title: 'Kyoto → Osaka' }
+    renderPage({ transitJourney: stale, reservations: [fresh] })
+
+    act(() => { props('transitModal').onEditDetails() })
+    expect(hookState.setEditingTransport).toHaveBeenCalledWith(fresh)
+    expect(hookState.setTransportModalDayId).toHaveBeenCalledWith(7)
+    expect(hookState.setTransportModalAutomated).toHaveBeenCalledWith(false)
+    expect(hookState.setTransitPrefill).toHaveBeenCalledWith(null)
+    expect(hookState.setTransitJourney).toHaveBeenCalledWith(null)
+    expect(hookState.setShowTransportModal).toHaveBeenCalledWith(true)
   })
 
   it('FE-PAGE-TPW-057: a booking opens the expense editor, prefilled or on an existing item', async () => {

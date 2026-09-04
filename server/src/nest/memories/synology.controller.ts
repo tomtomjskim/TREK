@@ -6,7 +6,12 @@ import { fail, success } from './memories.helpers';
 import { MemoriesService } from './memories.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
+import { AddonGuard } from '../addons/addon.guard';
+import { RequireAddon } from '../addons/require-addon.decorator';
+import { ADDON_IDS } from '../../addons';
 import { SynologySearchDto, SynologySettingsDto, SynologyTestDto } from './memories.dto';
+import { PhotoProviderGuard } from './photo-provider.guard';
+import { RequirePhotoProvider } from './require-photo-provider.decorator';
 
 function _parseStringBodyField(value: unknown): string {
   return String(value ?? '').trim();
@@ -30,7 +35,9 @@ function _parseNumberBodyField(value: unknown, fallback: number): number {
  * literal route wins as Express ordered it; lenient hand-rolled coercion is kept.
  */
 @Controller('api/integrations/memories/synologyphotos')
-@UseGuards(JwtAuthGuard)
+@UseGuards(AddonGuard, PhotoProviderGuard, JwtAuthGuard)
+@RequireAddon(ADDON_IDS.JOURNEY, 'Journey')
+@RequirePhotoProvider('synologyphotos', 'Synology Photos')
 export class SynologyMemoriesController {
   constructor(private readonly memories: MemoriesService) {}
 

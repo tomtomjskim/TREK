@@ -12,6 +12,8 @@ import { z } from 'zod';
  */
 
 const open = z.record(z.string(), z.unknown());
+const packingWeightGramsSchema = z.number().int().min(0);
+const packingQuantitySchema = z.number().int().min(1).max(999);
 
 /**
  * Packing item entity as returned by the packing endpoints
@@ -73,6 +75,15 @@ export const packingBagSchema = z.object({
   assigned_username: z.string().nullable().optional(),
   created_at: z.string().optional(),
   members: z.array(packingBagMemberSchema).optional(),
+  /**
+   * What the bag really weighs, summed server-side over every member's items
+   * (#2191). The client used to add this up from the item list it was allowed
+   * to see, which silently dropped other members' private items and left the
+   * figure measured against an absolute weight limit wrong for everyone but
+   * its owner. Optional: an offline-cached bag from before #2191 has no such
+   * field, and the surfaces fall back to their local sum when it is absent.
+   */
+  total_weight_grams: z.number().optional(),
 });
 export type PackingBag = z.infer<typeof packingBagSchema>;
 
@@ -86,6 +97,11 @@ export const packingCreateItemRequestSchema = z.object({
   category: z.string().optional(),
   // The legacy route accepted both boolean and 0/1 for checked — both stay valid.
   checked: z.union([z.boolean(), z.number().int().min(0).max(1)]).optional(),
+  // Same shapes as the update schema below (#2154) — the create route used to
+  // strip these three silently, forcing a second write to set them.
+  weight_grams: packingWeightGramsSchema.nullable().optional(),
+  bag_id: z.number().nullable().optional(),
+  quantity: packingQuantitySchema.optional(),
   // Mark the new item private to its creator (#858, legacy flag).
   is_private: z.boolean().optional(),
   // Three-tier sharing (#858): which list the item belongs to, and — for 'shared' —
@@ -107,9 +123,9 @@ export const packingUpdateItemRequestSchema = z.object({
   // The legacy route accepted both boolean and 0/1 for checked — both stay valid.
   checked: z.union([z.boolean(), z.number().int().min(0).max(1)]).optional(),
   category: z.string().optional(),
-  weight_grams: z.number().nullable().optional(),
+  weight_grams: packingWeightGramsSchema.nullable().optional(),
   bag_id: z.number().nullable().optional(),
-  quantity: z.number().optional(),
+  quantity: packingQuantitySchema.optional(),
   // Toggle the item's privacy (#858).
   is_private: z.boolean().optional(),
 });
@@ -128,13 +144,15 @@ export type PackingReorderRequest = z.infer<typeof packingReorderRequestSchema>;
 export const packingCreateBagRequestSchema = z.object({
   name: z.string().min(1),
   color: z.string().optional(),
+  // Same shape as the update schema below (#2154) — POST used to strip it.
+  weight_limit_grams: packingWeightGramsSchema.nullable().optional(),
 });
 export type PackingCreateBagRequest = z.infer<typeof packingCreateBagRequestSchema>;
 
 export const packingUpdateBagRequestSchema = z.object({
   name: z.string().optional(),
   color: z.string().optional(),
-  weight_limit_grams: z.number().nullable().optional(),
+  weight_limit_grams: packingWeightGramsSchema.nullable().optional(),
   user_id: z.number().nullable().optional(),
 });
 export type PackingUpdateBagRequest = z.infer<typeof packingUpdateBagRequestSchema>;

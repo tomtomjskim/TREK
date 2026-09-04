@@ -516,7 +516,7 @@ export function MapViewGL({
   onViewportChangeRef.current = onViewportChange
   const onMapReadyRef = useRef(onMapReady)
   onMapReadyRef.current = onMapReady
-  const { position: userPosition, mode: trackingMode, error: trackingError, cycleMode: cycleTrackingMode, setMode: setTrackingMode } = useGeolocation()
+  const { position: userPosition, mode: trackingMode, error: trackingError, errorCode: trackingErrorCode, cycleMode: cycleTrackingMode, setMode: setTrackingMode } = useGeolocation()
   const onClickRefs = useRef({ marker: onMarkerClick, map: onMapClick, context: onMapContextMenu })
   onClickRefs.current.marker = onMarkerClick
   onClickRefs.current.map = onMapClick
@@ -1561,6 +1561,7 @@ export function MapViewGL({
         <LocationButton
           mode={trackingMode}
           error={trackingError}
+          errorCode={trackingErrorCode}
           onClick={cycleTrackingMode}
           bottomOffset={buttonBottom as unknown as number}
         />

@@ -21,14 +21,22 @@ vi.mock('../../../src/sync/syncTriggers', () => syncTriggers);
 
 // The user-scoped offline DB is real (fake-indexeddb); only the reopen step is
 // made failable so the "auth still succeeds when the DB won't open" path runs.
-const dbControl = vi.hoisted(() => ({ reopenFails: false }));
+const dbControl = vi.hoisted(() => ({
+  reopenFails: false,
+  reopenedUserIds: [] as Array<number | string>,
+  afterReopen: null as Promise<void> | null,
+  notifyReopened: null as (() => void) | null,
+}));
 vi.mock('../../../src/db/offlineDb', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/db/offlineDb')>();
   return {
     ...actual,
     reopenForUser: async (userId: number | string) => {
+      dbControl.reopenedUserIds.push(userId);
       if (dbControl.reopenFails) throw new Error('offline db locked');
-      return actual.reopenForUser(userId);
+      await actual.reopenForUser(userId);
+      dbControl.notifyReopened?.();
+      await dbControl.afterReopen;
     },
   };
 });
@@ -37,6 +45,9 @@ beforeEach(() => {
   resetAllStores();
   vi.clearAllMocks();
   dbControl.reopenFails = false;
+  dbControl.reopenedUserIds.length = 0;
+  dbControl.afterReopen = null;
+  dbControl.notifyReopened = null;
 });
 
 afterEach(() => {
@@ -104,9 +115,10 @@ describe('authStore', () => {
         http.get('/api/auth/me', () => HttpResponse.json({ user }))
       );
 
-      await useAuthStore.getState().loadUser();
+      const applied = await useAuthStore.getState().loadUser();
       const state = useAuthStore.getState();
 
+      expect(applied).toBe(true);
       expect(state.user).toEqual(user);
       expect(state.isAuthenticated).toBe(true);
       expect(state.isLoading).toBe(false);
@@ -204,6 +216,163 @@ describe('authStore', () => {
       const state = useAuthStore.getState();
       expect(state.user?.username).toBe('freshlogin');
       expect(state.isAuthenticated).toBe(true);
+    });
+
+    it('invalidates a pending loadUser when logout finishes before /auth/me', async () => {
+      let releaseMe!: () => void;
+      const pendingMe = new Promise<void>((resolve) => { releaseMe = resolve; });
+      server.use(
+        http.get('/api/auth/me', async () => {
+          await pendingMe;
+          return HttpResponse.json({ user: buildUser({ username: 'stale-after-logout' }) });
+        })
+      );
+
+      const staleLoad = useAuthStore.getState().loadUser();
+      await useAuthStore.getState().logout();
+      releaseMe();
+      const applied = await staleLoad;
+
+      const state = useAuthStore.getState();
+      expect(applied).toBe(false);
+      expect(state.user).toBeNull();
+      expect(state.isAuthenticated).toBe(false);
+      expect(state.isLoading).toBe(false);
+      expect(dbControl.reopenedUserIds).toEqual([]);
+      expect(syncTriggers.registerSyncTriggers).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+    });
+
+    it('does not restart sync or websocket when logout wins during the DB reopen', async () => {
+      let releaseReopen!: () => void;
+      let signalReopened!: () => void;
+      const reopened = new Promise<void>((resolve) => { signalReopened = resolve; });
+      dbControl.afterReopen = new Promise<void>((resolve) => { releaseReopen = resolve; });
+      dbControl.notifyReopened = signalReopened;
+      server.use(
+        http.get('/api/auth/me', () =>
+          HttpResponse.json({ user: buildUser({ username: 'stale-during-reopen' }) })
+        )
+      );
+
+      const staleLoad = useAuthStore.getState().loadUser();
+      await reopened;
+      await useAuthStore.getState().logout();
+      releaseReopen();
+      const applied = await staleLoad;
+
+      const state = useAuthStore.getState();
+      expect(applied).toBe(false);
+      expect(state.user).toBeNull();
+      expect(state.isAuthenticated).toBe(false);
+      expect(dbControl.reopenedUserIds).toHaveLength(1);
+      expect(syncTriggers.registerSyncTriggers).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+    });
+
+    const authMutationCases = [
+      {
+        label: 'password login',
+        path: '/api/auth/login',
+        invoke: () => useAuthStore.getState().login('user@example.com', 'password'),
+      },
+      {
+        label: 'MFA login',
+        path: '/api/auth/mfa/verify-login',
+        invoke: () => useAuthStore.getState().completeMfaLogin('mfa-token', '123456'),
+      },
+      {
+        label: 'registration',
+        path: '/api/auth/register',
+        invoke: () => useAuthStore.getState().register('new-user', 'new@example.com', 'password'),
+      },
+      {
+        label: 'demo login',
+        path: '/api/auth/demo-login',
+        invoke: () => useAuthStore.getState().demoLogin(),
+      },
+    ];
+
+    it.each(authMutationCases)('aborts a pending $label request when logout wins', async ({ path, invoke }) => {
+      let releaseResponse!: () => void;
+      let signalStarted!: () => void;
+      const requestStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+      const pendingResponse = new Promise<void>((resolve) => { releaseResponse = resolve; });
+      server.use(
+        http.post(path, async () => {
+          signalStarted();
+          await pendingResponse;
+          return HttpResponse.json({ user: buildUser({ username: 'stale-auth-mutation' }), token: 'tok' });
+        })
+      );
+
+      const cancelled = expect(invoke()).rejects.toMatchObject({ name: 'AuthAttemptCancelledError' });
+      await requestStarted;
+      await useAuthStore.getState().logout();
+      // Prove the client request rejects before the server response is released.
+      // MSW clones the Fetch Request, so its request.signal is not a reliable
+      // identity/aborted-state probe for Axios' originating AbortSignal.
+      await cancelled;
+      releaseResponse();
+
+      const state = useAuthStore.getState();
+      expect(state.user).toBeNull();
+      expect(state.isAuthenticated).toBe(false);
+      expect(state.isLoading).toBe(false);
+      expect(dbControl.reopenedUserIds).toEqual([]);
+      expect(syncTriggers.registerSyncTriggers).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+    });
+
+    it.each(authMutationCases)('keeps $label stale when logout wins during the DB reopen', async ({ path, invoke }) => {
+      let releaseReopen!: () => void;
+      let signalReopened!: () => void;
+      const reopened = new Promise<void>((resolve) => { signalReopened = resolve; });
+      dbControl.afterReopen = new Promise<void>((resolve) => { releaseReopen = resolve; });
+      dbControl.notifyReopened = signalReopened;
+      server.use(
+        http.post(path, () =>
+          HttpResponse.json({ user: buildUser({ username: 'stale-auth-mutation' }), token: 'tok' })
+        )
+      );
+
+      const cancelled = expect(invoke()).rejects.toMatchObject({ name: 'AuthAttemptCancelledError' });
+      await reopened;
+      await useAuthStore.getState().logout();
+      releaseReopen();
+      await cancelled;
+
+      const state = useAuthStore.getState();
+      expect(state.user).toBeNull();
+      expect(state.isAuthenticated).toBe(false);
+      expect(dbControl.reopenedUserIds).toHaveLength(1);
+      expect(syncTriggers.registerSyncTriggers).not.toHaveBeenCalled();
+      expect(connect).not.toHaveBeenCalled();
+    });
+
+    it('cancels a stale MFA-required response instead of returning a usable MFA token', async () => {
+      let releaseResponse!: () => void;
+      let signalStarted!: () => void;
+      const requestStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+      const pendingResponse = new Promise<void>((resolve) => { releaseResponse = resolve; });
+      server.use(
+        http.post('/api/auth/login', async () => {
+          signalStarted();
+          await pendingResponse;
+          return HttpResponse.json({ mfa_required: true, mfa_token: 'stale-mfa-token' });
+        })
+      );
+
+      const cancelled = expect(
+        useAuthStore.getState().login('user@example.com', 'password')
+      ).rejects.toMatchObject({ name: 'AuthAttemptCancelledError' });
+      await requestStarted;
+      await useAuthStore.getState().logout();
+      releaseResponse();
+      await cancelled;
+
+      expect(useAuthStore.getState().isAuthenticated).toBe(false);
+      expect(useAuthStore.getState().user).toBeNull();
     });
   });
 
@@ -757,6 +926,22 @@ describe('authStore', () => {
       await useAuthStore.getState().login(user.email, 'password');
 
       expect(syncTriggers.registerSyncTriggers).toHaveBeenCalled();
+    });
+  });
+
+  // The mirror of the account's server-side language is a per-device copy like the
+  // appearance snapshot and the startup destination, and gets dropped with them.
+  // 'app_language' is not a mirror but this device's own choice, so it stays.
+  describe('FE-STORE-AUTH-034: logout drops the language mirror', () => {
+    it('clears the account language but keeps an explicit in-app choice', async () => {
+      localStorage.setItem('app_language_server', 'ja');
+      localStorage.setItem('app_language', 'de');
+      useAuthStore.setState({ user: buildUser(), isAuthenticated: true });
+
+      await useAuthStore.getState().logout();
+
+      expect(localStorage.getItem('app_language_server')).toBeNull();
+      expect(localStorage.getItem('app_language')).toBe('de');
     });
   });
 });

@@ -13,6 +13,8 @@ interface AccommodationPayload {
   dayId?: number
   /** Present = edit an existing accommodation, absent = add. */
   accId?: number
+  /** Opened from the timeline's stay chip: closing returns there, not to the day sheet (#2210). */
+  from?: 'timeline'
 }
 
 interface HotelForm {
@@ -72,10 +74,14 @@ export default function MAccommodationSheet({ planner, shell }: MTripSheetsProps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, payload.dayId, payload.accId])
 
-  // Cancelling / saving returns to the day sheet it was opened from — opened for
-  // an edit there is no dayId in the payload, so fall back to the stay's own
-  // start day instead of leaving the day sheet without one.
-  const back = () => shell.openSheet('day', { dayId: payload.dayId ?? editing?.start_day_id })
+  // Cancelling / saving returns to the day sheet it was opened from. Opened for
+  // an edit there may be no dayId in the payload, so fall back to the stay's own
+  // start day instead of leaving the day sheet without one. Opened straight from
+  // the timeline's stay chip there is no day sheet to return to, so just close.
+  const back = () => {
+    if (payload.from === 'timeline') shell.closeSheet()
+    else shell.openSheet('day', { dayId: payload.dayId ?? editing?.start_day_id })
+  }
 
   const firstId = days[0]?.id
   const lastId = days[days.length - 1]?.id

@@ -116,6 +116,21 @@ export function getTransportRouteEndpoints(
   }
 }
 
+/**
+ * Whether this booking is a carrier that contributes a located route endpoint on the
+ * given day — the signal that the day's geography changes by riding something rather
+ * than driving, which the hotel-bookend rules need on days without recorded
+ * check-in/check-out times (#2157). The span rules above make an overnight carrier
+ * count only on the days it actually touches. A carrier saved without coordinates
+ * deliberately does not count: it contributes nothing to the drawn route, so treating
+ * it as proof of travel would flip hotel legs on data the map cannot see.
+ */
+export function hasCarrierEndpointOnDay(r: any, dayId: number): boolean {
+  if (!isCarrierTransport(r)) return false
+  const { from, to } = getTransportRouteEndpoints(r, dayId)
+  return from != null || to != null
+}
+
 export function getDisplayTimeForDay(
   r: { day_id?: number | null; end_day_id?: number | null; reservation_time?: string | null; reservation_end_time?: string | null },
   dayId: number
@@ -218,6 +233,36 @@ export function getTransportForDay(opts: {
     }
     return startDayId === dayId
   }).flatMap(r => expandFlightLegsForDay(r, dayId, getDayOrder, days))
+}
+
+/**
+ * Every booking pinned to one day assignment. A stop can carry several (the parking
+ * pass and the tickets for the same zoo), and the exclusion above keeps all of them
+ * out of the timeline, so the place row is the only surface that can show them, and
+ * a `find()` there dropped the rest without trace (#2201).
+ *
+ * Earliest first, untimed last, id as the tiebreaker: the store's array order is
+ * newest-first for locally created bookings and load order otherwise, which would
+ * shuffle the same two bookings between a reload and a live update.
+ */
+export function getAssignmentReservations<T extends {
+  id: number
+  assignment_id?: number | null
+  reservation_time?: string | null
+}>(reservations: T[], assignmentId: number | null | undefined): T[] {
+  if (!assignmentId) return []
+  return reservations
+    .filter(r => r.assignment_id === assignmentId)
+    .sort((a, b) => {
+      const at = a.reservation_time || ''
+      const bt = b.reservation_time || ''
+      if (at !== bt) {
+        if (!at) return 1
+        if (!bt) return -1
+        return at < bt ? -1 : 1
+      }
+      return a.id - b.id
+    })
 }
 
 /**
