@@ -728,12 +728,16 @@ describe('getPublicJourney', () => {
     const galleryEntry = createJourneyEntry(testDb, journey.id, user.id, {
       title: 'Gallery staging', entry_date: '2026-06-03', visibility: 'private',
     });
+    const skeletonEntry = createJourneyEntry(testDb, journey.id, user.id, {
+      type: 'skeleton', title: 'Unpublished suggestion', entry_date: '2026-06-04', visibility: 'shared',
+    });
     const privatePhotoId = insertJourneyPhoto(privateEntry.id, { assetId: 'private-only', ownerId: user.id });
     const sharedPhotoId = insertJourneyPhoto(sharedEntry.id, { assetId: 'shared-entry', ownerId: user.id });
     const galleryPhotoId = insertJourneyPhoto(galleryEntry.id, { assetId: 'gallery-only', ownerId: user.id });
+    const skeletonPhotoId = insertJourneyPhoto(skeletonEntry.id, { assetId: 'skeleton-only', ownerId: user.id });
     const foreignJourney = createJourney(testDb, user.id);
     const foreignSharedEntry = createJourneyEntry(testDb, foreignJourney.id, user.id, {
-      title: 'Foreign shared entry', entry_date: '2026-06-04', visibility: 'shared',
+      title: 'Foreign shared entry', entry_date: '2026-06-05', visibility: 'shared',
     });
     const privateGalleryRow = testDb.prepare(
       'SELECT id FROM journey_photos WHERE journey_id = ? AND photo_id = ?',
@@ -753,15 +757,19 @@ describe('getPublicJourney', () => {
     // direct/provider uploads are intentionally 0 and share_gallery gates them.
     const flags = testDb.prepare('SELECT shared FROM journey_photos WHERE journey_id = ? ORDER BY photo_id')
       .all(journey.id) as Array<{ shared: number }>;
-    expect(flags.map(row => row.shared)).toEqual([0, 0, 0]);
+    expect(flags.map(row => row.shared)).toEqual([0, 0, 0, 0]);
 
     const { token } = svc.createOrUpdateJourneyShareLink(journey.id, user.id, {
-      share_timeline: false, share_gallery: true, share_map: true,
+      share_timeline: true, share_gallery: true, share_map: true,
     });
     const result = svc.getPublicJourney(token)!;
     const galleryIds = (result.gallery as Array<{ photo_id: number }>).map(photo => photo.photo_id);
+    const inlinePhotoIds = (result.entries as Array<{ photos: Array<{ photo_id: number }> }>)
+      .flatMap(entry => entry.photos.map(photo => photo.photo_id));
 
     expect(galleryIds).toEqual([sharedPhotoId, galleryPhotoId]);
+    expect((result.entries as Array<{ id: number }>).map(entry => entry.id)).toEqual([sharedEntry.id]);
+    expect(inlinePhotoIds).toEqual([sharedPhotoId]);
     expect(result.stats.photos).toBe(2);
     expect(svc.validateShareTokenForPhoto(token, privatePhotoId)).toBeNull();
     expect(svc.validateShareTokenForAsset(token, 'immich', 'private-only')).toBeNull();
@@ -769,5 +777,26 @@ describe('getPublicJourney', () => {
     expect(svc.validateShareTokenForAsset(token, 'immich', 'shared-entry')).not.toBeNull();
     expect(svc.validateShareTokenForPhoto(token, galleryPhotoId)).not.toBeNull();
     expect(svc.validateShareTokenForAsset(token, 'immich', 'gallery-only')).not.toBeNull();
+    expect(svc.validateShareTokenForPhoto(token, skeletonPhotoId)).toBeNull();
+    expect(svc.validateShareTokenForAsset(token, 'immich', 'skeleton-only')).toBeNull();
+  });
+
+  it('JOURNEY-SHARE-035: binds the inline photo query to the same journey scope', () => {
+    const { user } = createUser(testDb);
+    const journey = createJourney(testDb, user.id);
+    const entry = createJourneyEntry(testDb, journey.id, user.id, { visibility: 'shared' });
+    insertJourneyPhoto(entry.id, { ownerId: user.id });
+    const { token } = svc.createOrUpdateJourneyShareLink(journey.id, user.id, {});
+    const prepareSpy = vi.spyOn(dbs, 'prepare');
+
+    svc.getPublicJourney(token);
+    const inlineSql = prepareSpy.mock.calls
+      .map(([sql]) => String(sql))
+      .find(sql => sql.includes('FROM journey_entry_photos jep'));
+    prepareSpy.mockRestore();
+
+    expect(inlineSql).toContain('je.journey_id = gp.journey_id');
+    expect(inlineSql).toContain("je.type != 'skeleton'");
+    expect(inlineSql).toContain('public_entry.journey_id = gp.journey_id');
   });
 });

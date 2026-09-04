@@ -38,6 +38,7 @@ const PUBLIC_GALLERY_PHOTO_SCOPE = `
       JOIN journey_entries public_entry ON public_entry.id = public_link.entry_id
       WHERE public_link.journey_photo_id = gp.id
         AND public_entry.journey_id = gp.journey_id
+        AND public_entry.type != 'skeleton'
         AND public_entry.visibility IN ('shared', 'public')
     )
   )
@@ -216,7 +217,11 @@ export class JourneyShareService {
           JOIN journey_photos gp ON gp.id = jep.journey_photo_id
           JOIN trek_photos tkp ON tkp.id = gp.photo_id
           JOIN journey_entries je ON je.id = jep.entry_id
-          WHERE gp.journey_id = ? AND je.visibility IN ('shared', 'public')
+          WHERE gp.journey_id = ?
+            AND je.journey_id = gp.journey_id
+            AND je.type != 'skeleton'
+            AND je.visibility IN ('shared', 'public')
+          ${PUBLIC_GALLERY_PHOTO_SCOPE}
           ORDER BY jep.sort_order
         `).all(row.journey_id) as any[]
       : [];
