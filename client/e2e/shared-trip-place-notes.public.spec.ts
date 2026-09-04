@@ -7,6 +7,9 @@ const TOKEN = 'e2e-public-place-notes';
 const NO_MAP_TOKEN = 'e2e-public-place-notes-no-map';
 const EXPIRED_TOKEN = 'e2e-public-place-notes-expired';
 const REVOKED_TOKEN = 'e2e-public-place-notes-revoked';
+const SHARE_TOKENS = [TOKEN, NO_MAP_TOKEN, EXPIRED_TOKEN, REVOKED_TOKEN] as const;
+const TRIP_TITLE_PREFIX = 'E2E Public Place Notes';
+const CATEGORY_NAME = 'E2E Park';
 const PLACE_NAME = 'Seoul Forest E2E';
 const SECOND_PLACE_NAME = 'Museum E2E';
 const PLACE_NOTE = [
@@ -17,26 +20,96 @@ const PLACE_NOTE = [
 ].join('\n');
 
 type Seed = {
+  categoryId: number;
+  tripId: number;
+  boundaryTripId: number;
   dayId: number;
   placeId: number;
   secondPlaceId: number;
+  tokenIds: number[];
+  tokenValues: readonly string[];
 };
 
+function cleanupPublicShare(seed?: Seed): void {
+  const db = new Database(DB_FILE);
+  db.pragma('foreign_keys = ON');
+  try {
+    const owner = db.prepare("SELECT id FROM users WHERE email = 'e2e@trek.local'").get() as { id: number } | undefined;
+    if (!owner) return;
+
+    const tokenValues = seed?.tokenValues ?? SHARE_TOKENS;
+    const tokenPlaceholders = tokenValues.map(() => '?').join(',');
+    const tokenTripIds = db
+      .prepare(`SELECT trip_id FROM share_tokens WHERE token IN (${tokenPlaceholders})`)
+      .all(...tokenValues) as Array<{ trip_id: number }>;
+    const tripIds = new Set<number>(tokenTripIds.map(({ trip_id }) => trip_id));
+    if (seed) {
+      tripIds.add(seed.tripId);
+      tripIds.add(seed.boundaryTripId);
+    }
+    if (!seed) {
+      const titleTrips = db.prepare('SELECT id FROM trips WHERE title LIKE ?').all(`${TRIP_TITLE_PREFIX}%`) as Array<{
+        id: number;
+      }>;
+      titleTrips.forEach(({ id }) => tripIds.add(id));
+    }
+
+    const categoryIds = new Set<number>();
+    if (tripIds.size > 0) {
+      const tripPlaceholders = [...tripIds].map(() => '?').join(',');
+      const tripCategories = db
+        .prepare(
+          `SELECT DISTINCT category_id FROM places
+           WHERE trip_id IN (${tripPlaceholders}) AND category_id IS NOT NULL`
+        )
+        .all(...tripIds) as Array<{ category_id: number }>;
+      tripCategories.forEach(({ category_id }) => categoryIds.add(category_id));
+    }
+    if (seed) categoryIds.add(seed.categoryId);
+    if (!seed) {
+      const namedCategories = db
+        .prepare('SELECT id FROM categories WHERE user_id = ? AND name = ?')
+        .all(owner.id, CATEGORY_NAME) as Array<{ id: number }>;
+      namedCategories.forEach(({ id }) => categoryIds.add(id));
+    }
+
+    const cleanup = db.transaction(() => {
+      if (seed?.tokenIds.length) {
+        const tokenIdPlaceholders = seed.tokenIds.map(() => '?').join(',');
+        db.prepare(`DELETE FROM share_tokens WHERE id IN (${tokenIdPlaceholders})`).run(...seed.tokenIds);
+      }
+      db.prepare(`DELETE FROM share_tokens WHERE token IN (${tokenPlaceholders})`).run(...tokenValues);
+      if (tripIds.size > 0) {
+        const tripPlaceholders = [...tripIds].map(() => '?').join(',');
+        db.prepare(`DELETE FROM trips WHERE id IN (${tripPlaceholders})`).run(...tripIds);
+      }
+      if (categoryIds.size > 0) {
+        const categoryPlaceholders = [...categoryIds].map(() => '?').join(',');
+        db.prepare(
+          `DELETE FROM categories
+             WHERE id IN (${categoryPlaceholders}) AND user_id = ? AND name = ?`
+        ).run(...categoryIds, owner.id, CATEGORY_NAME);
+      }
+    });
+    cleanup();
+  } finally {
+    db.close();
+  }
+}
+
 function seedPublicShare(): Seed {
+  cleanupPublicShare();
+
   const db = new Database(DB_FILE);
   db.pragma('foreign_keys = ON');
   try {
     const owner = db.prepare("SELECT id FROM users WHERE email = 'e2e@trek.local'").get() as { id: number } | undefined;
     if (!owner) throw new Error('The Playwright E2E admin was not seeded');
 
-    const tokens = [TOKEN, NO_MAP_TOKEN, EXPIRED_TOKEN, REVOKED_TOKEN];
-    db.prepare(`DELETE FROM share_tokens WHERE token IN (${tokens.map(() => '?').join(',')})`).run(...tokens);
-    db.prepare("DELETE FROM trips WHERE title LIKE 'E2E Public Place Notes%'").run();
-
     const categoryId = Number(
       db
-        .prepare("INSERT INTO categories (name, color, icon, user_id) VALUES ('E2E Park', '#2563eb', 'park', ?)")
-        .run(owner.id).lastInsertRowid
+        .prepare("INSERT INTO categories (name, color, icon, user_id) VALUES (?, '#2563eb', 'park', ?)")
+        .run(CATEGORY_NAME, owner.id).lastInsertRowid
     );
     const tripId = Number(
       db
@@ -91,14 +164,16 @@ function seedPublicShare(): Seed {
       dayId,
       secondPlaceId
     );
-    db.prepare(
+    const tokenIds: number[] = [];
+    const insertShareToken = db.prepare(
       `
       INSERT INTO share_tokens (
         trip_id, token, created_by, share_map, share_bookings,
         share_packing, share_budget, share_collab, expires_at
       ) VALUES (?, ?, ?, 1, 0, 0, 0, 0, '2099-01-01T00:00:00.000Z')
     `
-    ).run(tripId, TOKEN, owner.id);
+    );
+    tokenIds.push(Number(insertShareToken.run(tripId, TOKEN, owner.id).lastInsertRowid));
 
     const boundaryTripId = Number(
       db
@@ -122,11 +197,32 @@ function seedPublicShare(): Seed {
         share_packing, share_budget, share_collab, expires_at
       ) VALUES (?, ?, ?, ?, 0, 0, 0, 0, ?)
     `);
-    addBoundaryToken.run(boundaryTripId, NO_MAP_TOKEN, owner.id, 0, '2099-01-01T00:00:00.000Z');
-    addBoundaryToken.run(boundaryTripId, EXPIRED_TOKEN, owner.id, 1, '2020-01-01T00:00:00.000Z');
-    addBoundaryToken.run(boundaryTripId, REVOKED_TOKEN, owner.id, 1, '2099-01-01T00:00:00.000Z');
+    tokenIds.push(
+      Number(
+        addBoundaryToken.run(boundaryTripId, NO_MAP_TOKEN, owner.id, 0, '2099-01-01T00:00:00.000Z').lastInsertRowid
+      )
+    );
+    tokenIds.push(
+      Number(
+        addBoundaryToken.run(boundaryTripId, EXPIRED_TOKEN, owner.id, 1, '2020-01-01T00:00:00.000Z').lastInsertRowid
+      )
+    );
+    tokenIds.push(
+      Number(
+        addBoundaryToken.run(boundaryTripId, REVOKED_TOKEN, owner.id, 1, '2099-01-01T00:00:00.000Z').lastInsertRowid
+      )
+    );
 
-    return { dayId, placeId, secondPlaceId };
+    return {
+      categoryId,
+      tripId,
+      boundaryTripId,
+      dayId,
+      placeId,
+      secondPlaceId,
+      tokenIds,
+      tokenValues: SHARE_TOKENS,
+    };
   } finally {
     db.close();
   }
@@ -161,6 +257,10 @@ test.describe.serial('public shared place notes', () => {
 
   test.beforeAll(() => {
     seed = seedPublicShare();
+  });
+
+  test.afterAll(() => {
+    cleanupPublicShare(seed);
   });
 
   test('1440 all-days uses the anonymous API projection in a real Leaflet popup', async ({ page }) => {
@@ -250,7 +350,11 @@ test.describe.serial('public shared place notes', () => {
     const secondPopup = page.getByTestId(`shared-place-popup-${seed.secondPlaceId}`);
     await expect(secondPopup).toBeVisible();
     await expect(popup).toBeHidden();
-    await page.locator('.leaflet-popup').filter({ has: secondPopup }).getByRole('button', { name: 'Close popup' }).click();
+    await page
+      .locator('.leaflet-popup')
+      .filter({ has: secondPopup })
+      .getByRole('button', { name: 'Close popup' })
+      .click();
     await expect(secondPopup).toBeHidden();
     await expect(marker).not.toBeFocused();
     await expect(secondMarker).not.toBeFocused();
@@ -310,10 +414,9 @@ test.describe.serial('public shared place notes', () => {
             .slice(0, 20),
         };
       });
-      expect(
-        pageOverflow.scrollWidth <= pageOverflow.viewportWidth + 1,
-        JSON.stringify(pageOverflow, null, 2)
-      ).toBe(true);
+      expect(pageOverflow.scrollWidth <= pageOverflow.viewportWidth + 1, JSON.stringify(pageOverflow, null, 2)).toBe(
+        true
+      );
       await expectCookieFree(page);
       await page.screenshot({ path: '../docs/screenshots/share-place-notes-390-selected-day.png', fullPage: true });
       expect(problems).toEqual([]);
@@ -363,7 +466,8 @@ test.describe.serial('public shared place notes', () => {
     ).toBe(true);
     expect(
       problems.filter(
-        (problem) => problem !== 'console:error:Failed to load resource: the server responded with a status of 404 (Not Found)'
+        (problem) =>
+          problem !== 'console:error:Failed to load resource: the server responded with a status of 404 (Not Found)'
       )
     ).toEqual([]);
   });

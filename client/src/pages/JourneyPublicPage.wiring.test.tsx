@@ -39,7 +39,7 @@ vi.mock('../components/Journey/JournalBody', () => ({
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 function photo(id: number): PublicEntry['photos'][number] {
-  return { id, entry_id: 1, photo_id: id * 10, caption: `caption ${id}`, provider: 'local' };
+  return { id, entry_id: 1, photo_id: id * 10, caption: `caption ${id}` };
 }
 
 function buildEntry(over: Partial<PublicEntry> = {}): PublicEntry {
@@ -128,6 +128,7 @@ describe('JourneyPublicPage wiring', () => {
     expect(screen.getByText(/4 Photos/)).toBeInTheDocument();
     expect(screen.getByText(/3 Places/)).toBeInTheDocument();
     expect(screen.getByTestId('public-map')).toBeInTheDocument();
+    expect(mocks.captured.map.publicBasemap).toBe(true);
   });
 
   it('FE-JRN-PUBWIRE-004: the cover image is layered into the hero when present', () => {
@@ -268,6 +269,7 @@ describe('JourneyPublicPage wiring', () => {
   it('FE-JRN-PUBWIRE-019: on mobile the combined map timeline takes over with public photo URLs', () => {
     const { hook } = setup({ isMobile: true, desktopTwoColumn: false });
     expect(screen.getByTestId('mobile-timeline')).toBeInTheDocument();
+    expect(mocks.captured.mobileTimeline.publicBasemap).toBe(true);
 
     const publicPhotoUrl = mocks.captured.mobileTimeline.publicPhotoUrl as (id: number) => string;
     expect(publicPhotoUrl(55)).toBe('/api/public/journey/tok-1/photos/55/original');

@@ -1,6 +1,7 @@
-import { render, screen, fireEvent } from '../../../tests/helpers/render';
 import userEvent from '@testing-library/user-event';
+import { render, screen } from '../../../tests/helpers/render';
 import CustomSelect from './CustomSelect';
+import Modal from './Modal';
 
 const OPTIONS = [
   { value: 'apple', label: 'Apple' },
@@ -50,7 +51,7 @@ describe('CustomSelect', () => {
     // Options in dropdown are also buttons
     const optionBtns = screen.getAllByRole('option');
     // Find the Cherry option button (not the trigger which shows placeholder)
-    const cherryBtn = optionBtns.find(b => b.textContent?.includes('Cherry'));
+    const cherryBtn = optionBtns.find((b) => b.textContent?.includes('Cherry'));
     await user.click(cherryBtn!);
     expect(onChange).toHaveBeenCalledWith('cherry');
   });
@@ -60,7 +61,7 @@ describe('CustomSelect', () => {
     render(<CustomSelect value="" onChange={onChange} options={OPTIONS} />);
     await user.click(screen.getByRole('button')); // open
     const optionBtns = screen.getAllByRole('option');
-    const appleBtn = optionBtns.find(b => b.textContent?.includes('Apple'));
+    const appleBtn = optionBtns.find((b) => b.textContent?.includes('Apple'));
     await user.click(appleBtn!);
     // After selection, only the trigger button remains in DOM
     expect(screen.getAllByRole('button')).toHaveLength(1);
@@ -162,6 +163,27 @@ describe('CustomSelect', () => {
     expect(screen.getByPlaceholderText('...')).toHaveFocus();
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('listbox')).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('FE-COMP-SELECT-018: non-searchable Escape does not close the parent modal', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Modal isOpen onClose={onClose} title="Select a fruit">
+        <CustomSelect value="" onChange={onChange} options={OPTIONS} placeholder="Pick a fruit" />
+      </Modal>
+    );
+
+    const trigger = screen.getByRole('button', { name: 'Pick a fruit' });
+    await user.click(trigger);
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+
+    await user.keyboard('{Escape}');
+
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
 

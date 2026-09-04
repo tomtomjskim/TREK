@@ -153,6 +153,7 @@ export default function CustomSelect({
       if (active) selectValue(active.value)
     } else if (event.key === 'Escape') {
       event.preventDefault()
+      event.stopPropagation()
       closeSelect()
     }
   }

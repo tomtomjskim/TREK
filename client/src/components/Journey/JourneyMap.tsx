@@ -98,8 +98,8 @@ interface Props {
   onMarkerClick?: (id: string, type?: string) => void
   fullScreen?: boolean
   paddingBottom?: number
-  /** CARTO key from the share payload: the public journey has no settings store to read. */
-  cartoApiKey?: string
+  /** Public links must never inherit a signed-in visitor's private basemap settings. */
+  publicBasemap?: boolean
 }
 
 function buildMarkerItems(entries: MapEntry[]): MapMarkerItem[] {
@@ -148,14 +148,18 @@ const EMPTY_TRACKS: JourneyTrack[] = []
 const TRACK_FALLBACK_COLOR = '#4f46e5'
 
 function JourneyMap(
-  { entries, photos, onPhotoClick, trail, tracks, height = 220, dark, activeMarkerId, onMarkerClick, fullScreen, paddingBottom, cartoApiKey, ref }: Props,
+  { entries, photos, onPhotoClick, trail, tracks, height = 220, dark, activeMarkerId, onMarkerClick, fullScreen, paddingBottom, publicBasemap = false, ref }: Props,
 ) {
   const stableTrail = trail || EMPTY_TRAIL
   const stableTracks = tracks || EMPTY_TRACKS
   const mapTileUrl = useSettingsStore(s => s.settings.map_tile_url)
   const storedCartoKey = useCartoApiKey()
-  const cartoKey = cartoApiKey || storedCartoKey
-  const tileUrl = resolveTileUrl(mapTileUrl, dark ? OFM_DARK : OFM_POSITRON, cartoKey)
+  const cartoKey = publicBasemap ? '' : storedCartoKey
+  const tileUrl = resolveTileUrl(
+    publicBasemap ? '' : mapTileUrl,
+    dark ? OFM_DARK : OFM_POSITRON,
+    cartoKey,
+  )
   // Read through a ref by the map effect, retiled in place by its own effect below:
   // the CARTO key reaches the store after the first render, and rebuilding the map
   // for that raced with the markers and layers already on it (#2097).

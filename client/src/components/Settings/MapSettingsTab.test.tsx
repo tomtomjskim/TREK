@@ -206,6 +206,55 @@ describe('MapSettingsTab – GL providers', () => {
     expect(within(dropdown).queryByText('Satellite Streets')).not.toBeInTheDocument();
   });
 
+  it('FE-COMP-MAP-019a: the style picker exposes listbox semantics and keyboard navigation', async () => {
+    const user = userEvent.setup();
+    render(<MapSettingsTab />);
+    await user.click(screen.getByText('Mapbox GL'));
+
+    const dropdown = styleDropdown();
+    const trigger = within(dropdown).getByRole('button');
+    expect(trigger).toHaveAttribute('aria-haspopup', 'listbox');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+
+    await user.click(trigger);
+
+    const listbox = within(dropdown).getByRole('listbox');
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    expect(trigger).toHaveAttribute('aria-controls', listbox.id);
+    expect(within(listbox).getByRole('option', { name: /^Mapbox Standard/ })).toHaveAttribute('aria-selected', 'true');
+    expect(within(listbox).getAllByRole('option')).toHaveLength(10);
+
+    await user.keyboard('{ArrowDown}');
+    expect(listbox).toHaveAttribute('aria-activedescendant', expect.stringContaining('-option-1'));
+    await user.keyboard('{ArrowDown}');
+    expect(listbox).toHaveAttribute('aria-activedescendant', expect.stringContaining('-option-2'));
+    await user.keyboard('{Home}');
+    expect(listbox).toHaveAttribute('aria-activedescendant', expect.stringContaining('-option-0'));
+    await user.keyboard('{End}');
+    expect(listbox).toHaveAttribute('aria-activedescendant', expect.stringContaining('-option-9'));
+    await user.keyboard('{ArrowUp}');
+    expect(listbox).toHaveAttribute('aria-activedescendant', expect.stringContaining('-option-8'));
+    await user.keyboard('{Enter}');
+
+    expect(screen.getByDisplayValue('mapbox://styles/mapbox/navigation-day-v1')).toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('FE-COMP-MAP-019b: Escape closes the style picker and restores trigger focus', async () => {
+    const user = userEvent.setup();
+    render(<MapSettingsTab />);
+    await user.click(screen.getByText('Mapbox GL'));
+
+    const dropdown = styleDropdown();
+    const trigger = within(dropdown).getByRole('button');
+    await user.click(trigger);
+    await user.keyboard('{Escape}');
+
+    expect(within(dropdown).queryByRole('listbox')).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(trigger).toHaveFocus();
+  });
+
   it('FE-COMP-MAP-020: a mousedown outside the style picker closes it', async () => {
     const user = userEvent.setup();
     render(<MapSettingsTab />);

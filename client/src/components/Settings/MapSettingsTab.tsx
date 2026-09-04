@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef, Suspense } from 'react'
+import React, { useState, useEffect, useMemo, useRef, useId, Suspense } from 'react'
 import { Map, Save, Layers, Box, ChevronDown, Check, Globe2 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useSettingsStore } from '../../store/settingsStore'
@@ -76,8 +76,15 @@ function TagChip({ tag }: { tag: string }) {
 function StyleDropdown({ value, provider, onChange }: { value: string; provider: GlMapProvider; onChange: (v: string) => void }) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(0)
   const ref = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const listboxId = `style-dropdown-${useId().replace(/:/g, '')}`
   const presets = getStylePresets(provider)
+  const selectedIndex = presets.findIndex(p => p.url === value)
+  const resolvedActiveIndex = activeIndex >= 0 && activeIndex < presets.length
+    ? activeIndex
+    : (selectedIndex >= 0 ? selectedIndex : 0)
 
   useEffect(() => {
     if (!open) return
@@ -93,11 +100,59 @@ function StyleDropdown({ value, provider, onChange }: { value: string; provider:
     ? t('settings.mapOpenFreeMapStylePlaceholder')
     : t('settings.mapStylePlaceholder')
 
+  const openMenu = () => {
+    setActiveIndex(selectedIndex >= 0 ? selectedIndex : 0)
+    setOpen(true)
+  }
+
+  const closeMenu = (restoreFocus = false) => {
+    setOpen(false)
+    if (restoreFocus) triggerRef.current?.focus()
+  }
+
+  const selectPreset = (url: string) => {
+    onChange(url)
+    closeMenu(true)
+  }
+
+  const handleKeyboard = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (!open) {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        openMenu()
+      }
+      return
+    }
+
+    if (presets.length === 0) return
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault()
+      setActiveIndex(current => (current + (event.key === 'ArrowDown' ? 1 : -1) + presets.length) % presets.length)
+    } else if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault()
+      setActiveIndex(event.key === 'Home' ? 0 : presets.length - 1)
+    } else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      const active = presets[resolvedActiveIndex]
+      if (active) selectPreset(active.url)
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      closeMenu(true)
+    }
+  }
+
   return (
     <div ref={ref} className="relative">
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen(v => !v)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={listboxId}
+        aria-activedescendant={open && presets.length > 0 ? `${listboxId}-option-${resolvedActiveIndex}` : undefined}
+        onKeyDown={handleKeyboard}
+        onClick={() => { if (open) closeMenu(); else openMenu() }}
         className="w-full flex items-center justify-between gap-2 px-3 py-2 border border-slate-300 dark:border-slate-700 rounded-lg text-sm bg-white dark:bg-slate-900 hover:border-slate-400 focus:ring-2 focus:ring-slate-400 focus:border-transparent"
       >
         <span className="flex items-center gap-2 min-w-0">
@@ -113,21 +168,34 @@ function StyleDropdown({ value, provider, onChange }: { value: string; provider:
         <ChevronDown size={14} className="flex-shrink-0 text-slate-400" />
       </button>
       {open && (
-        <div className="absolute z-20 mt-1 w-full max-h-80 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg py-1">
-          {presets.map(preset => {
-            const isActive = preset.url === value
+        <div
+          id={listboxId}
+          role="listbox"
+          aria-label={placeholder}
+          aria-activedescendant={presets.length > 0 ? `${listboxId}-option-${resolvedActiveIndex}` : undefined}
+          onKeyDown={handleKeyboard}
+          className="absolute z-20 mt-1 w-full max-h-80 overflow-auto rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 shadow-lg py-1"
+        >
+          {presets.map((preset, presetIndex) => {
+            const isSelected = preset.url === value
+            const isActive = presetIndex === resolvedActiveIndex
             return (
               <button
                 key={preset.url}
+                id={`${listboxId}-option-${presetIndex}`}
+                role="option"
+                aria-selected={isSelected}
+                tabIndex={-1}
                 type="button"
-                onClick={() => { onChange(preset.url); setOpen(false) }}
-                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-800 ${isActive ? 'bg-slate-50 dark:bg-slate-800' : ''}`}
+                onClick={() => selectPreset(preset.url)}
+                onMouseEnter={() => setActiveIndex(presetIndex)}
+                className={`w-full flex items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-slate-50 dark:hover:bg-slate-800 ${isActive || isSelected ? 'bg-slate-50 dark:bg-slate-800' : ''}`}
               >
                 <span className="flex items-center gap-2 flex-wrap">
                   <span className="text-slate-900 dark:text-white font-medium">{preset.name}</span>
                   {(preset.tags || []).map(t => <TagChip key={t} tag={t} />)}
                 </span>
-                {isActive && <Check size={14} className="flex-shrink-0 text-slate-900 dark:text-white" />}
+                {isSelected && <Check size={14} className="flex-shrink-0 text-slate-900 dark:text-white" />}
               </button>
             )
           })}

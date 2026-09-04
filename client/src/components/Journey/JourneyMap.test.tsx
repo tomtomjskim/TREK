@@ -414,6 +414,24 @@ describe('JourneyMap', () => {
     expect(vi.mocked(L.tileLayer).mock.calls[0][0]).toBe('https://tiles.test/{z}/{x}/{y}.png');
   });
 
+  it('FE-COMP-JOURNEYMAP-048: a public map ignores stored templates and CARTO credentials', async () => {
+    seedStore(useSettingsStore, {
+      settings: buildSettings({
+        map_tile_url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+        carto_api_key: 'VISITOR_CARTO_KEY_MUST_NOT_BE_USED',
+      }),
+    });
+
+    render(<JourneyMap checkins={[]} entries={entriesWithCoords} publicBasemap />);
+
+    await waitFor(() => {
+      const calls = vi.mocked(maplibreGL).mock.calls;
+      const call = calls[calls.length - 1]?.[0] as { style: string } | undefined;
+      expect(call?.style).toContain('openfreemap.org/styles/positron');
+    });
+    expect(vi.mocked(L.tileLayer)).not.toHaveBeenCalled();
+  });
+
   it('FE-COMP-JOURNEYMAP-041: a basemap change restyles in place instead of rebuilding the map (#2097)', async () => {
     render(<JourneyMap checkins={[]} entries={entriesWithCoords} />);
     const layer = await waitFor(() => {

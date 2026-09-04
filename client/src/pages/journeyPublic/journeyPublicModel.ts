@@ -6,6 +6,7 @@
 
 export interface PublicEntry {
   id: number
+  type?: string | null
   title?: string | null
   story?: string | null
   entry_date: string
@@ -15,6 +16,7 @@ export interface PublicEntry {
   location_lng?: number | null
   mood?: string | null
   weather?: string | null
+  tags?: string[]
   pros_cons?: { pros: string[]; cons: string[] } | null
   photos: PublicPhoto[]
 }
@@ -23,24 +25,18 @@ export interface PublicPhoto {
   id: number
   entry_id: number
   photo_id: number
-  provider?: string
-  asset_id?: string | null
-  owner_id?: number | null
-  file_path?: string | null
   caption?: string | null
   // 'image' (default) or 'video' (#823)
   media_type?: string | null
   duration_ms?: number | null
+  taken_at?: string | null
+  lat?: number | null
+  lng?: number | null
 }
 
 export interface PublicGalleryPhoto {
   id: number
-  journey_id: number
   photo_id: number
-  provider?: string
-  asset_id?: string | null
-  owner_id?: number | null
-  file_path?: string | null
   caption?: string | null
   // 'image' (default) or 'video' (#823)
   media_type?: string | null
