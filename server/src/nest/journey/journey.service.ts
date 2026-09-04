@@ -95,7 +95,7 @@ export class JourneyService {
   // Public (share-token) access — no auth, validated by token.
   getPublicJourney(token: string) { return this.share.getPublicJourney(token); }
   validateShareTokenForPhoto(token: string, photoId: number) { return this.share.validateShareTokenForPhoto(token, photoId); }
-  validateShareTokenForAsset(token: string, assetId: string) { return this.share.validateShareTokenForAsset(token, assetId); }
+  validateShareTokenForAsset(token: string, provider: string, assetId: string) { return this.share.validateShareTokenForAsset(token, provider, assetId); }
   streamPhoto(res: Response, ownerId: number, photoId: number, kind: 'thumbnail' | 'original') { return this.photoResolver.streamPhoto(res, ownerId, photoId, kind); }
   /**
    * Stream a shared journey asset from whichever backend holds it.

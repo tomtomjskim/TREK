@@ -709,12 +709,12 @@ export function createJourneyEntry(
   db: Database.Database,
   journeyId: number,
   authorId: number,
-  overrides: Partial<{ type: string; entry_date: string; title: string; story: string; location_name: string; mood: string; weather: string }> = {}
+  overrides: Partial<{ type: string; entry_date: string; title: string; story: string; location_name: string; mood: string; weather: string; visibility: string }> = {}
 ): TestJourneyEntry {
   const now = Date.now();
   const result = db.prepare(`
     INSERT INTO journey_entries (journey_id, author_id, type, entry_date, title, story, location_name, mood, weather, visibility, sort_order, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'private', 0, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
   `).run(
     journeyId, authorId,
     overrides.type ?? 'entry',
@@ -724,6 +724,7 @@ export function createJourneyEntry(
     overrides.location_name ?? null,
     overrides.mood ?? null,
     overrides.weather ?? null,
+    overrides.visibility ?? 'private',
     now, now
   );
   return db.prepare('SELECT * FROM journey_entries WHERE id = ?').get(result.lastInsertRowid) as TestJourneyEntry;

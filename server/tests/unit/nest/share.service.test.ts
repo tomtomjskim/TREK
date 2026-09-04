@@ -228,6 +228,14 @@ describe('getSharedTripData', () => {
     expect(svc.getSharedTripData(token)).not.toBeNull();
   });
 
+  it('SHARE-SVC-035: rejects an ISO expiry earlier today', () => {
+    const { trip, token } = seedSharedTrip();
+    const startOfTodayUtc = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+    testDb.prepare('UPDATE share_tokens SET expires_at = ? WHERE trip_id = ?')
+      .run(startOfTodayUtc, trip.id);
+    expect(svc.getSharedTripData(token)).toBeNull();
+  });
+
   it('SHARE-SVC-012: returns null when the trip row is gone', () => {
     const { trip, token } = seedSharedTrip();
     // The token normally cascades away with its trip; orphan it deliberately
@@ -592,6 +600,16 @@ describe('getSharedPlacePhotoKey', () => {
     expect(await svc.getSharedPlacePhotoKey('nope', 'ChIJabc')).toBeNull();
     const { trip, token } = seedSharedTrip();
     testDb.prepare('UPDATE share_tokens SET expires_at = ? WHERE trip_id = ?').run('2020-01-01T00:00:00.000Z', trip.id);
+    expect(await svc.getSharedPlacePhotoKey(token, 'ChIJabc')).toBeNull();
+    expect(serveKey).not.toHaveBeenCalled();
+  });
+
+  it('SHARE-SVC-036: rejects a place-photo request with an ISO expiry earlier today', async () => {
+    const { trip, token } = seedSharedTrip();
+    const startOfTodayUtc = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+    testDb.prepare('UPDATE share_tokens SET expires_at = ? WHERE trip_id = ?')
+      .run(startOfTodayUtc, trip.id);
+
     expect(await svc.getSharedPlacePhotoKey(token, 'ChIJabc')).toBeNull();
     expect(serveKey).not.toHaveBeenCalled();
   });

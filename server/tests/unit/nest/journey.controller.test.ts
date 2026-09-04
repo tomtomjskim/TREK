@@ -451,8 +451,10 @@ describe('JourneyPublicController', () => {
     // One call for every provider now, with the ids in a ref instead of in a
     // per-provider argument order.
     const streamProviderAsset = vi.fn().mockResolvedValue(undefined);
-    const s = svc({ validateShareTokenForAsset: vi.fn().mockReturnValue({ ownerId: 5 }), streamProviderAsset } as Partial<JourneyService>);
+    const validateShareTokenForAsset = vi.fn().mockReturnValue({ ownerId: 5 });
+    const s = svc({ validateShareTokenForAsset, streamProviderAsset } as Partial<JourneyService>);
     await new JourneyPublicController(s, storageStub).legacyPhoto('tok', 'immich', 'a1', 'original', {} as Response);
+    expect(validateShareTokenForAsset).toHaveBeenCalledWith('tok', 'immich', 'a1');
     expect(streamProviderAsset).toHaveBeenCalledWith({}, 'immich', { userId: 5, ownerId: 5, assetId: 'a1' }, 'original');
   });
 

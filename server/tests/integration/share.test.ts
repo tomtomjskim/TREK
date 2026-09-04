@@ -913,3 +913,38 @@ describe('Shared trip — place photos in shared links (issue #1100)', () => {
     expect((await request(app).get(`/api/shared/${reissued.body.token}/place-photo/${encodeURIComponent(PLACE_ID)}/bytes`)).status).toBe(200);
   });
 });
+
+describe('Shared trip — legacy photo byte expiry', () => {
+  const filename = 'trek-share-expiry-regression.jpg';
+  const filePath = path.join(DEFAULT_UPLOADS_ROOT, 'photos', filename);
+
+  beforeAll(() => {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
+  });
+
+  afterAll(() => {
+    try { fs.unlinkSync(filePath); } catch { /* ignore */ }
+  });
+
+  it('SHARE-033 — same-day ISO expiry denies /uploads/photos bytes', async () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id);
+    testDb.prepare(`
+      INSERT INTO photos (trip_id, filename, original_name, mime_type)
+      VALUES (?, ?, ?, 'image/jpeg')
+    `).run(trip.id, filename, filename);
+    const { body: { token } } = await request(app)
+      .post(`/api/trips/${trip.id}/share-link`)
+      .set('Cookie', authCookie(user.id))
+      .send({});
+
+    expect((await request(app).get(`/uploads/photos/${filename}`).query({ token })).status).toBe(200);
+
+    const startOfTodayUtc = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
+    testDb.prepare('UPDATE share_tokens SET expires_at = ? WHERE trip_id = ?')
+      .run(startOfTodayUtc, trip.id);
+
+    expect((await request(app).get(`/uploads/photos/${filename}`).query({ token })).status).toBe(401);
+  });
+});

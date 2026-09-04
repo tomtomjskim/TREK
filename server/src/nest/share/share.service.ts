@@ -208,7 +208,7 @@ export class ShareService {
       trip_id: number; share_map: number; share_bookings: number;
       share_packing: number; share_budget: number; share_collab: number;
     }>(
-      "SELECT trip_id, share_map, share_bookings, share_packing, share_budget, share_collab FROM share_tokens WHERE token = ? AND (expires_at IS NULL OR expires_at > datetime('now'))",
+      "SELECT trip_id, share_map, share_bookings, share_packing, share_budget, share_collab FROM share_tokens WHERE token = ? AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))",
       token,
     );
     if (!shareRow) return null;
@@ -404,7 +404,7 @@ export class ShareService {
    */
   async getSharedPlacePhotoKey(token: string, placeId: string): Promise<string | null> {
     const shareRow = this.dbs.get<{ trip_id: string; share_map: number }>(
-      "SELECT trip_id, share_map FROM share_tokens WHERE token = ? AND (expires_at IS NULL OR expires_at > datetime('now'))",
+      "SELECT trip_id, share_map FROM share_tokens WHERE token = ? AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))",
       token,
     );
     if (!shareRow) return null;

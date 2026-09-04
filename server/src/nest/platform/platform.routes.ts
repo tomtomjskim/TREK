@@ -113,7 +113,7 @@ async function servePhoto(storage: StorageService, req: Request, res: Response):
     return;
   }
   const share = db
-    .prepare("SELECT trip_id FROM share_tokens WHERE token = ? AND (expires_at IS NULL OR expires_at > datetime('now'))")
+    .prepare("SELECT trip_id FROM share_tokens WHERE token = ? AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))")
     .get(rawToken) as { trip_id: number } | undefined;
   if (!share || share.trip_id !== photo.trip_id) {
     res.status(401).send('Authentication required');

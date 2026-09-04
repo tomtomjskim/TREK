@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import crypto from 'crypto';
 import { DatabaseService } from '../database/database.service';
 import { JourneyDomainService } from './journey-domain.service';
-import { SettingsService } from '../settings/settings.service';
 
 interface JourneySharePermissions {
   share_timeline?: boolean;
@@ -21,6 +20,29 @@ interface JourneyShareTokenInfo {
   newest_first: boolean;
 }
 
+// A gallery photo is public when it is either an explicit gallery-only item or
+// is attached to at least one entry the owner marked shared/public. A photo that
+// is attached exclusively to private entries must not escape through the
+// gallery JSON or either byte proxy. `journey_photos.shared` is intentionally
+// not used here: direct/provider uploads write 0 and the public gallery toggle
+// is `journey_share_tokens.share_gallery`.
+const PUBLIC_GALLERY_PHOTO_SCOPE = `
+  AND (
+    NOT EXISTS (
+      SELECT 1 FROM journey_entry_photos any_link
+      WHERE any_link.journey_photo_id = gp.id
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM journey_entry_photos public_link
+      JOIN journey_entries public_entry ON public_entry.id = public_link.entry_id
+      WHERE public_link.journey_photo_id = gp.id
+        AND public_entry.journey_id = gp.journey_id
+        AND public_entry.visibility IN ('shared', 'public')
+    )
+  )
+`;
+
 /**
  * Public share links for a journey: minting the token, validating it for a
  * photo or a provider asset, and the read-only public view.
@@ -34,7 +56,6 @@ export class JourneyShareService {
   constructor(
     private readonly db: DatabaseService,
     private readonly journey: JourneyDomainService,
-    private readonly settings: SettingsService,
   ) {}
 
   createOrUpdateJourneyShareLink(
@@ -125,13 +146,14 @@ export class JourneyShareService {
       FROM journey_photos gp
       JOIN trek_photos tkp ON tkp.id = gp.photo_id
       WHERE gp.photo_id = ? AND gp.journey_id = ?
+      ${PUBLIC_GALLERY_PHOTO_SCOPE}
     `).get(photoId, row.journey_id) as any;
     if (!photo) return null;
     const journey = this.db.prepare('SELECT user_id FROM journeys WHERE id = ?').get(row.journey_id) as any;
     return journey ? { journeyId: row.journey_id, ownerId: photo.owner_id || journey.user_id } : null;
   }
 
-  validateShareTokenForAsset(token: string, assetId: string): { ownerId: number } | null {
+  validateShareTokenForAsset(token: string, provider: string, assetId: string): { ownerId: number } | null {
     const row = this.db.prepare('SELECT journey_id, share_gallery FROM journey_share_tokens WHERE token = ?').get(token) as any;
     if (!row) return null;
     // Same as the unified photo proxy: no asset bytes leave the host unless the
@@ -142,8 +164,9 @@ export class JourneyShareService {
       FROM journey_photos gp
       JOIN trek_photos tkp ON tkp.id = gp.photo_id
       JOIN journeys j ON j.id = gp.journey_id
-      WHERE tkp.asset_id = ? AND gp.journey_id = ?
-    `).get(assetId, row.journey_id) as any;
+      WHERE tkp.provider = ? AND tkp.asset_id = ? AND gp.journey_id = ?
+      ${PUBLIC_GALLERY_PHOTO_SCOPE}
+    `).get(provider, assetId, row.journey_id) as any;
     // Only resolve assets that actually belong to this shared journey.
     if (!photo) return null;
     // trek_photos.owner_id can be NULL. The journey's owner is the fallback, the
@@ -153,64 +176,78 @@ export class JourneyShareService {
   }
 
   getPublicJourney(token: string) {
-    const row = this.db.prepare('SELECT * FROM journey_share_tokens WHERE token = ?').get(token) as any;
+    const row = this.db.prepare(`
+      SELECT journey_id, share_timeline, share_gallery, share_map, newest_first
+      FROM journey_share_tokens
+      WHERE token = ?
+    `).get(token) as any;
     if (!row) return null;
 
-    const journey = this.db.prepare('SELECT * FROM journeys WHERE id = ?').get(row.journey_id) as any;
+    const journey = this.db.prepare(`
+      SELECT title, subtitle, cover_image, status
+      FROM journeys
+      WHERE id = ?
+    `).get(row.journey_id) as any;
     if (!journey) return null;
-
-    // Entries with photos
-    const entries = this.db.prepare(`
-      SELECT je.* FROM journey_entries je
-      WHERE je.journey_id = ? AND je.type != 'skeleton'
-      ORDER BY je.entry_date, je.sort_order
-    `).all(row.journey_id) as any[];
-
-    const photos = this.db.prepare(`
-      SELECT gp.id, jep.entry_id, gp.photo_id, gp.caption, jep.sort_order, gp.shared, gp.created_at,
-             tkp.provider, tkp.asset_id, tkp.owner_id, tkp.file_path, tkp.thumbnail_path, tkp.width, tkp.height,
-             tkp.media_type, tkp.duration_ms, tkp.taken_at, tkp.lat, tkp.lng
-      FROM journey_entry_photos jep
-      JOIN journey_photos gp ON gp.id = jep.journey_photo_id
-      JOIN trek_photos tkp ON tkp.id = gp.photo_id
-      WHERE gp.journey_id = ?
-      ORDER BY jep.sort_order
-    `).all(row.journey_id) as any[];
-
-    const photosByEntry: Record<number, any[]> = {};
-    for (const p of photos) {
-      (photosByEntry[p.entry_id] ||= []).push(p);
-    }
-
-    const gallery = this.db.prepare(`
-      SELECT gp.id, gp.journey_id, gp.photo_id, gp.caption, gp.shared, gp.sort_order, gp.created_at,
-             tkp.provider, tkp.asset_id, tkp.owner_id, tkp.file_path, tkp.thumbnail_path, tkp.width, tkp.height,
-             tkp.media_type, tkp.duration_ms, tkp.taken_at, tkp.lat, tkp.lng
-      FROM journey_photos gp
-      JOIN trek_photos tkp ON tkp.id = gp.photo_id
-      WHERE gp.journey_id = ?
-      ORDER BY gp.sort_order
-    `).all(row.journey_id) as any[];
-
-    const enrichedEntries = entries
-      .map(e => ({
-        ...e,
-        tags: e.tags ? JSON.parse(e.tags) : [],
-        pros_cons: e.pros_cons ? JSON.parse(e.pros_cons) : null,
-        photos: photosByEntry[e.id] || [],
-      }));
-
-    // Stats are derived from the full data so the overview pills stay accurate
-    // even when a section is hidden.
-    const stats = {
-      entries: entries.length,
-      photos: gallery.length,
-      places: new Set(entries.filter(e => e.location_name).map(e => e.location_name)).size,
-    };
 
     const shareTimeline = !!row.share_timeline;
     const shareGallery = !!row.share_gallery;
     const shareMap = !!row.share_map;
+
+    // Only load the sections that can be returned. Besides avoiding needless
+    // work, this keeps a disabled flag from touching private provider metadata.
+    const entries = shareTimeline || shareMap
+      ? this.db.prepare(`
+          SELECT je.id, je.type, je.title, je.story, je.entry_date, je.entry_time,
+                 je.location_name, je.location_lat, je.location_lng, je.mood,
+                 je.weather, je.tags, je.pros_cons
+          FROM journey_entries je
+          WHERE je.journey_id = ? AND je.type != 'skeleton'
+            AND je.visibility IN ('shared', 'public')
+          ORDER BY je.entry_date, je.sort_order
+        `).all(row.journey_id) as any[]
+      : [];
+
+    const photos = shareTimeline && shareGallery
+      ? this.db.prepare(`
+          SELECT gp.id, jep.entry_id, gp.photo_id, gp.caption,
+                 tkp.media_type, tkp.duration_ms, tkp.taken_at, tkp.lat, tkp.lng
+          FROM journey_entry_photos jep
+          JOIN journey_photos gp ON gp.id = jep.journey_photo_id
+          JOIN trek_photos tkp ON tkp.id = gp.photo_id
+          JOIN journey_entries je ON je.id = jep.entry_id
+          WHERE gp.journey_id = ? AND je.visibility IN ('shared', 'public')
+          ORDER BY jep.sort_order
+        `).all(row.journey_id) as any[]
+      : [];
+
+    const photosByEntry: Record<number, any[]> = {};
+    for (const p of photos) {
+      (photosByEntry[p.entry_id] ||= []).push(projectPublicPhoto(p));
+    }
+
+    const gallery = shareGallery
+      ? this.db.prepare(`
+          SELECT gp.id, gp.photo_id, gp.caption,
+                 tkp.media_type, tkp.duration_ms, tkp.taken_at, tkp.lat, tkp.lng
+          FROM journey_photos gp
+          JOIN trek_photos tkp ON tkp.id = gp.photo_id
+          WHERE gp.journey_id = ?
+          ${PUBLIC_GALLERY_PHOTO_SCOPE}
+          ORDER BY gp.sort_order
+        `).all(row.journey_id) as any[]
+      : [];
+
+    const enrichedEntries = entries.map(e => ({
+      ...projectPublicEntry(e),
+      photos: photosByEntry[e.id] || [],
+    }));
+
+    const stats = {
+      entries: shareTimeline ? enrichedEntries.length : 0,
+      photos: shareGallery ? gallery.length : 0,
+      places: shareMap ? new Set(entries.filter(e => e.location_name).map(e => e.location_name)).size : 0,
+    };
 
     // Honour the share flags server-side so the API only returns the sections the
     // owner enabled (the client gates these too, but it must not rely on that).
@@ -227,28 +264,16 @@ export class JourneyShareService {
       });
     } else if (shareMap) {
       // Map-only share: just enough to plot markers, no story/photos/mood.
-      publicEntries = enrichedEntries.map(e => ({
+      publicEntries = entries.map(e => ({
         id: e.id,
-        journey_id: e.journey_id,
         type: e.type,
         entry_date: e.entry_date,
         title: e.title,
         location_name: e.location_name,
         location_lat: e.location_lat,
         location_lng: e.location_lng,
-        sort_order: e.sort_order,
       }));
     }
-
-    // Same reason as the trip share payload: CARTO watermarks every tile fetched
-    // without a key (#2054) and the public journey map has no logged-in user to
-    // read one from, so the owner's key travels with it. Only a valid share token
-    // gets this far. getUserSettings composes the owner's own value, the admin
-    // instance default and the managed-instance key in that order; carto_api_key is
-    // encrypted at rest but deliberately unmasked, since it is useless until it
-    // reaches a browser.
-    const ownerCartoKey = this.settings.getUserSettings(journey.user_id)['carto_api_key'];
-    const cartoApiKey = typeof ownerCartoKey === 'string' ? ownerCartoKey.trim() : '';
 
     return {
       journey: {
@@ -262,9 +287,15 @@ export class JourneyShareService {
       // owner never typed and may not expect to publish. It follows share_map, the
       // same switch the entry coordinates follow — otherwise a gallery-only share
       // would hand out places the map was deliberately turned off for.
-      gallery: shareGallery ? (shareMap ? gallery : stripPhotoGps(gallery)) : [],
+      gallery: shareGallery
+        ? (shareMap
+          ? gallery.map(projectPublicGalleryPhoto)
+          : stripPhotoGps(gallery.map(projectPublicGalleryPhoto)))
+        : [],
       stats,
-      cartoApiKey,
+      // Kept as an empty compatibility field. Anonymous viewers use the
+      // keyless OpenFreeMap fallback and never receive an operator credential.
+      cartoApiKey: '',
       permissions: {
         share_timeline: shareTimeline,
         share_gallery: shareGallery,
@@ -273,6 +304,51 @@ export class JourneyShareService {
       },
     };
   }
+}
+
+function projectPublicEntry(entry: any): Record<string, unknown> {
+  return {
+    id: entry.id,
+    type: entry.type,
+    title: entry.title,
+    story: entry.story,
+    entry_date: entry.entry_date,
+    entry_time: entry.entry_time,
+    location_name: entry.location_name,
+    location_lat: entry.location_lat,
+    location_lng: entry.location_lng,
+    mood: entry.mood,
+    weather: entry.weather,
+    tags: entry.tags ? JSON.parse(entry.tags) : [],
+    pros_cons: entry.pros_cons ? JSON.parse(entry.pros_cons) : null,
+  };
+}
+
+function projectPublicPhoto(photo: any): Record<string, unknown> {
+  return {
+    id: photo.id,
+    entry_id: photo.entry_id,
+    photo_id: photo.photo_id,
+    caption: photo.caption,
+    media_type: photo.media_type,
+    duration_ms: photo.duration_ms,
+    taken_at: photo.taken_at,
+    lat: photo.lat,
+    lng: photo.lng,
+  };
+}
+
+function projectPublicGalleryPhoto(photo: any): Record<string, unknown> {
+  return {
+    id: photo.id,
+    photo_id: photo.photo_id,
+    caption: photo.caption,
+    media_type: photo.media_type,
+    duration_ms: photo.duration_ms,
+    taken_at: photo.taken_at,
+    lat: photo.lat,
+    lng: photo.lng,
+  };
 }
 
 /** Drop capture coordinates from a photo list, keeping everything else. */

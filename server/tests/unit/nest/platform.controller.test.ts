@@ -220,6 +220,27 @@ describe('applyPlatformUploads', () => {
       expect(h.sendToResponse).toHaveBeenCalledWith('photos', 'a.jpg', res);
     });
 
+    it('normalizes an ISO share expiry before comparing it with SQLite now', async () => {
+      h.exists.mockResolvedValue(true);
+      h.sendToResponse.mockResolvedValue(undefined);
+      h.verifyJwtAndLoadUser.mockReturnValue(null);
+      const photoStmt = { get: vi.fn().mockReturnValue({ trip_id: 7 }) };
+      const shareStmt = { get: vi.fn().mockReturnValue({ trip_id: 7 }) };
+      h.dbPrepare.mockImplementationOnce(() => photoStmt).mockImplementationOnce(() => shareStmt);
+      const res = makeRes();
+
+      await photoHandler()(
+        { params: { filename: 'a.jpg' }, headers: {}, query: { token: 'share1' } },
+        res,
+        next,
+      );
+
+      expect(h.dbPrepare).toHaveBeenNthCalledWith(
+        2,
+        expect.stringContaining("datetime(expires_at) > datetime('now')"),
+      );
+    });
+
     it('404 when the object vanishes between the exists check and the send', async () => {
       // Approved deviation D7: the delete race maps to the same 404 text.
       h.exists.mockResolvedValue(true);

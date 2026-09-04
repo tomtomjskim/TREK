@@ -58,7 +58,7 @@ export class JourneyPublicController {
     @Param('kind') kind: string,
     @Res() res: Response,
   ): Promise<void> {
-    const valid = this.journey.validateShareTokenForAsset(token, assetId);
+    const valid = this.journey.validateShareTokenForAsset(token, provider, assetId);
     if (!valid) {
       throw new HttpException({ error: 'Not found' }, 404);
     }
