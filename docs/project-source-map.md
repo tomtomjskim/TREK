@@ -1,6 +1,7 @@
 # TREK Project Source Map
 
-> 마지막 확인: 2026-08-14, v3.4.1 포크 runtime source `7a50356e` 기준
+> 마지막 확인: 2026-09-05, 공식 v4.2.0 통합 후보 기준. 운영 runtime은 cutover 증거가
+> 기록되기 전까지 v3.4.1 source `7a50356e`다.
 >
 > 이 문서는 사람이 저장소를 탐색하기 위한 source map이다. Vite/TypeScript가 만드는
 > JavaScript `.map` artifact나 production stack-trace 공개 설정을 의미하지 않는다.
@@ -49,8 +50,7 @@ flowchart LR
 | `client/src/store/`                           | Zustand state와 remote-event reconciliation             | 낙관적 상태, 실시간 갱신, 권한 기반 state를 바꿀 때 |
 | `client/src/repo/`, `client/src/api/`         | offline-aware repository와 HTTP/WebSocket transport     | 서버 contract 또는 mutation retry를 바꿀 때         |
 | `client/src/sync/`, `client/src/db/`          | service worker와 IndexedDB/offline mutation lifecycle   | offline/PWA 동작을 바꿀 때                          |
-| `server/src/nest/`                            | controller, guard, module과 thin domain service         | HTTP route/auth/status/error contract를 바꿀 때     |
-| `server/src/services/`                        | SQL, provider integration과 core business side effect   | business rule 또는 외부 provider 동작을 바꿀 때     |
+| `server/src/nest/`                            | controller, guard, module, domain service와 provider adapter | HTTP/API 계약, business rule 또는 외부 provider를 바꿀 때 |
 | `server/src/db/`                              | schema, official/fork migration, seed와 DB singleton    | persistent data shape를 바꿀 때                     |
 | `server/src/mcp/`                             | OAuth scope 기반 MCP tools/resources/prompts            | AI automation surface를 바꿀 때                     |
 | `server/src/websocket.ts`                     | authenticated connection과 scoped broadcast transport   | collaboration fan-out/privacy를 바꿀 때             |
@@ -71,8 +71,8 @@ Host 전용 `docker-compose.override.yml`, credential, signing material과 운�
 3. mutating request에는 `X-Idempotency-Key`와 가능한 경우 `X-Socket-Id`가 붙는다.
 4. `server/src/bootstrap.ts`의 global middleware와 Nest guard가 origin, auth, MFA와
    permission을 검사한다.
-5. controller는 `server/src/nest/<domain>/` service를 통해 기존 core service와 SQLite
-   transaction/provider side effect를 호출한다.
+5. controller는 같은 `server/src/nest/<domain>/`의 service를 통해 SQLite transaction과
+   provider side effect를 호출한다.
 6. 성공한 협업 mutation은 요청 socket을 제외하거나 viewer scope를 적용해 WebSocket으로
    fan-out되고, client store가 remote event를 반영한다.
 7. offline mutation은 IndexedDB queue에 보관됐다가 동일 idempotency key로 재전송된다.
@@ -95,16 +95,17 @@ Host 전용 `docker-compose.override.yml`, credential, signing material과 운�
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Map label locale                   | `client/src/components/Map/glProviders.ts`, `MapViewGL.tsx`, `Settings/MapSettingsTab.tsx`, `client/src/store/settingsStore.ts`                     | provider expression을 보존하고 locale name만 fallback                                                                                                                                                                                |
 | Fold/Tablet map controls           | `client/src/components/Map/AdaptiveMapControls.tsx`, `client/src/utils/mapViewport.ts`                                                              | 양쪽 panel corridor, 44px target와 keyboard/focus contract                                                                                                                                                                           |
-| Google enrichment/cost guard       | `server/src/services/placeEnrichment.ts`, `googleApiUsageService.ts`, maps/admin services, client admin/enrichment UI                               | 외부 호출 전 usage reservation, admin-only visibility, instance hard cap                                                                                                                                                             |
-| Packing privacy/templates          | `server/src/services/packingService.ts`, Nest packing controller/service, shared packing schema, client packing UI                                  | Common/Personal/Shared viewer와 writer 권한, instance template scope                                                                                                                                                                 |
+| Google enrichment/cost guard       | `server/src/nest/place-enrichment/`, `google-api-usage/`, `places/place-batch-enrichment.service.ts`, maps/admin, client admin/enrichment UI          | 외부 호출 전 usage reservation, admin-only visibility, instance hard cap                                                                                                                                                             |
+| Packing privacy/templates          | `server/src/nest/packing/`, shared packing schema, client packing UI                                                                                | Common/Personal/Shared viewer와 writer 권한, instance template scope                                                                                                                                                                 |
 | Calendar week start                | `client/src/utils/calendarWeek.ts`, `Settings/DisplaySettingsTab.tsx`, shared/Journey date pickers, `Vacay/VacayCalendar.tsx`                       | 개인 setting 우선, legacy Vacay plan 읽기 fallback, 기본 Monday                                                                                                                                                                      |
-| Vacay destructive year/invite flow | `server/src/services/vacayService.ts`, Nest Vacay controller/service, MCP Vacay tools, `client/src/pages/VacayPage.tsx`와 `pages/vacay/useVacay.ts` | 연도 삭제·초대 수락·fusion 해산을 immediate transaction으로 처리; 누락된 이관 연도·user-year balance·다중 accepted·owner orphan·fused/pending/ambiguous ownership은 보존 또는 fail-closed하고 실제 상태 변경 뒤에만 best-effort 알림 |
-| Trip/Vacay shift boundary          | `server/src/services/tripService.ts`, `server/src/services/vacayService.ts`, trip unit/MCP tests                                                    | provenance가 없는 Vacay entry를 날짜 겹침만으로 이동하지 않는 포크 정책; 공식 #983의 반대 contract와 분리                                                                                                                            |
+| Vacay destructive year/invite flow | `server/src/nest/vacay/`, MCP/RPC, `client/src/pages/VacayPage.tsx`와 `pages/vacay/useVacay.ts`                                                      | 연도 삭제·초대 수락·fusion 해산을 immediate transaction으로 처리; 누락된 이관 연도·user-year balance·다중 accepted·owner orphan·fused/pending/ambiguous ownership은 보존 또는 fail-closed하고 실제 상태 변경 뒤에만 best-effort 알림 |
+| Trip/Vacay shift boundary          | `server/src/nest/trips/`, `server/src/nest/vacay/`, trip unit/MCP tests                                                                             | provenance가 없는 Vacay entry를 날짜 겹침만으로 이동하지 않는 포크 정책; 공식 #983의 반대 contract와 분리                                                                                                                            |
 | Migration collision bridge         | `server/src/db/migrationRunner.ts`, `forkMigrations.ts`                                                                                             | official numeric migration과 fork string ID 분리                                                                                                                                                                                     |
 | Android/package identity           | `android/twa/`, `server/src/nest/platform/android-release.routes.ts`                                                                                | signing material은 Git/runtime 밖, 고정 파일만 공개                                                                                                                                                                                  |
 
-세부 lane, retirement 조건과 다음 upstream release 절차는
-[`docs/upstream/README.md`](upstream/README.md)를 따른다.
+세부 lane과 다음 upstream release 절차는 [`docs/upstream/README.md`](upstream/README.md),
+기능별 활성화·소유 seam·retirement 조건은
+[`fork extension manifest`](upstream/fork-extension-manifest.md)를 따른다.
 
 ## Calendar week-start boundary
 

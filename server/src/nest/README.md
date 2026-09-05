@@ -626,8 +626,11 @@ the wrapper `TripsService`: TRIP_SELECT + list/create/get, the
 `generateDays` two-phase renumber engine, the updateTrip date-shift
 transaction, the member/guest lifecycle (#973/#1362), the ICS export with its
 module-scoped tz-validity cache, `copyTripById` and `getTripSummary`; its six
-bridge imports became injected services (CollabService + VacayService joined
-the constructor); the 10-tool trips registrar + 3 `resources.ts` trip
+bridge imports became injected services (CollabService joined the constructor;
+the unused VacayService dependency and TripsModule→VacayModule edge were removed
+2026-09-05). Packing/Todo copy is now a single addon contributor: when Packing is
+disabled, core trip copy never queries or writes those tables. The 10-tool trips
+registrar + 3 `resources.ts` trip
 resources + the trip-summary prompt moved to `trips.mcp.ts` — the first
 `@Prompt` use, with the fire-once static-token deprecation notice now riding
 the `registry.attach` ctx — and the 3 share-link tools it carried moved to

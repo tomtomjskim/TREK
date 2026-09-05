@@ -37,6 +37,23 @@ rebase하지 않는다.
 기반의 포크 검증 branch다. 향후 공식 기여를 재개하면 해당 branch를 직접 PR로
 보내지 않고 최신 `upstream/dev`에서 일반화된 최소 변경을 새로 추출한다.
 
+## v4.2.0 landing status
+
+2026-09-05 기준 공식 latest release는 exact `v4.2.0` peeled commit
+`09ce5cb733bb681c992dfd4f029706718aae58cc`다. 격리
+`sync/upstream-v4.2.0` 후보는 이 commit을 merge parent로 보존하며, 공식 numeric
+schema 205와 별도 `fork_schema_migrations` ledger를 유지한다. 운영 반영 여부는
+[`v4.2.0 landing evidence`](../plans/2026-09-04-upstream-v4.2.0-integration-evidence.md)의
+deployment section을 source of truth로 삼는다.
+
+포크 기능은 [`fork extension manifest`](fork-extension-manifest.md)에 addon,
+provider/config, always-on invariant, instance-only로 분류한다. addon off는 REST/MCP와
+desktop/mobile/admin UI를 함께 닫되 데이터를 지우지 않는다. 보안·개인정보·데이터
+정합성 수정은 비활성화 스위치로 되돌리지 않고, 공식 release가 같은 negative regression을
+통과할 때 patch와 test를 함께 제거한다. 설계와 실행 순서는
+[`main landing design`](../plans/2026-09-05-v4.2.0-main-landing-design.md)과
+[`implementation plan`](../plans/2026-09-05-v4.2.0-main-landing.md)을 따른다.
+
 ## v4.1.1 integration audit
 
 2026-09-01 기준 공식 `v4.1.1`은 통합·배포된 runtime이 아니라 격리 통합
@@ -206,7 +223,7 @@ v3.4 통합부터 다음 계약을 사용한다.
 | Google place enrichment와 app hard cap         | fork core, plugin 추출 검토                  | 중간                              | provider 호출·usage ledger를 plugin-owned DB/action으로 옮길 SDK gap 분석 필요                                                                                                                                                                          |
 | Google 사용량 admin UI                         | plugin 또는 upstream generic 후보            | 중간                              | Google 전용 표현과 instance 정책을 분리해야 함                                                                                                                                                                                                          |
 | Android TWA/APK                                | instance-only                                | 없음                              | package identity, assetlinks, signing을 포크에서만 관리                                                                                                                                                                                                 |
-| 공개 지도·계획의 공유 장소 메모                | upstream contribution 후보 / 현재 fork-first | 높음, 일반 public projection 결함 | v4.1.1 통합 후 `places.notes`의 top-level/nested 동등성, 모든 anonymous section의 exact allowlist·disabled-flag no-query, Popup·계획 표시, `share_map=false` sentinel 비노출과 개인 메모 오표기 수정이 공식 release에서 모두 통과하면 local patch 제거  |
+| 공개 지도·계획의 공유 장소 메모                | upstream contribution 후보 / 현재 fork-first | 높음, 일반 public projection 결함 | v4.2.0 기준 `places.notes`의 top-level/nested 동등성, 모든 anonymous section의 exact allowlist·disabled-flag no-query, Popup·계획 표시, `share_map=false` sentinel 비노출과 개인 메모 오표기 수정이 공식 release에서 모두 통과하면 local patch 제거  |
 | Cloudflare/nginx/Compose 운영 설정             | instance-only                                | 없음                              | repository secret 금지, 외부 deployment runbook에서 관리                                                                                                                                                                                                |
 
 ## Release synchronization procedure
@@ -225,11 +242,11 @@ git merge --no-ff --no-commit <verified-upstream-tag>
 6. 운영 전에는 immutable local image를 만들고 기존 image와 DB backup으로 rollback을 연습한다.
 7. TOM의 배포 승인 전에는 `main` merge, remote push, Compose 교체를 하지 않는다.
 
-v4.1.1처럼 server ownership이 바뀐 major release에서는 conflict 파일을 과거
+v4.x처럼 server ownership이 바뀐 major release에서는 conflict 파일을 과거
 implementation으로 복원하지 않는다. official Nest module을 baseline으로 두고
 [`2026-09-01 preservation matrix`](../plans/2026-09-01-upstream-v4.1.1-preservation-matrix.md)의
 behavior test를 새 public entry point로 이식한다. DB/auth/privacy/provider/UI 순서를
-지키며, 모든 HIGH 행과 schema 200 backup/restore rehearsal 전에는 release candidate로
+지키며, 모든 HIGH 행과 target schema backup/restore rehearsal 전에는 release candidate로
 분류하지 않는다.
 
 v3.4.0에서 확인된 conflict hotspot은 `server/src/db/migrations.ts`, maps/settings,

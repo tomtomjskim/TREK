@@ -15,6 +15,7 @@
 | 공식 release 기준       | exact `v3.4.1` tag target `a0994658890eae96624fb9cbe7f55867f047fea2`    |
 | 격리 v4.1.1 중간 후보   | `a55fcccb` (`sync/upstream-v4.1.1`; main/runtime 미반영)                |
 | 공식 최신 검토 target   | exact `v4.2.0` peeled commit `09ce5cb733bb681c992dfd4f029706718aae58cc` |
+| v4.2.0 통합 후보        | `sync/upstream-v4.2.0`; 검증·복원 리허설 후 `main`/runtime 반영 예정   |
 
 현재 runtime은 공식 v3.4.1 통합과 custom version SemVer correctness,
 packing-template 관리자 exact-once/race guard 위에 Vacay 입력 보존·융합
@@ -32,6 +33,8 @@ truth다.
   요청·데이터 흐름, 포크 hotspot과 검증 경로
 - [Fork and upstream strategy](upstream/README.md): 저장소 역할, 변경 lane,
   migration namespace와 release 통합 절차
+- [Fork extension manifest](upstream/fork-extension-manifest.md): v4.2.0에 유지하는
+  addon/config/always-on/instance-only 기능의 소유 seam, 검증과 제거 조건
 - [Fork-first validation policy](upstream/fork-first-validation-policy.md):
   로컬·개인 포크 검증 범위, 원격 작업 경계, 코드 컨벤션과 향후 공식 기여 재개 조건
 - [v4.1.1 integration design](plans/2026-09-01-upstream-v4.1.1-integration-design.md) ·
@@ -42,6 +45,10 @@ truth다.
 - [v4.2.0 incremental preflight](plans/2026-09-04-upstream-v4.2.0-incremental-preflight.md):
   2026-09-03 공개된 새 latest tag를 v4.1.1 중간 checkpoint에 증분 통합하기 위한 87 commits,
   605 files, schema 200→205, 42 conflict 감사와 격리 실행 순서. Direct main/deploy는 NO-GO
+- [v4.2.0 main landing design](plans/2026-09-05-v4.2.0-main-landing-design.md) ·
+  [implementation plan](plans/2026-09-05-v4.2.0-main-landing.md): addon surface를
+  REST/MCP/desktop/mobile/admin에서 함께 닫고, OpenFreeMap을 유지하며, 이전 image와
+  logical-point backup을 한 쌍으로 복원하는 승인된 랜딩 절차
 - [v4.1.1 fork preservation matrix](plans/2026-09-01-upstream-v4.1.1-preservation-matrix.md):
   DB, packing privacy, Google 비용, Vacay 데이터 안전, 지도/Fold/calendar, Android와
   Trip/Journey 공개 공유 동작을 새 v4 owner module의 RED/GREEN 증거에 연결하는 누락 방지 원장
@@ -52,7 +59,7 @@ truth다.
   `share_map=false` 비노출 계약. `0842e229` + `c3b8e18f` local VERIFIED
 - [CARTO basemap runtime diagnosis](plans/2026-09-04-carto-basemap-runtime-diagnosis.md):
   운영 v3.4.1의 빈 지도 설정이 keyless CARTO 기본값으로 연결되는 원인, 비밀값 비노출
-  운영 집계, 실제 워터마크 재현과 v4.1.1의 encrypted-key/OpenFreeMap fallback 계약
+  운영 집계, 실제 워터마크 재현과 v4.2.0 후보의 encrypted-key/OpenFreeMap fallback 계약
 - [Vacay correctness extraction dossiers](upstream/vacay-correctness-extraction.md):
   최신 공식 Nest 경로에 다시 구현할 데이터 보존 후보와 공식 contract와 충돌하는
   포크 정책 변경을 제출 단위별로 분리한 자료
