@@ -38,6 +38,12 @@ async function clearCache(): Promise<void> {
   ]);
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => { resolve = res })
+  return { promise, resolve }
+}
+
 beforeEach(async () => {
   resetAllStores();
   server.resetHandlers();
@@ -356,6 +362,120 @@ describe('tripStore', () => {
       await expect(loadTripPromise).rejects.toThrow();
     });
 
+    it('FE-TSTORE-005f: a superseded loadTrip keeps the later trip and ignores late addon data', async () => {
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: false });
+      const trip1Core = deferred<Response>()
+      let trip1PackingCalls = 0
+      let trip1TodoCalls = 0
+      let trip2PackingCalls = 0
+      let trip2TodoCalls = 0
+
+      server.use(
+        http.get('/api/trips/1', () => trip1Core.promise),
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 501, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => {
+          trip1PackingCalls += 1
+          return HttpResponse.json({ items: [buildPackingItem({ id: 610, trip_id: 1 })] })
+        }),
+        http.get('/api/trips/1/todo', () => {
+          trip1TodoCalls += 1
+          return HttpResponse.json({ items: [buildTodoItem({ id: 710, trip_id: 1 })] })
+        }),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/trips/2', () => HttpResponse.json({ trip: buildTrip({ id: 2, title: 'Later trip' }) })),
+        http.get('/api/trips/2/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/2/places', () => HttpResponse.json({ places: [buildPlace({ id: 502, trip_id: 2 })] })),
+        http.get('/api/trips/2/packing', () => {
+          trip2PackingCalls += 1
+          return HttpResponse.json({ items: [buildPackingItem({ id: 620, trip_id: 2 })] })
+        }),
+        http.get('/api/trips/2/todo', () => {
+          trip2TodoCalls += 1
+          return HttpResponse.json({ items: [buildTodoItem({ id: 720, trip_id: 2 })] })
+        }),
+        http.get('/api/trips/2/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/2/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/2/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/tags', () => HttpResponse.json({ tags: [] })),
+        http.get('/api/categories', () => HttpResponse.json({ categories: [] })),
+      );
+
+      const trip1Promise = useTripStore.getState().loadTrip(1)
+      const trip2Promise = useTripStore.getState().loadTrip(2)
+
+      await waitFor(() => expect(useTripStore.getState().trip?.id).toBe(2))
+      useAddonStore.setState({
+        addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+        bagTracking: false,
+        loaded: true,
+      });
+
+      await expect(trip2Promise).resolves.toBeUndefined()
+      trip1Core.resolve(HttpResponse.json({ trip: buildTrip({ id: 1, title: 'Old trip' }) }))
+      await expect(trip1Promise).resolves.toBeUndefined()
+
+      const state = useTripStore.getState()
+      expect(state.trip?.id).toBe(2)
+      expect(state.trip?.title).toBe('Later trip')
+      expect(state.packingItems.map(i => i.id)).toEqual([620])
+      expect(state.todoItems.map(i => i.id)).toEqual([720])
+      expect(trip1PackingCalls).toBe(0)
+      expect(trip1TodoCalls).toBe(0)
+      expect(trip2PackingCalls).toBe(1)
+      expect(trip2TodoCalls).toBe(1)
+      expect(state.error).toBeNull()
+    });
+
+    it('FE-TSTORE-005g: resetTrip invalidates a pending loadTrip before late writes land', async () => {
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: false });
+      const tripCore = deferred<Response>()
+      let packingCalls = 0
+      let todoCalls = 0
+
+      server.use(
+        http.get('/api/trips/1', () => tripCore.promise),
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 503, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => {
+          packingCalls += 1
+          return HttpResponse.json({ items: [buildPackingItem({ id: 630, trip_id: 1 })] })
+        }),
+        http.get('/api/trips/1/todo', () => {
+          todoCalls += 1
+          return HttpResponse.json({ items: [buildTodoItem({ id: 730, trip_id: 1 })] })
+        }),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/tags', () => HttpResponse.json({ tags: [] })),
+        http.get('/api/categories', () => HttpResponse.json({ categories: [] })),
+      );
+
+      const loadTripPromise = useTripStore.getState().loadTrip(1)
+      useTripStore.getState().resetTrip()
+      tripCore.resolve(HttpResponse.json({ trip: buildTrip({ id: 1, title: 'Reset later trip' }) }))
+      useAddonStore.setState({
+        addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+        bagTracking: false,
+        loaded: true,
+      });
+
+      await expect(loadTripPromise).resolves.toBeUndefined()
+
+      const state = useTripStore.getState()
+      expect(state.trip).toBeNull()
+      expect(state.days).toEqual([])
+      expect(state.places).toEqual([])
+      expect(state.packingItems).toEqual([])
+      expect(state.todoItems).toEqual([])
+      expect(state.isLoading).toBe(false)
+      expect(packingCalls).toBe(0)
+      expect(todoCalls).toBe(0)
+    });
+
     it('FE-TSTORE-006: falls back to the cached tags and categories when their endpoints fail', async () => {
       await offlineDb.tags.put(buildTag({ id: 31, name: 'Cached tag' }));
       await offlineDb.categories.put(buildCategory({ id: 32, name: 'Cached category' }));
@@ -501,6 +621,73 @@ describe('tripStore', () => {
       expect(useTripStore.getState().todoItems).toEqual([]);
       expect(packingCalls).toBe(0);
       expect(todoCalls).toBe(0);
+    });
+
+    it('FE-TSTORE-008c: a superseded hydrateActiveTrip does not overwrite a later loadTrip', async () => {
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: false });
+      const hydrateDayGate = deferred<Response>()
+      let hydratePackingCalls = 0
+      let hydrateTodoCalls = 0
+      let trip2PackingCalls = 0
+      let trip2TodoCalls = 0
+
+      seedStore(useTripStore, { trip: buildTrip({ id: 1 }), places: [], days: [] });
+      server.use(
+        http.get('/api/trips/1/days', () => hydrateDayGate.promise),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 601, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => {
+          hydratePackingCalls += 1
+          return HttpResponse.json({ items: [buildPackingItem({ id: 661, trip_id: 1 })] })
+        }),
+        http.get('/api/trips/1/todo', () => {
+          hydrateTodoCalls += 1
+          return HttpResponse.json({ items: [buildTodoItem({ id: 771, trip_id: 1 })] })
+        }),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/trips/2', () => HttpResponse.json({ trip: buildTrip({ id: 2, title: 'Later trip' }) })),
+        http.get('/api/trips/2/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/2/places', () => HttpResponse.json({ places: [buildPlace({ id: 602, trip_id: 2 })] })),
+        http.get('/api/trips/2/packing', () => {
+          trip2PackingCalls += 1
+          return HttpResponse.json({ items: [buildPackingItem({ id: 662, trip_id: 2 })] })
+        }),
+        http.get('/api/trips/2/todo', () => {
+          trip2TodoCalls += 1
+          return HttpResponse.json({ items: [buildTodoItem({ id: 772, trip_id: 2 })] })
+        }),
+        http.get('/api/trips/2/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/2/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/2/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/tags', () => HttpResponse.json({ tags: [] })),
+        http.get('/api/categories', () => HttpResponse.json({ categories: [] })),
+      );
+
+      const hydratePromise = useTripStore.getState().hydrateActiveTrip(1)
+      const loadTripPromise = useTripStore.getState().loadTrip(2)
+
+      await waitFor(() => expect(useTripStore.getState().trip?.id).toBe(2))
+      useAddonStore.setState({
+        addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+        bagTracking: false,
+        loaded: true,
+      });
+
+      hydrateDayGate.resolve(HttpResponse.json({ days: serverDays() }))
+      await expect(loadTripPromise).resolves.toBeUndefined()
+      await expect(hydratePromise).resolves.toBeUndefined()
+
+      const state = useTripStore.getState()
+      expect(state.trip?.id).toBe(2)
+      expect(state.trip?.title).toBe('Later trip')
+      expect(state.packingItems.map(i => i.id)).toEqual([662])
+      expect(state.todoItems.map(i => i.id)).toEqual([772])
+      expect(hydratePackingCalls).toBe(0)
+      expect(hydrateTodoCalls).toBe(0)
+      expect(trip2PackingCalls).toBe(1)
+      expect(trip2TodoCalls).toBe(1)
+      expect(state.error).toBeNull()
     });
 
     it('FE-TSTORE-009: one failing resource does not wipe the others', async () => {

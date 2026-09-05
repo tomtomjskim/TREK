@@ -42,22 +42,47 @@ function isNotFoundError(err: unknown): boolean {
   return (err as { response?: { status?: number } }).response?.status === 404
 }
 
-function waitForAddonFeedSettled(): Promise<void> {
+let tripRequestGeneration = 0
+
+function startTripRequest(): number {
+  tripRequestGeneration += 1
+  return tripRequestGeneration
+}
+
+function invalidateTripRequests(): void {
+  tripRequestGeneration += 1
+}
+
+function isCurrentTripRequest(requestGeneration: number): boolean {
+  return requestGeneration === tripRequestGeneration
+}
+
+function waitForAddonFeedSettled(requestGeneration: number): Promise<boolean> {
   const addonStore = useAddonStore.getState()
-  if (addonStore.loaded) return Promise.resolve()
+  if (addonStore.loaded) return Promise.resolve(true)
 
   return new Promise(resolve => {
+    let requestUnsubscribe: (() => void) | null = null
     const unsubscribe = useAddonStore.subscribe(() => {
       if (useAddonStore.getState().loaded) {
         unsubscribe()
-        resolve()
+        requestUnsubscribe?.()
+        resolve(true)
+      }
+    })
+    requestUnsubscribe = useTripStore.subscribe(() => {
+      if (!isCurrentTripRequest(requestGeneration)) {
+        unsubscribe()
+        requestUnsubscribe?.()
+        resolve(false)
       }
     })
   })
 }
 
-async function loadPackingAndTodoIfEnabled(tripId: number | string): Promise<{ packingItems: PackingItem[]; todoItems: TodoItem[] }> {
-  await waitForAddonFeedSettled()
+async function loadPackingAndTodoIfEnabled(tripId: number | string, requestGeneration: number): Promise<{ packingItems: PackingItem[]; todoItems: TodoItem[] } | null> {
+  const settled = await waitForAddonFeedSettled(requestGeneration)
+  if (!settled || !isCurrentTripRequest(requestGeneration)) return null
   const addonStore = useAddonStore.getState()
   if (!addonStore.isEnabled('packing')) {
     return { packingItems: [], todoItems: [] }
@@ -67,6 +92,7 @@ async function loadPackingAndTodoIfEnabled(tripId: number | string): Promise<{ p
     packingRepo.list(tripId),
     todoRepo.list(tripId),
   ])
+  if (!isCurrentTripRequest(requestGeneration)) return null
 
   if (packingResult.status === 'rejected' && isNotFoundError(packingResult.reason)) throw packingResult.reason
   if (todoResult.status === 'rejected' && isNotFoundError(todoResult.reason)) throw todoResult.reason
@@ -148,26 +174,47 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
 
   // Clear every trip-scoped slice so switching trips (or losing access to one)
   // can never leave a previous trip's data visible. Global tags/categories are
-  // left intact. Called at the top of loadTrip.
-  resetTrip: () => set({
-    trip: null,
-    days: [],
-    places: [],
-    assignments: {},
-    dayNotes: {},
-    packingItems: [],
-    todoItems: [],
-    budgetItems: [],
-    files: [],
-    reservations: [],
-    selectedDayId: null,
-    placesFilter: 'all',
-    placesCategoryFilter: new Set<string>(),
-    error: null,
-  }),
+  // left intact. Also invalidates any pending trip request so late writes from
+  // a stale load/hydration cannot land after a logout or route reset.
+  resetTrip: () => {
+    invalidateTripRequests()
+    set({
+      trip: null,
+      days: [],
+      places: [],
+      assignments: {},
+      dayNotes: {},
+      packingItems: [],
+      todoItems: [],
+      budgetItems: [],
+      files: [],
+      reservations: [],
+      selectedDayId: null,
+      placesFilter: 'all',
+      placesCategoryFilter: new Set<string>(),
+      isLoading: false,
+      error: null,
+    })
+  },
 
   loadTrip: async (tripId: number | string) => {
-    get().resetTrip()
+    const requestGeneration = startTripRequest()
+    set({
+      trip: null,
+      days: [],
+      places: [],
+      assignments: {},
+      dayNotes: {},
+      packingItems: [],
+      todoItems: [],
+      budgetItems: [],
+      files: [],
+      reservations: [],
+      selectedDayId: null,
+      placesFilter: 'all',
+      placesCategoryFilter: new Set<string>(),
+      error: null,
+    })
     set({ isLoading: true, error: null })
     try {
       const [tripData, daysData, placesData, budgetData, reservationsData, filesData, tagsData, categoriesData] = await Promise.all([
@@ -195,6 +242,7 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
         dayNotesMap[String(day.id)] = day.notes_items || []
       }
 
+      if (!isCurrentTripRequest(requestGeneration)) return
       set({
         trip: tripData.trip,
         days: daysData.days,
@@ -211,12 +259,15 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
         isLoading: false,
       })
 
-      const addonItems = await loadPackingAndTodoIfEnabled(tripId)
-      set({
-        packingItems: addonItems.packingItems,
-        todoItems: addonItems.todoItems,
-      })
+      const addonItems = await loadPackingAndTodoIfEnabled(tripId, requestGeneration)
+      if (addonItems && isCurrentTripRequest(requestGeneration)) {
+        set({
+          packingItems: addonItems.packingItems,
+          todoItems: addonItems.todoItems,
+        })
+      }
     } catch (err: unknown) {
+      if (!isCurrentTripRequest(requestGeneration)) return
       const message = err instanceof Error ? err.message : 'Unknown error'
       set({ isLoading: false, error: message })
       throw err
@@ -228,18 +279,44 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
   // offline appear in place — no splash, no resetTrip. Each resource is
   // best-effort; a failure on one must not wipe the others.
   hydrateActiveTrip: async (tripId: number | string) => {
-    await Promise.all([
-      get().refreshDays(tripId),
-      placeRepo.list(tripId).then(d => set({ places: d.places })).catch(() => {}),
-      get().loadBudgetItems(tripId),
-      get().loadReservations(tripId),
-      get().loadFiles(tripId),
+    const requestGeneration = startTripRequest()
+    const [daysResult, placesResult, budgetResult, reservationsResult, filesResult] = await Promise.allSettled([
+      dayRepo.list(tripId),
+      placeRepo.list(tripId),
+      budgetRepo.list(tripId),
+      reservationRepo.list(tripId),
+      fileRepo.list(tripId),
     ])
-    const addonItems = await loadPackingAndTodoIfEnabled(tripId)
+    if (!isCurrentTripRequest(requestGeneration)) return
+    const currentState = get()
+    const daysData = daysResult.status === 'fulfilled' ? daysResult.value : null
+    const placesData = placesResult.status === 'fulfilled' ? placesResult.value : null
+    const budgetData = budgetResult.status === 'fulfilled' ? budgetResult.value : null
+    const reservationsData = reservationsResult.status === 'fulfilled' ? reservationsResult.value : null
+    const filesData = filesResult.status === 'fulfilled' ? filesResult.value : null
+    const assignmentsMap: AssignmentsMap = {}
+    const dayNotesMap: DayNotesMap = {}
+    const nextDays = daysData?.days ?? currentState.days
+    for (const day of nextDays) {
+      assignmentsMap[String(day.id)] = day.assignments || []
+      dayNotesMap[String(day.id)] = day.notes_items || []
+    }
     set({
-      packingItems: addonItems.packingItems,
-      todoItems: addonItems.todoItems,
+      days: nextDays,
+      places: placesData?.places ?? currentState.places,
+      assignments: assignmentsMap,
+      dayNotes: dayNotesMap,
+      budgetItems: budgetData?.items ?? currentState.budgetItems,
+      reservations: reservationsData?.reservations ?? currentState.reservations,
+      files: filesData?.files ?? currentState.files,
     })
+    const addonItems = await loadPackingAndTodoIfEnabled(tripId, requestGeneration)
+    if (addonItems && isCurrentTripRequest(requestGeneration)) {
+      set({
+        packingItems: addonItems.packingItems,
+        todoItems: addonItems.todoItems,
+      })
+    }
     // Accommodations live in planner-local state, not this store — nudge the
     // planner to reload them too (e.g. a trip date change made while offline).
     window.dispatchEvent(new CustomEvent('accommodations:refresh'))
