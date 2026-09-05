@@ -21,7 +21,7 @@ import { makeDeps } from '../../helpers/rpc-host-deps';
 const req = (method: string, params: Record<string, unknown> = {}): RpcRequest => ({ k: 'req', id: 'x', method, params });
 
 /** Trip 1 belongs to user 42; todo 90 sits on it. */
-function build(canEdit = true) {
+function build(canEdit = true, addonOn = true) {
   const todos = {
     listItems: vi.fn(() => [{ id: 90, name: 'Pack' }]),
     createItem: vi.fn((tripId: string, input: Record<string, unknown>) => ({ id: 91, trip_id: tripId, ...input })),
@@ -30,24 +30,51 @@ function build(canEdit = true) {
   } as unknown as TodoService & Record<string, ReturnType<typeof vi.fn>>;
   const realtime = { broadcast: vi.fn() } as unknown as RealtimeService & { broadcast: ReturnType<typeof vi.fn> };
   const permissions = { checkPermission: vi.fn(() => canEdit) } as unknown as PermissionsService;
+  const db = {
+    canAccessTrip: vi.fn((tripId: number, userId: number) => (tripId === 1 && userId === 42 ? { id: 1, user_id: 42 } : undefined)),
+    prepare: vi.fn(() => ({ get: () => ({ role: 'user' }) })),
+  } as unknown as DatabaseService;
   const guards = new PluginGuards(
-    {
-      canAccessTrip: vi.fn((tripId: number, userId: number) => (tripId === 1 && userId === 42 ? { id: 1, user_id: 42 } : undefined)),
-      prepare: vi.fn(() => ({ get: () => ({ role: 'user' }) })),
-    } as unknown as DatabaseService,
+    db,
     permissions,
-    { isAddonEnabled: vi.fn(() => true) } as unknown as AddonsService,
+    { isAddonEnabled: vi.fn(() => addonOn) } as unknown as AddonsService,
   );
   const rpc = new TodoRpc(todos, realtime, guards);
   const host = (...grants: string[]) =>
     new PluginRpcHost('p', new Set(grants), makeDeps(), createTestPluginRegistry([rpc]));
-  return { todos, realtime, permissions, host };
+  return { todos, realtime, permissions, db, host };
 }
 
 describe('TodoRpc through the router', () => {
   let f: ReturnType<typeof build>;
   beforeEach(() => {
     f = build();
+  });
+
+  it('TODO-RPC-000 every method is refused before touching domain services when the addon is disabled', async () => {
+    const disabled = build(true, false);
+    const host = disabled.host('db:read:todos', 'db:write:todos');
+    const cases = [
+      ['todos.list', { tripId: 1 }],
+      ['todos.create', { tripId: 1, input: { name: 'Pack' } }],
+      ['todos.update', { tripId: 1, todoId: 90, input: { checked: 1 } }],
+      ['todos.delete', { tripId: 1, todoId: 90 }],
+    ] as const;
+
+    for (const [method, params] of cases) {
+      const result = (await host.dispatch(req(method, params), 42)) as RpcError;
+      expect(result.ok).toBe(false);
+      expect(result.error.code).toBe('RESOURCE_FORBIDDEN');
+      expect(result.error.message).toBe('the packing addon is disabled');
+    }
+
+    expect(disabled.todos.listItems).not.toHaveBeenCalled();
+    expect(disabled.todos.createItem).not.toHaveBeenCalled();
+    expect(disabled.todos.updateItem).not.toHaveBeenCalled();
+    expect(disabled.todos.deleteItem).not.toHaveBeenCalled();
+    expect(disabled.realtime.broadcast).not.toHaveBeenCalled();
+    expect(disabled.db.canAccessTrip).not.toHaveBeenCalled();
+    expect(disabled.db.prepare).not.toHaveBeenCalled();
   });
 
   it('TODO-RPC-001 todos.list is trip-membership-gated', async () => {

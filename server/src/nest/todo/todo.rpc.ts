@@ -4,6 +4,7 @@ import { BadParams, ForbiddenResource } from '../plugins/host/rpc-errors';
 import { asPayload, num } from '../plugins/host/rpc-params';
 import type { PluginRpcContext } from '../plugins/host/rpc-kit/types';
 import { RealtimeService } from '../realtime/realtime.service';
+import { ADDON_IDS } from '../../addons';
 import { TodoService } from './todo.service';
 
 /** The app edits todos under 'packing_edit', not under a todo-specific action. */
@@ -28,11 +29,13 @@ export class TodoRpc {
 
   @PluginMethod('todos.list', { permission: 'db:read:todos' })
   list(params: Record<string, unknown>, ctx: PluginRpcContext): unknown[] {
+    this.requirePackingAddon();
     return this.guards.tripRead(params, ctx, () => this.todos.listItems(String(num(params.tripId, 'tripId'))) as unknown[]);
   }
 
   @PluginMethod('todos.create', { permission: 'db:write:todos' })
   create(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requirePackingAddon();
     const tripId = num(params.tripId, 'tripId');
     const actor = this.guards.requireActor(ctx, 'todo');
     const input = asPayload(params.input);
@@ -45,6 +48,7 @@ export class TodoRpc {
 
   @PluginMethod('todos.update', { permission: 'db:write:todos' })
   update(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requirePackingAddon();
     const tripId = num(params.tripId, 'tripId');
     const todoId = num(params.todoId, 'todoId');
     const actor = this.guards.requireActor(ctx, 'todo');
@@ -58,6 +62,7 @@ export class TodoRpc {
 
   @PluginMethod('todos.delete', { permission: 'db:write:todos' })
   delete(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requirePackingAddon();
     const tripId = num(params.tripId, 'tripId');
     const todoId = num(params.todoId, 'todoId');
     const actor = this.guards.requireActor(ctx, 'todo');
@@ -67,5 +72,9 @@ export class TodoRpc {
     }
     this.realtime.broadcast(tripId, 'todo:deleted', { itemId: todoId }, undefined);
     return { deleted: true };
+  }
+
+  private requirePackingAddon(): void {
+    this.guards.requireAddon(ADDON_IDS.PACKING, 'packing');
   }
 }

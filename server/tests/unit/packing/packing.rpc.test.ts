@@ -30,7 +30,7 @@ type Item = { id: number; name?: string; is_private?: number; owner_id?: number 
  * A REAL PackingService over a fake realtime, so the broadcast fan-out under test is
  * the production one; only the data methods are stubbed.
  */
-function build(opts: { canEdit?: boolean; before?: Item | undefined; updated?: Item | null } = {}) {
+function build(opts: { canEdit?: boolean; before?: Item | undefined; updated?: Item | null; addonOn?: boolean } = {}) {
   const realtime = { broadcast: vi.fn() } as unknown as RealtimeService & { broadcast: ReturnType<typeof vi.fn> };
   const packing = new PackingService({} as never, {} as never, realtime, notificationsStub());
   const data = {
@@ -49,17 +49,18 @@ function build(opts: { canEdit?: boolean; before?: Item | undefined; updated?: I
     setBagMembers: vi.fn((_t: string, id: string, ids: number[]) => (id === '80' ? { bagId: 80, members: ids } : null)),
   };
   Object.assign(packing, data);
+  const db = {
+    canAccessTrip: vi.fn((tripId: number, userId: number) => (tripId === 1 && userId === 42 ? { id: 1, user_id: 42 } : undefined)),
+    prepare: vi.fn(() => ({ get: () => ({ role: 'user' }) })),
+  } as unknown as DatabaseService;
   const guards = new PluginGuards(
-    {
-      canAccessTrip: vi.fn((tripId: number, userId: number) => (tripId === 1 && userId === 42 ? { id: 1, user_id: 42 } : undefined)),
-      prepare: vi.fn(() => ({ get: () => ({ role: 'user' }) })),
-    } as unknown as DatabaseService,
+    db,
     { checkPermission: vi.fn(() => opts.canEdit ?? true) } as unknown as PermissionsService,
-    { isAddonEnabled: vi.fn(() => true) } as unknown as AddonsService,
+    { isAddonEnabled: vi.fn(() => opts.addonOn ?? true) } as unknown as AddonsService,
   );
   const rpc = new PackingRpc(packing, realtime, guards);
   const host = (...grants: string[]) => new PluginRpcHost('p', new Set(grants), makeDeps(), createTestPluginRegistry([rpc]));
-  return { packing, data, realtime, rpc, host };
+  return { packing, data, realtime, db, rpc, host };
 }
 
 /** Every (event, onlyUserId) pair the fan-out produced, in order. */
@@ -67,6 +68,42 @@ const fanout = (realtime: { broadcast: ReturnType<typeof vi.fn> }) =>
   realtime.broadcast.mock.calls.map((c) => [c[1], c[4]]);
 
 describe('PackingRpc through the router', () => {
+  it('PACKING-RPC-000 every method is refused before touching domain services when the addon is disabled', async () => {
+    const f = build({ addonOn: false });
+    const host = f.host('db:read:packing', 'db:write:packing');
+    const cases = [
+      ['packing.list', { tripId: 1 }],
+      ['packing.create', { tripId: 1, input: { name: 'Socks' } }],
+      ['packing.update', { tripId: 1, itemId: 70, input: { name: 'x' } }],
+      ['packing.delete', { tripId: 1, itemId: 70 }],
+      ['packing.listBags', { tripId: 1 }],
+      ['packing.createBag', { tripId: 1, input: { name: 'Bag' } }],
+      ['packing.updateBag', { tripId: 1, bagId: 80, input: {} }],
+      ['packing.deleteBag', { tripId: 1, bagId: 80 }],
+      ['packing.setBagMembers', { tripId: 1, bagId: 80, userIds: [] }],
+    ] as const;
+
+    for (const [method, params] of cases) {
+      const result = (await host.dispatch(req(method, params), 42)) as RpcError;
+      expect(result.ok).toBe(false);
+      expect(result.error.code).toBe('RESOURCE_FORBIDDEN');
+      expect(result.error.message).toBe('the packing addon is disabled');
+    }
+
+    expect(f.data.listItems).not.toHaveBeenCalled();
+    expect(f.data.createItem).not.toHaveBeenCalled();
+    expect(f.data.updateItem).not.toHaveBeenCalled();
+    expect(f.data.deleteItem).not.toHaveBeenCalled();
+    expect(f.data.listBags).not.toHaveBeenCalled();
+    expect(f.data.createBag).not.toHaveBeenCalled();
+    expect(f.data.updateBag).not.toHaveBeenCalled();
+    expect(f.data.deleteBag).not.toHaveBeenCalled();
+    expect(f.data.setBagMembers).not.toHaveBeenCalled();
+    expect(f.realtime.broadcast).not.toHaveBeenCalled();
+    expect(f.db.canAccessTrip).not.toHaveBeenCalled();
+    expect(f.db.prepare).not.toHaveBeenCalled();
+  });
+
   it('PACKING-RPC-001 packing.list is membership-checked and scoped to the acting user', async () => {
     const f = build();
     const host = f.host('db:read:packing');

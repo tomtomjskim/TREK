@@ -5,6 +5,7 @@ import { BadParams, ForbiddenResource } from '../plugins/host/rpc-errors';
 import { asPayload, num, schemaMessage } from '../plugins/host/rpc-params';
 import type { PluginRpcContext } from '../plugins/host/rpc-kit/types';
 import { RealtimeService } from '../realtime/realtime.service';
+import { ADDON_IDS } from '../../addons';
 import { isInvalidBagRef, isPackingUpdateForbidden, PackingService } from './packing.service';
 import { isUpdateConflict } from '../common/conflictResult';
 
@@ -37,11 +38,13 @@ export class PackingRpc {
   list(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
     // Scoped to the acting user so the #858 visibility filter applies: a plugin must
     // not see another member's private items.
+    this.requirePackingAddon();
     return this.guards.tripRead(params, ctx, (userId) => this.packing.listItems(num(params.tripId, 'tripId'), userId));
   }
 
   @PluginMethod('packing.create', { permission: 'db:write:packing' })
   create(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requirePackingAddon();
     const tripId = num(params.tripId, 'tripId');
     const actor = this.guards.requireActor(ctx, 'packing item');
     const parsed = packingCreateItemRequestSchema.safeParse(params.input);
@@ -57,6 +60,7 @@ export class PackingRpc {
 
   @PluginMethod('packing.update', { permission: 'db:write:packing' })
   update(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requirePackingAddon();
     const tripId = num(params.tripId, 'tripId');
     const itemId = num(params.itemId, 'itemId');
     const actor = this.guards.requireActor(ctx, 'packing item');
@@ -81,6 +85,7 @@ export class PackingRpc {
 
   @PluginMethod('packing.delete', { permission: 'db:write:packing' })
   delete(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requirePackingAddon();
     const tripId = num(params.tripId, 'tripId');
     const itemId = num(params.itemId, 'itemId');
     const actor = this.guards.requireActor(ctx, 'packing item');
@@ -96,11 +101,13 @@ export class PackingRpc {
   listBags(params: Record<string, unknown>, ctx: PluginRpcContext): unknown[] {
     // Note the permission: the envelope really does gate this READ on the write
     // grant. The decorator makes the oddity visible instead of burying it.
+    this.requirePackingAddon();
     return this.guards.tripRead(params, ctx, () => this.packing.listBags(String(num(params.tripId, 'tripId'))) as unknown[]);
   }
 
   @PluginMethod('packing.createBag', { permission: 'db:write:packing' })
   createBag(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requirePackingAddon();
     const tripId = num(params.tripId, 'tripId');
     const actor = this.guards.requireActor(ctx, 'packing bag');
     const input = asPayload(params.input);
@@ -117,6 +124,7 @@ export class PackingRpc {
 
   @PluginMethod('packing.updateBag', { permission: 'db:write:packing' })
   updateBag(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requirePackingAddon();
     const tripId = num(params.tripId, 'tripId');
     const bagId = num(params.bagId, 'bagId');
     const actor = this.guards.requireActor(ctx, 'packing bag');
@@ -130,6 +138,7 @@ export class PackingRpc {
 
   @PluginMethod('packing.deleteBag', { permission: 'db:write:packing' })
   deleteBag(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requirePackingAddon();
     const tripId = num(params.tripId, 'tripId');
     const bagId = num(params.bagId, 'bagId');
     const actor = this.guards.requireActor(ctx, 'packing bag');
@@ -145,6 +154,7 @@ export class PackingRpc {
 
   @PluginMethod('packing.setBagMembers', { permission: 'db:write:packing' })
   setBagMembers(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requirePackingAddon();
     const tripId = num(params.tripId, 'tripId');
     const bagId = num(params.bagId, 'bagId');
     const actor = this.guards.requireActor(ctx, 'packing bag');
@@ -156,5 +166,9 @@ export class PackingRpc {
     if (!members) throw new ForbiddenResource(`no packing bag ${bagId} on trip ${tripId}`);
     this.realtime.broadcast(tripId, 'packing:bag-members-updated', { bagId, members }, undefined);
     return members;
+  }
+
+  private requirePackingAddon(): void {
+    this.guards.requireAddon(ADDON_IDS.PACKING, 'packing');
   }
 }
