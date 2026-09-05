@@ -161,8 +161,9 @@ export function useTripPlanner() {
   useEffect(() => {
     // Don't evict a saved plugin tab before the plugin feed has loaded.
     if (activeTab.startsWith('plugin:') && !pluginsLoaded) return
-    // Same for the addon-owned tabs: until the feed answers, enabledAddons is a
-    // guess, and evicting on a guess would drop a legitimately requested tab.
+    // Same for the addon-owned tabs: until the feed answers, the addon state is
+    // unresolved, and evicting on an unresolved feed would drop a legitimately
+    // requested tab.
     if (!addonsLoaded) return
     const validTabIds = TRIP_TABS.map(t => t.id)
     if (!validTabIds.includes(activeTab)) {

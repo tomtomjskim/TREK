@@ -104,6 +104,7 @@ function ShareLinkSection({ tripId, t }: { tripId: number; t: (key: string, para
         {[
           { key: 'share_map', label: t('share.permMap'), always: true },
           { key: 'share_bookings', label: t('share.permBookings') },
+          { key: 'share_packing', label: t('share.permPacking') },
           { key: 'share_budget', label: t('share.permBudget') },
           { key: 'share_collab', label: t('share.permCollab') },
         ].filter(opt => opt.key !== 'share_packing' || packingEnabled).map(opt => (

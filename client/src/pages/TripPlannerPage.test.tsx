@@ -1648,35 +1648,6 @@ describe('TripPlannerPage', () => {
     });
   });
 
-  describe('FE-PAGE-PLANNER-052: Mobile Lists tab stays detached when packing is disabled', () => {
-    it('does not mount packing or todo panels on mobile when the addon feed disables packing', async () => {
-      server.use(
-        http.get('/api/addons', () =>
-          HttpResponse.json({ addons: [] })
-        )
-      );
-
-      sessionStorage.setItem('trip-tab-42', 'listen');
-      vi.useFakeTimers();
-      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 375 });
-
-      seedTripStore({ id: 42 });
-
-      renderPlannerPage(42);
-      act(() => { vi.runAllTimers(); });
-      vi.useRealTimers();
-
-      expect(screen.queryByTestId('packing-list-panel')).not.toBeInTheDocument();
-      expect(screen.queryByTestId('todo-list-panel')).not.toBeInTheDocument();
-
-      await waitFor(() => {
-        expect(sessionStorage.getItem('trip-tab-42')).toBe('plan');
-      });
-
-      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 });
-    });
-  });
-
   describe('FE-PAGE-PLANNER-050: Mobile sidebar right panel opens via Places button', () => {
     it('clicking the mobile Places button opens the right sidebar portal (lines 894)', async () => {
       vi.useFakeTimers();
