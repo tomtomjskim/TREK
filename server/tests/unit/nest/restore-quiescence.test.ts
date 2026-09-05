@@ -6,6 +6,7 @@ import {
   RestoreRecoveryRequiredError,
   RestoreDrainTimeoutError,
   runInRestoreQuiescence,
+  runTrackedApplicationWork,
   runWithApplicationRequest,
 } from '../../../src/nest/backup/restore-quiescence';
 import {
@@ -61,6 +62,16 @@ describe('restore quiescence', () => {
     expect(() => assertRestoreAccessAllowed()).not.toThrow();
   });
 
+  it('releases tracked admission when an operation throws synchronously', async () => {
+    expect(() =>
+      runTrackedApplicationWork(() => {
+        throw new Error('tracked work failed before returning a promise');
+      }),
+    ).toThrow('tracked work failed before returning a promise');
+
+    await expect(runInRestoreQuiescence(async () => 'restored')).resolves.toBe('restored');
+  });
+
   it('holds maintenance closed when automatic recovery is incomplete', async () => {
     await expect(
       runInRestoreQuiescence(async () => {
@@ -109,6 +120,30 @@ describe('restore quiescence', () => {
     finishCleanup();
     await restore;
     expect(restoreBodyRan).toBe(true);
+  });
+
+  it('reopens access when asynchronous drain-start cleanup rejects', async () => {
+    await expect(
+      runInRestoreQuiescence(async () => undefined, {
+        onDrainStarted: async () => {
+          throw new Error('transport shutdown failed');
+        },
+      }),
+    ).rejects.toThrow('transport shutdown failed');
+
+    const nextRequest = admitApplicationRequest();
+    expect(nextRequest).not.toBeNull();
+    nextRequest!.release();
+  });
+
+  it('rejects a non-positive or non-finite drain timeout before closing admission', async () => {
+    await expect(runInRestoreQuiescence(async () => undefined, { drainTimeoutMs: Number.NaN })).rejects.toBeInstanceOf(
+      RangeError,
+    );
+
+    const nextRequest = admitApplicationRequest();
+    expect(nextRequest).not.toBeNull();
+    nextRequest!.release();
   });
 
   it('applies the drain timeout to asynchronous drain-start cleanup too', async () => {

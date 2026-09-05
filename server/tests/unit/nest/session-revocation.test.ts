@@ -108,6 +108,25 @@ describe('session revocation lineage', () => {
     expect(isSessionIdRevoked(db, 'after-restore')).toBe(false);
   });
 
+  it('AUTH-SESSION-007: a generic read failure closes the latch until health is confirmed', () => {
+    const brokenDb = {
+      prepare: (sql: string) => ({
+        get: () => {
+          if (sql.startsWith('SELECT 1 FROM jsnetworkcorp_auth_session_revocations')) {
+            throw new Error('database is busy');
+          }
+          return undefined;
+        },
+      }),
+    } as unknown as Database.Database;
+
+    expect(isSessionIdRevoked(brokenDb, 'stalled-session')).toBe(true);
+    expect(isSessionIdRevoked(db, 'after-failure')).toBe(true);
+
+    confirmSessionRevocationStoreHealth(db);
+    expect(isSessionIdRevoked(db, 'after-failure')).toBe(false);
+  });
+
   it('AUTH-SESSION-006: replays a failed SQLite tombstone durably after process restart', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-session-revocation-'));
     tempDirs.push(tempDir);

@@ -13,6 +13,7 @@ import {
   joinRoom,
   registerSocket,
   revokeSessionSockets,
+  revokeUserSockets,
   setServer,
   userOf,
   type TrekWebSocket,
@@ -107,6 +108,11 @@ describe('RealtimeGateway handshake', () => {
     expect(connect('/ws?token=x').ws.closedWith).toEqual([4001, 'Invalid or expired token']);
   });
 
+  it('WSGW-002b: refuses a token whose user no longer exists', () => {
+    rows.delete('user');
+    expect(connect('/ws?token=x').ws.closedWith).toEqual([4001, 'User not found']);
+  });
+
   it('WSGW-003: rejects a token minted before a password change', () => {
     // The pv gate. Same close reason as an unknown token on purpose: a client
     // must not be able to tell a stale token from a forged one.
@@ -174,6 +180,24 @@ describe('RealtimeGateway handshake', () => {
     expect(held).not.toHaveProperty('password_version');
     expect(held).toMatchObject({ id: 3, email: 'm@x.test' });
   });
+
+  it('WSGW-009: every room-leave lane rejects a stale session binding', () => {
+    const { gw, ws } = connect('/ws?token=x');
+    rows.set('user', { id: 3, username: 'm', email: 'm@x.test', role: 'user', mfa_enabled: 0, password_version: 3 });
+
+    expect(gw.handleJoin({ tripId: 7 }, ws)).toBeUndefined();
+    expect(gw.handleBookLeave({ journeyId: 2 }, ws)).toBeUndefined();
+    expect(gw.handleLeave({ tripId: 7 }, ws)).toBeUndefined();
+    expect(ws.closedWith).toEqual([4001, 'Invalid or expired token']);
+  });
+
+  it('WSGW-009b: closes an admitted socket when its user row disappears', () => {
+    const { gw, ws } = connect('/ws?token=x');
+    rows.delete('user');
+
+    expect(gw.handleJoin({ tripId: 7 }, ws)).toBeUndefined();
+    expect(ws.closedWith).toEqual([4001, 'Invalid or expired token']);
+  });
 });
 
 describe('RealtimeGateway rooms', () => {
@@ -219,6 +243,38 @@ describe('RealtimeGateway heartbeat', () => {
     }
   });
 
+  it('WSGW-020b: revalidates authenticated sockets and skips a stale identity', () => {
+    vi.useFakeTimers();
+    const current = connect('/ws?token=current');
+    const stale = connect('/ws?token=stale');
+    const currentGateway = current.gw;
+    const staleGateway = stale.gw;
+    try {
+      current.ws.isAlive = true;
+      currentGateway.afterInit({ clients: new Set([current.ws]) } as never);
+      vi.advanceTimersByTime(30_000);
+      expect(current.ws.ping).toHaveBeenCalledOnce();
+
+      rows.set('user', {
+        id: 3,
+        username: 'm',
+        email: 'm@x.test',
+        role: 'user',
+        mfa_enabled: 0,
+        password_version: 3,
+      });
+      stale.ws.isAlive = true;
+      staleGateway.afterInit({ clients: new Set([stale.ws]) } as never);
+      vi.advanceTimersByTime(30_000);
+      expect(stale.ws.closedWith).toEqual([4001, 'Invalid or expired token']);
+      expect(stale.ws.ping).not.toHaveBeenCalled();
+    } finally {
+      currentGateway.onModuleDestroy();
+      staleGateway.onModuleDestroy();
+      vi.useRealTimers();
+    }
+  });
+
   it('WSGW-021: the interval stops with the module, so a test process can exit', () => {
     vi.useFakeTimers();
     try {
@@ -260,6 +316,20 @@ describe('ws-state fan-out', () => {
     revokeSessionSockets('browser-session');
 
     expect(revoked.closedWith).toEqual([4001, 'Session logged out']);
+    expect(other.closedWith).toBeNull();
+    setServer(null);
+  });
+
+  it('WSST-000b: identity revocation closes only sockets for that user id', () => {
+    const revoked = socket();
+    const other = socket();
+    registerSocket(revoked, { id: 3, username: 'm' } as User);
+    registerSocket(other, { id: 4, username: 'n' } as User);
+    setServer({ clients: new Set([revoked, other]) } as never);
+
+    revokeUserSockets(3);
+
+    expect(revoked.closedWith).toEqual([4001, 'Session invalidated']);
     expect(other.closedWith).toBeNull();
     setServer(null);
   });

@@ -48,4 +48,23 @@ describe('restore crash journal', () => {
 
     expect(() => assertNoInterruptedRestore(root)).toThrow(/unknown restore journal/i);
   });
+
+  it('fails closed when a structured marker has an invalid phase', () => {
+    const root = tempRoot();
+    const journal = path.join(root, 'restore-journal-invalid');
+    fs.mkdirSync(journal);
+    fs.writeFileSync(
+      path.join(journal, 'restore-state.json'),
+      JSON.stringify({ version: 1, restoreId: 'invalid', phase: 'future-phase', updatedAt: new Date().toISOString() }),
+    );
+
+    expect(() => assertNoInterruptedRestore(root)).toThrow(/unknown restore journal/i);
+  });
+
+  it('fails closed when a journal-shaped artifact is not a directory', () => {
+    const root = tempRoot();
+    fs.writeFileSync(path.join(root, 'restore-journal-file'), 'not a restore journal');
+
+    expect(() => assertNoInterruptedRestore(root)).toThrow(/unknown restore journal artifact/i);
+  });
 });

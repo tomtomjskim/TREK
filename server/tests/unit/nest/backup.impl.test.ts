@@ -2372,6 +2372,47 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     expect(lifecycle.resume).toHaveBeenCalledOnce();
   });
 
+  it('BACKUP-045g0b — rollback failures still attempt staged-plugin cleanup and fail closed', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    const lifecycle = { shutdown: vi.fn(async () => {}), resume: vi.fn(async () => {}) };
+    pluginBackupMock.getPluginRestoreRuntimeLifecycle.mockReturnValueOnce(lifecycle);
+    pluginBackupMock.stageExtractedPluginTrees.mockReturnValueOnce(true);
+    pluginBackupMock.applyStagedRestoreNowStrict.mockResolvedValueOnce(null);
+    pluginBackupMock.discardStagedPluginTrees.mockImplementationOnce(() => {
+      throw new Error('discard failed');
+    });
+    dbMock.closeDb
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error('close failed');
+      });
+    dbMock.reinitialize
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw new Error('reinitialize failed');
+      });
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    fsMock.rmSync.mockReturnValue(undefined);
+    const storage = stubStorage({
+      reloadConfig: vi
+        .fn()
+        .mockImplementationOnce(() => undefined)
+        .mockImplementationOnce(() => {
+          throw new Error('reload failed');
+        }),
+    });
+
+    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow(/automatic rollback was incomplete/i);
+    expect(pluginBackupMock.discardStagedPluginTrees).toHaveBeenCalledOnce();
+    expect(lifecycle.shutdown).toHaveBeenCalledOnce();
+    expect(lifecycle.resume).not.toHaveBeenCalled();
+  });
+
   it('BACKUP-045g0 — stops plugin runtime before core mutation and resumes it after a commit without plugin staging', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
@@ -2437,6 +2478,47 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     await vi.waitFor(() => expect(lifecycle.resume).toHaveBeenCalledOnce());
   });
 
+  it('BACKUP-045g0a1 — logs when a pending plugin shutdown rejects after the restore has already timed out', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    let failShutdown!: (error: Error) => void;
+    const shutdownBody = new Promise<void>((_resolve, reject) => {
+      failShutdown = reject;
+    });
+    const shutdownHandled = shutdownBody.catch(() => undefined);
+    const lifecycle = {
+      shutdown: vi.fn(() => shutdownBody),
+      resume: vi.fn(async () => {}),
+    };
+    pluginBackupMock.getPluginRestoreRuntimeLifecycle.mockReturnValueOnce(lifecycle);
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    restoreQuiescenceMock.runInRestoreQuiescence.mockImplementationOnce(async (_operation, options) => {
+      const drainStarted = Promise.resolve(options?.onDrainStarted?.());
+      void drainStarted.catch(() => undefined);
+      await Promise.resolve();
+      throw new Error('restore drain timed out');
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow('restore drain timed out');
+
+      failShutdown(new Error('plugin shutdown failed'));
+      await shutdownHandled;
+      await vi.waitFor(() => expect(lifecycle.resume).toHaveBeenCalledOnce());
+      expect(error).toHaveBeenCalledWith(
+        'Plugin restore drain timed out while runtime shutdown was still settling:',
+        expect.any(Error),
+      );
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('BACKUP-045g1 — commits the plugin pair receipt only after every restore phase succeeds', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
@@ -2480,6 +2562,50 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     expect(order.indexOf('plugin staging')).toBeGreaterThan(order.indexOf('reloadConfig'));
     expect(order.indexOf('plugin commit')).toBeGreaterThan(order.indexOf('plugin staging'));
     expect(order.indexOf('plugin resume')).toBeGreaterThan(order.indexOf('plugin commit'));
+  });
+
+  it('BACKUP-045g1b0 — logs but ignores a resume failure after a successful restore', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    const lifecycle = {
+      shutdown: vi.fn(async () => {}),
+      resume: vi.fn(async () => {
+        throw new Error('resume failed');
+      }),
+    };
+    pluginBackupMock.getPluginRestoreRuntimeLifecycle.mockReturnValueOnce(lifecycle);
+    pluginBackupMock.stageExtractedPluginTrees.mockReturnValueOnce(true);
+    const transaction = {
+      labels: ['plugins-data', 'plugins-code'],
+      rollback: vi.fn(),
+      commitCleanup: vi.fn(),
+      resume: vi.fn(async () => {
+        throw new Error('resume failed');
+      }),
+    };
+    pluginBackupMock.applyStagedRestoreNowStrict.mockResolvedValueOnce(transaction);
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    fsMock.rmSync.mockReturnValue(undefined);
+    const storage = stubStorage({
+      reloadConfig: vi.fn(() => undefined),
+    });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).resolves.toEqual({ success: true });
+      expect(transaction.commitCleanup).toHaveBeenCalledOnce();
+      expect(transaction.resume).toHaveBeenCalledOnce();
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('Plugin restore completed but runtime resume failed'),
+        expect.any(Error),
+      );
+    } finally {
+      error.mockRestore();
+    }
   });
 
   it('BACKUP-045g1b — a closeDb failure cannot publish plugin staging for the next boot', async () => {

@@ -22,8 +22,9 @@ permissions:
 #     must stop the scan — a missing lcov file would make every line of that
 #     package report as uncovered, and the dashboard would show a collapse
 #     that did not happen. (The preflight gates stop it transitively.)
-#   - Fork PRs don't receive secrets, so the two jobs that need them skip
-#     themselves: s3-contract (MINIO_LICENSE_KEY) and scan (SONAR_TOKEN).
+#   - Fork PRs don't receive secrets, so the scan job still skips itself;
+#     s3-contract uses the published free MinIO community image and runs
+#     everywhere so the S3 contract stays reproducible without a license.
 #     Everything else runs on fork PRs so outside contributors still get the
 #     full test signal.
 #
@@ -225,11 +226,8 @@ jobs:
     name: S3 Driver Contract (MinIO)
     runs-on: ubuntu-latest
     needs: [plugin-facts, i18n-parity, server-quality, client-quality, plugin-sdk-quality]
-    # Fork PRs don't get repo secrets, so MINIO_LICENSE_KEY would be empty and
-    # the AIStor container would fail to boot. Pushes and manual dispatches do
-    # have secrets, so only fork PRs are filtered out. (The implicit success()
-    # on this expression also keeps the job skipped when a preflight fails.)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # The published MinIO community image is license-free, so the contract job
+    # can run on every event and keep fork PRs on the same free S3 target.
 
     steps:
       - uses: actions/checkout@v6
@@ -255,24 +253,20 @@ jobs:
       - name: Build shared
         run: npm run build --workspace=shared
 
-      - name: Write MinIO license
-        run: printf '%s' "${{ secrets.MINIO_LICENSE_KEY }}" > minio-licence.key
-
       - name: Start MinIO
-        # `services:` can't pass the `server /data --license ...` command to
-        # the AIStor image, so it starts via docker run. 127.0.0.1 endpoint is
-        # load-bearing: aws-lite picks path-style only for IP/localhost hosts,
-        # which is all stock MinIO/AIStor speaks.
+        # `services:` can't pass the `server /data --console-address ...`
+        # command to the MinIO image, so it starts via docker run.
+        # 127.0.0.1 is load-bearing: aws-lite picks path-style only for
+        # IP/localhost hosts, which is all stock MinIO speaks.
         run: |
           docker run -d --name minio -p 127.0.0.1:9000:9000 \
-            -v "$PWD/minio-licence.key:/minio.license:ro" \
             -e MINIO_ROOT_USER=trekci -e MINIO_ROOT_PASSWORD=trekci-secret \
-            quay.io/minio/aistor/minio:RELEASE.2026-08-07T18-34-35Z server /data --license /minio.license
+            minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+            server /data --console-address ":9001"
 
       - name: Wait for MinIO
-        # curl was removed from the AIStor image — poll from the runner instead.
-        # 60 x 2s gives a wider margin on cold runners than the 30 x 1s the
-        # pre-6fbff835 job used.
+        # curl is available on the runner; poll until the published community
+        # MinIO image reaches /minio/health/live.
         run: |
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:9000/minio/health/live && exit 0

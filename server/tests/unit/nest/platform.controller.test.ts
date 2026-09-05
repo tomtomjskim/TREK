@@ -1,3 +1,4 @@
+import * as restoreQuiescence from '../../../src/nest/backup/restore-quiescence';
 import { resetRestoreQuiescenceForTests, runInRestoreQuiescence } from '../../../src/nest/backup/restore-quiescence';
 import {
   applyPlatformUploads,
@@ -95,6 +96,14 @@ function makeRes() {
   return res;
 }
 
+function makeUploadRes() {
+  const res: ReturnType<typeof makeRes> & { once: () => typeof res } = {
+    ...makeRes(),
+    once: vi.fn(() => res),
+  };
+  return res;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   resetRestoreQuiescenceForTests();
@@ -126,6 +135,40 @@ describe('applyPlatformUploads', () => {
     events.finish();
     await restore;
     expect(restoreEntered).toBe(true);
+  });
+
+  it('returns the restore-in-progress response when the upload lane is closed', async () => {
+    const { app, calls } = fakeApp();
+    applyPlatformUploads(app, storage);
+    const admission = calls.find((c) => c.method === 'use' && c.path === '/uploads')!.handlers[0];
+    const res = makeUploadRes();
+    const next = vi.fn();
+
+    await runInRestoreQuiescence(async () => {
+      admission({}, res, next);
+      expect(res.statusCode).toBe(503);
+      expect(next).not.toHaveBeenCalled();
+    });
+  });
+
+  it('releases the upload admission if the pre-init router throws synchronously', async () => {
+    const runWithApplicationRequest = vi
+      .spyOn(restoreQuiescence, 'runWithApplicationRequest')
+      .mockImplementation(() => {
+        throw new Error('route setup failed');
+      });
+    try {
+      const { app, calls } = fakeApp();
+      applyPlatformUploads(app, storage);
+      const admission = calls.find((c) => c.method === 'use' && c.path === '/uploads')!.handlers[0];
+      const res = makeUploadRes();
+
+      expect(() => admission({}, res, vi.fn())).toThrow('route setup failed');
+      expect(runWithApplicationRequest).toHaveBeenCalledOnce();
+      await expect(runInRestoreQuiescence(async () => 'restored', { drainTimeoutMs: 25 })).resolves.toBe('restored');
+    } finally {
+      runWithApplicationRequest.mockRestore();
+    }
   });
 
   it('registers the four static mounts + the files block', () => {

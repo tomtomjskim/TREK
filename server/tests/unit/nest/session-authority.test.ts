@@ -108,4 +108,33 @@ describe('session authority rotation', () => {
       fs.rmSync(dataDir, { recursive: true, force: true });
     }
   });
+
+  it('still closes the synced secret file when the final directory fsync fails', () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trek-session-authority-'));
+    const originalCloseSync = fs.closeSync;
+    const originalFsyncSync = fs.fsyncSync;
+    const closeSync = vi.spyOn(fs, 'closeSync').mockImplementation((fd) => originalCloseSync.call(fs, fd as never));
+    const fsyncSync = vi
+      .spyOn(fs, 'fsyncSync')
+      .mockImplementationOnce((fd) => originalFsyncSync.call(fs, fd as never))
+      .mockImplementationOnce(() => {
+        throw new Error('directory fsync failed');
+      });
+    try {
+      expect(rotateSessionAuthority({ dataDir })).toEqual({
+        error: 'Failed to persist new JWT secret to disk',
+        status: 500,
+      });
+      expect(fsyncSync).toHaveBeenCalledTimes(2);
+      expect(closeSync).toHaveBeenCalledTimes(2);
+      expect(updateJwtSecret).not.toHaveBeenCalled();
+      expect(clearEphemeralTokens).not.toHaveBeenCalled();
+      expect(invalidateMcpSessions).not.toHaveBeenCalled();
+      expect(revokeAllSockets).not.toHaveBeenCalled();
+    } finally {
+      closeSync.mockRestore();
+      fsyncSync.mockRestore();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 });
