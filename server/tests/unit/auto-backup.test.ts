@@ -195,7 +195,7 @@ describe('auto-backup run', () => {
 
     await scheduledRun()();
 
-    expect(logMock.logInfo).toHaveBeenCalledWith(expect.stringMatching(/^Auto-Backup created: auto-backup-[\dT-]+\.zip$/));
+    expect(logMock.logInfo).toHaveBeenCalledWith(expect.stringMatching(/^Auto-Backup created: auto-backup-[\w-]+\.zip$/));
     // cleanupOldBackups(storage, keep_days) still runs after the archive and
     // only prunes objects it can match by prefix — through storage.delete
     expect(storageStub.delete).toHaveBeenCalledWith('backups', 'auto-backup-2020-01-01T02-00-00.zip');

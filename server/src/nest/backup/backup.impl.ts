@@ -154,6 +154,19 @@ export async function listBackups(storage: StorageService): Promise<BackupInfo[]
 // Create backup
 // ---------------------------------------------------------------------------
 
+// Backup creation and restore share the same process-local operation lane.
+// Restore keeps its existing 409 admission contract below, while creates wait
+// for an in-flight restore rather than touching the same database and storage
+// trees concurrently.
+let backupOperationTail: Promise<void> = Promise.resolve();
+
+function runBackupOperation<T>(operation: () => Promise<T>): Promise<T> {
+  const previous = backupOperationTail;
+  let release!: () => void;
+  backupOperationTail = new Promise<void>((resolve) => { release = resolve; });
+  return previous.catch(() => undefined).then(operation).finally(release);
+}
+
 /** The categories a backup archives — everything else under uploads/ is a
  *  re-derivable cache (photos-google, photos-trek) or not uploads at all
  *  (backups). Restore's rehydration walks the same list. */
@@ -303,9 +316,10 @@ export function validateBackupManifest(extractDir: string, archivePaths: string[
  * only auto-backup-*.zip, and the admin panel badges them as automatic. Manual
  * backups keep the default.
  */
-export async function createBackup(storage: StorageService, prefix: 'backup' | 'auto-backup' = 'backup'): Promise<BackupInfo> {
+async function createBackupUnlocked(storage: StorageService, prefix: 'backup' | 'auto-backup' = 'backup'): Promise<BackupInfo> {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const filename = `${prefix}-${timestamp}.zip`;
+  const operationId = randomUUID();
+  const filename = `${prefix}-${timestamp}-${operationId}.zip`;
   // All staging lives in the backups backend's own spool: same volume as the
   // destination (the put commit stays an atomic rename) and crash leftovers are
   // reaped by LocalDriver's boot spool-cleanup. The scratch names carry the
@@ -313,13 +327,13 @@ export async function createBackup(storage: StorageService, prefix: 'backup' | '
   // would otherwise share a snapshot path, and the first to finish would delete
   // the other's staging copy mid-archive.
   const spoolDir = storage.spoolDirFor('backups');
-  const zipSpool = path.join(spoolDir, `zip-build-${prefix}-${timestamp}`);
-  const pdataSnap = path.join(spoolDir, `plugins-snap-${prefix}-${timestamp}`);
-  const dbSnap = path.join(spoolDir, `travel-snap-${prefix}-${timestamp}.db`);
+  const zipSpool = path.join(spoolDir, `zip-build-${prefix}-${timestamp}-${operationId}`);
+  const pdataSnap = path.join(spoolDir, `plugins-snap-${prefix}-${timestamp}-${operationId}`);
+  const dbSnap = path.join(spoolDir, `travel-snap-${prefix}-${timestamp}-${operationId}.db`);
   // Per-backup staging for uploads with no local path (a remote/S3 primary, or
   // a local path that vanished between listing and archiving — see
   // getLocalPathOrNull). Same spool as the rest of the build, same cleanup.
-  const stagingDir = path.join(spoolDir, `staging-${prefix}-${timestamp}`);
+  const stagingDir = path.join(spoolDir, `staging-${prefix}-${timestamp}-${operationId}`);
 
   try {
     try { db.exec('PRAGMA wal_checkpoint(TRUNCATE)'); } catch (e) {}
@@ -474,6 +488,10 @@ export async function createBackup(storage: StorageService, prefix: 'backup' | '
   }
 }
 
+export function createBackup(storage: StorageService, prefix: 'backup' | 'auto-backup' = 'backup'): Promise<BackupInfo> {
+  return runBackupOperation(() => createBackupUnlocked(storage, prefix));
+}
+
 // ---------------------------------------------------------------------------
 // Restore from ZIP
 // ---------------------------------------------------------------------------
@@ -620,7 +638,7 @@ export async function restoreFromZip(storage: StorageService, zipPath: string): 
   }
   restoreInProgress = true;
   try {
-    return await restoreFromZipUnlocked(storage, zipPath);
+    return await runBackupOperation(() => restoreFromZipUnlocked(storage, zipPath));
   } finally {
     restoreInProgress = false;
   }

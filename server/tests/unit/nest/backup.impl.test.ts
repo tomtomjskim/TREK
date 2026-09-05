@@ -744,6 +744,58 @@ describe('BACKUP-036 createBackup', () => {
 
     expect(archiverInstanceMock.file).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ name: expect.stringContaining('plugins-data') }));
   });
+
+  it('BACKUP-036v — concurrent creates receive distinct final archive names', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-06T12:00:00Z'));
+    try {
+      fsMock.existsSync.mockReturnValue(false);
+      setupArchiveSuccess();
+      const storage = stubStorage({ stat: statOf(1024) });
+
+      const [first, second] = await Promise.all([createBackup(storage), createBackup(storage)]);
+
+      expect(first.filename).not.toBe(second.filename);
+      expect(storage.put).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('BACKUP-036w — serializes concurrent creates and isolates failed-operation cleanup', async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    setupArchiveSuccess();
+    let releaseFirstPut!: () => void;
+    const firstPutBlocked = new Promise<void>((resolve) => { releaseFirstPut = resolve; });
+    let firstPutStarted!: () => void;
+    const firstPutReady = new Promise<void>((resolve) => { firstPutStarted = resolve; });
+    let putCount = 0;
+    const storage = stubStorage({
+      stat: statOf(1024),
+      put: vi.fn(async () => {
+        putCount++;
+        if (putCount === 1) {
+          firstPutStarted();
+          await firstPutBlocked;
+          throw new Error('first backup failed');
+        }
+      }),
+    });
+
+    const first = createBackup(storage);
+    await firstPutReady;
+    const second = createBackup(storage);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // The second operation must wait while the first commit is still open.
+    expect(storage.put).toHaveBeenCalledTimes(1);
+
+    releaseFirstPut();
+    await expect(first).rejects.toThrow('first backup failed');
+    await expect(second).resolves.toMatchObject({ filename: expect.stringMatching(/^backup-.*\.zip$/) });
+    const cleanupPaths = fsMock.rmSync.mock.calls.map(([target]) => String(target));
+    expect(new Set(cleanupPaths).size).toBe(cleanupPaths.length);
+  });
 });
 
 describe('BACKUP-060 manifest policy', () => {
