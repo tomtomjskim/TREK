@@ -125,6 +125,7 @@ const svc = new TripsService(
   new RealtimeService(),
   undefined as never, // unsplash — not exercised here
   coversFx.storage,
+  new AddonsService(dbs()),
 );
 const membersSvc = new TripMembersService(dbs(), budgetSvc, new UserCleanupService(dbs(), budgetSvc), new PermissionsService(dbs()), new RealtimeService(), notificationsStub());
 const readModelSvc = new TripReadModelService(
@@ -801,6 +802,32 @@ describe('folded trip CRUD', () => {
     expect((testDb.prepare('SELECT title FROM trips WHERE id = ?').get(secondCopy) as any).title).toBe('Origin');
   });
 
+  it('TRIP-SVC-046c: copy leaves Packing/Todo dormant without reading or writing their tables when the addon is disabled', () => {
+    const { user } = createUser(testDb);
+    const trip = createTrip(testDb, user.id, { title: 'Core only' });
+    testDb.prepare("INSERT INTO packing_bags (trip_id, name) VALUES (?, 'Dormant bag')").run(trip.id);
+    testDb.prepare("INSERT INTO packing_items (trip_id, name) VALUES (?, 'Dormant item')").run(trip.id);
+    testDb.prepare("INSERT INTO todo_items (trip_id, name) VALUES (?, 'Dormant todo')").run(trip.id);
+    testDb.prepare("UPDATE addons SET enabled = 0 WHERE id = 'packing'").run();
+    const prepare = vi.spyOn(testDb, 'prepare');
+
+    try {
+      const newTripId = svc.copy(trip.id, user.id, 'Core clone');
+      expect(testDb.prepare('SELECT title FROM trips WHERE id = ?').get(newTripId)).toEqual({ title: 'Core clone' });
+      expect(testDb.prepare('SELECT COUNT(*) AS count FROM packing_bags WHERE trip_id = ?').get(newTripId)).toEqual({ count: 0 });
+      expect(testDb.prepare('SELECT COUNT(*) AS count FROM packing_items WHERE trip_id = ?').get(newTripId)).toEqual({ count: 0 });
+      expect(testDb.prepare('SELECT COUNT(*) AS count FROM todo_items WHERE trip_id = ?').get(newTripId)).toEqual({ count: 0 });
+
+      const copyQueries = prepare.mock.calls
+        .map(([sql]) => String(sql))
+        .filter(sql => !sql.startsWith('SELECT title') && !sql.startsWith('SELECT COUNT'));
+      expect(copyQueries.join('\n')).not.toMatch(/packing_bags|packing_items|todo_items/);
+    } finally {
+      prepare.mockRestore();
+      testDb.prepare("UPDATE addons SET enabled = 1 WHERE id = 'packing'").run();
+    }
+  });
+
   it('TRIP-SVC-060: copying a trip keeps a staged booking staged', () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { title: 'Origin', start_date: '2025-06-01', end_date: '2025-06-02' });
@@ -1091,6 +1118,7 @@ describe('quirk fixes', () => {
       new RealtimeService(),
       undefined as never,
       coversFx.storage,
+      new AddonsService(dbs()),
     );
   }
 

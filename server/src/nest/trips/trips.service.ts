@@ -11,6 +11,8 @@ import { ReservationsService } from '../reservations/reservations.service';
 import { UnsplashService } from '../unsplash/unsplash.service';
 import { StorageService } from '../storage/storage.service';
 import { NotFoundError, ValidationError } from '../common/domain-errors';
+import { ADDON_IDS } from '../../addons';
+import { AddonsService } from '../addons/addons.service';
 
 export const MS_PER_DAY = 86400000;
 export const MAX_TRIP_DAYS = 365;
@@ -145,6 +147,7 @@ export class TripsService {
     private readonly realtime: RealtimeService,
     private readonly unsplash: UnsplashService,
     private readonly storage: StorageService,
+    private readonly addons: AddonsService,
   ) {}
 
   private get db() {
@@ -525,6 +528,7 @@ export class TripsService {
     if (!src) throw new NotFoundError('Trip not found');
 
     const newTitle = title || src.title;
+    const copyPacking = this.addons.isAddonEnabled(ADDON_IDS.PACKING);
 
     const fn = this.db.transaction(() => {
       const tripResult = this.db.prepare(`
@@ -675,38 +679,7 @@ export class TripsService {
         if (newItemId) insertBudgetPayer.run(newItemId, bp.user_id, bp.amount ?? 0);
       }
 
-      const oldBags = this.db.prepare('SELECT * FROM packing_bags WHERE trip_id = ?').all(sourceTripId) as any[];
-      const bagMap = new Map<number, number | bigint>();
-      const insertBag = this.db.prepare(`
-        INSERT INTO packing_bags (trip_id, name, color, weight_limit_grams, sort_order)
-        VALUES (?, ?, ?, ?, ?)
-      `);
-      for (const bag of oldBags) {
-        const r = insertBag.run(newTripId, bag.name, bag.color, bag.weight_limit_grams, bag.sort_order);
-        bagMap.set(bag.id, r.lastInsertRowid);
-      }
-
-      // Only what the copier may carry over: the Common list plus their own items.
-      // This used to take every row and re-insert it without is_private/owner_id,
-      // so both fell back to the column defaults and another member's Personal or
-      // Shared item reappeared in the copy as a Common item visible to everyone.
-      // Restricted items stay restricted and recipient rows are not carried over,
-      // because the copy has its own roster. Every copied row is owned by the
-      // copier, including Common rows: owner_id also identifies the responsible
-      // bringer and prevents a later member from claiming an unowned item.
-      const oldPacking = this.db.prepare(
-        'SELECT * FROM packing_items WHERE trip_id = ? AND (is_private = 0 OR owner_id = ?)'
-      ).all(sourceTripId, newOwnerId) as any[];
-      const insertPacking = this.db.prepare(`
-        INSERT INTO packing_items (trip_id, name, checked, category, sort_order, weight_grams, bag_id, is_private, owner_id, updated_at)
-        VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-      `);
-      for (const p of oldPacking) {
-        const isPrivate = p.is_private ? 1 : 0;
-        insertPacking.run(newTripId, p.name, p.category, p.sort_order, p.weight_grams,
-          p.bag_id ? (bagMap.get(p.bag_id) ?? null) : null,
-          isPrivate, newOwnerId);
-      }
+      if (copyPacking) this.copyPackingAddonData(sourceTripId, newTripId, newOwnerId);
 
       const oldNotes = this.db.prepare('SELECT * FROM day_notes WHERE trip_id = ?').all(sourceTripId) as any[];
       const insertNote = this.db.prepare(`
@@ -716,15 +689,6 @@ export class TripsService {
       for (const n of oldNotes) {
         const newDayId = dayMap.get(n.day_id);
         if (newDayId) insertNote.run(newDayId, newTripId, n.text, n.time, n.icon, n.sort_order);
-      }
-
-      const oldTodos = this.db.prepare('SELECT * FROM todo_items WHERE trip_id = ?').all(sourceTripId) as any[];
-      const insertTodo = this.db.prepare(`
-        INSERT INTO todo_items (trip_id, name, checked, category, sort_order, due_date, description, assigned_user_id, priority)
-        VALUES (?, ?, 0, ?, ?, ?, ?, NULL, ?)
-      `);
-      for (const t of oldTodos) {
-        insertTodo.run(newTripId, t.name, t.category, t.sort_order, t.due_date, t.description, t.priority);
       }
 
       const oldCategoryOrder = this.db.prepare('SELECT category, sort_order FROM budget_category_order WHERE trip_id = ?').all(sourceTripId) as any[];
@@ -740,6 +704,58 @@ export class TripsService {
     });
 
     return fn();
+  }
+
+  /** Optional Packing/Todo copy contributor. Keeping every addon-owned table in
+   * one capability seam lets core trip duplication run without touching dormant
+   * addon state and makes this contributor removable as one unit. */
+  private copyPackingAddonData(
+    sourceTripId: string | number,
+    newTripId: number | bigint,
+    newOwnerId: number,
+  ): void {
+    const oldBags = this.db.prepare('SELECT * FROM packing_bags WHERE trip_id = ?').all(sourceTripId) as any[];
+    const bagMap = new Map<number, number | bigint>();
+    const insertBag = this.db.prepare(`
+      INSERT INTO packing_bags (trip_id, name, color, weight_limit_grams, sort_order)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    for (const bag of oldBags) {
+      const r = insertBag.run(newTripId, bag.name, bag.color, bag.weight_limit_grams, bag.sort_order);
+      bagMap.set(bag.id, r.lastInsertRowid);
+    }
+
+    // Only what the copier may carry over: the Common list plus their own items.
+    // Restricted items keep their visibility and recipient rows stay behind,
+    // because the copied trip has its own roster.
+    const oldPacking = this.db.prepare(
+      'SELECT * FROM packing_items WHERE trip_id = ? AND (is_private = 0 OR owner_id = ?)'
+    ).all(sourceTripId, newOwnerId) as any[];
+    const insertPacking = this.db.prepare(`
+      INSERT INTO packing_items (trip_id, name, checked, category, sort_order, weight_grams, bag_id, is_private, owner_id, updated_at)
+      VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `);
+    for (const item of oldPacking) {
+      insertPacking.run(
+        newTripId,
+        item.name,
+        item.category,
+        item.sort_order,
+        item.weight_grams,
+        item.bag_id ? (bagMap.get(item.bag_id) ?? null) : null,
+        item.is_private ? 1 : 0,
+        newOwnerId,
+      );
+    }
+
+    const oldTodos = this.db.prepare('SELECT * FROM todo_items WHERE trip_id = ?').all(sourceTripId) as any[];
+    const insertTodo = this.db.prepare(`
+      INSERT INTO todo_items (trip_id, name, checked, category, sort_order, due_date, description, assigned_user_id, priority)
+      VALUES (?, ?, 0, ?, ?, ?, ?, NULL, ?)
+    `);
+    for (const todo of oldTodos) {
+      insertTodo.run(newTripId, todo.name, todo.category, todo.sort_order, todo.due_date, todo.description, todo.priority);
+    }
   }
 
   /** Re-read a freshly copied trip in list shape (mirrors the route's TRIP_SELECT query). */

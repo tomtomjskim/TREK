@@ -83,7 +83,7 @@ function build(addonOn: boolean) {
     'db:read:atlas', 'db:write:atlas', 'db:read:vacay', 'db:write:vacay',
     'db:read:collections', 'db:write:collections', 'db:read:costs', 'db:write:costs',
   ]);
-  return { calls, host: new PluginRpcHost('p', granted, makeDeps(), registry) };
+  return { calls, host: new PluginRpcHost('p', granted, makeDeps(), registry), methodNames: registry.methodNames() };
 }
 
 /** Every addon-gated method with a payload that reaches its gate. */
@@ -145,6 +145,28 @@ describe('every addon-gated plugin method refuses when its addon is off', () => 
     // Guards the table itself: if a later PR adds an addon-gated method without a row
     // here, this number is the reminder.
     expect(GATED).toHaveLength(38);
+  });
+
+  it('ADDONGATE-vacay-registry stays exactly aligned with the disabled-case table', () => {
+    const f = build(false);
+    const registered = [...f.methodNames].filter(method => method.startsWith('vacay.')).sort();
+    const covered = GATED.map(([method]) => method).filter(method => method.startsWith('vacay.')).sort();
+    expect(covered).toEqual(registered);
+  });
+
+  it('ADDONGATE-vacay refuses before actor and parameter validation', async () => {
+    const cases: Array<[string, Record<string, unknown>, number | undefined]> = [
+      ['vacay.mine', {}, undefined],
+      ['vacay.toggleEntry', { date: 'not-a-date' }, 42],
+      ['vacay.toggleCompanyHoliday', { date: 42 }, 42],
+    ];
+
+    for (const [method, params, actor] of cases) {
+      const f = build(false);
+      const res = (await f.host.dispatch(req(method, params), actor)) as RpcError;
+      expect(res.error.message, method).toBe('the vacay addon is disabled');
+      expect(f.calls, method).toEqual([]);
+    }
   });
 
   it('ADDONGATE-the-same-calls-succeed-with-the-addon-on', async () => {

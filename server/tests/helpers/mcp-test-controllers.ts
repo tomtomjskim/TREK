@@ -165,6 +165,7 @@ export function createMcpTestRegistry(): McpRegistry {
   const reservationsService = new ReservationsService(dbService, permissionsService, budgetService, realtimeService, notificationsStub(), new ReservationsReadRepository(dbService));
   const accommodationsService = new AccommodationsService(dbService, permissionsService, realtimeService);
   const membersService = new TripMembersService(dbService, budgetService, new UserCleanupService(dbService, budgetService), permissionsService, realtimeService, notificationsStub());
+  const addonsService = new AddonsService(dbService);
   const tripsService = new TripsService(
     dbService,
     reservationsService,
@@ -174,8 +175,8 @@ export function createMcpTestRegistry(): McpRegistry {
     realtimeService,
     new UnsplashService(dbService, new RuntimeEnvService(), generalStorage),
     generalStorage,
+    addonsService,
   );
-  const addonsService = new AddonsService(dbService);
   const readModelService = new TripReadModelService(
     dbService, membersService, daysService, accommodationsService, budgetService,
     packingService, reservationsService, collabService, placesService, todoService,

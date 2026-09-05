@@ -25,16 +25,16 @@ export class VacayRpc {
 
   @PluginMethod('vacay.mine', { permission: 'db:read:vacay' })
   mine(_params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
-    const userId = this.requireVacayUser(ctx, 'reads');
     this.requireVacayAddon();
+    const userId = this.requireVacayUser(ctx, 'reads');
     return this.vacay.getPlanData(userId);
   }
 
   @PluginMethod('vacay.toggleEntry', { permission: 'db:write:vacay' })
   toggleEntry(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requireVacayAddon();
     const userId = this.requireVacayUser(ctx, 'writes');
     const date = this.dateStr(params.date);
-    this.requireVacayAddon();
     try {
       return this.vacay.toggleEntry(userId, this.vacay.getActivePlanId(userId), date, 1, 'vacation', undefined);
     } catch (error) {
@@ -45,10 +45,10 @@ export class VacayRpc {
 
   @PluginMethod('vacay.toggleCompanyHoliday', { permission: 'db:write:vacay' })
   toggleCompanyHoliday(params: Record<string, unknown>, ctx: PluginRpcContext): unknown {
+    this.requireVacayAddon();
     const userId = this.requireVacayUser(ctx, 'writes');
     const date = this.dateStr(params.date);
     const note = typeof params.note === 'string' ? params.note.slice(0, 256) : undefined;
-    this.requireVacayAddon();
     try {
       return this.vacay.toggleCompanyHoliday(this.vacay.getActivePlanId(userId), date, note, undefined);
     } catch (error) {
