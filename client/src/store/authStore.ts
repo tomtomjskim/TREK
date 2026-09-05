@@ -13,6 +13,7 @@ import { clearSignedOut, markSignedOut } from '../utils/signedOut';
 import { forgetStartDestination } from '../utils/startDestination';
 import { forgetServerLanguage } from './settingsStore';
 import { clearAllPluginSessions } from './pluginStore';
+import { useTripStore } from './tripStore';
 import { useSystemNoticeStore } from './systemNoticeStore.js';
 
 interface AuthResponse {
@@ -287,6 +288,7 @@ export const useAuthStore = create<AuthState>()(
         // Invalidate every pending loadUser continuation before teardown starts.
         // Without this, an older /auth/me response can revive a completed logout.
         cancelAuthAttempts();
+        useTripStore.getState().resetTrip();
         // 1. Gate first so any in-flight flush/syncAll bails before we wipe the DB.
         setAuthed(false);
         // Flagged in the same update that drops the session: clearing isAuthenticated

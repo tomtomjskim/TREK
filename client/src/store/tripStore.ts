@@ -43,13 +43,22 @@ function isNotFoundError(err: unknown): boolean {
 }
 
 let tripRequestGeneration = 0
+const pendingAddonFeedWaiters = new Set<() => void>()
+
+function cancelPendingAddonFeedWaiters(): void {
+  for (const cancel of Array.from(pendingAddonFeedWaiters)) {
+    cancel()
+  }
+}
 
 function startTripRequest(): number {
+  cancelPendingAddonFeedWaiters()
   tripRequestGeneration += 1
   return tripRequestGeneration
 }
 
 function invalidateTripRequests(): void {
+  cancelPendingAddonFeedWaiters()
   tripRequestGeneration += 1
 }
 
@@ -57,31 +66,35 @@ function isCurrentTripRequest(requestGeneration: number): boolean {
   return requestGeneration === tripRequestGeneration
 }
 
-function waitForAddonFeedSettled(requestGeneration: number): Promise<boolean> {
+function waitForAddonFeedSettled(): Promise<boolean> {
   const addonStore = useAddonStore.getState()
   if (addonStore.loaded) return Promise.resolve(true)
 
   return new Promise(resolve => {
-    let requestUnsubscribe: (() => void) | null = null
-    const unsubscribe = useAddonStore.subscribe(() => {
+    let finished = false
+    let unsubscribeAddon: (() => void) | null = null
+    const finish = (value: boolean) => {
+      if (finished) return
+      finished = true
+      unsubscribeAddon?.()
+      pendingAddonFeedWaiters.delete(cancel)
+      resolve(value)
+    }
+    const cancel = () => finish(false)
+    pendingAddonFeedWaiters.add(cancel)
+    unsubscribeAddon = useAddonStore.subscribe(() => {
       if (useAddonStore.getState().loaded) {
-        unsubscribe()
-        requestUnsubscribe?.()
-        resolve(true)
-      }
-    })
-    requestUnsubscribe = useTripStore.subscribe(() => {
-      if (!isCurrentTripRequest(requestGeneration)) {
-        unsubscribe()
-        requestUnsubscribe?.()
-        resolve(false)
+        finish(true)
       }
     })
   })
 }
 
-async function loadPackingAndTodoIfEnabled(tripId: number | string, requestGeneration: number): Promise<{ packingItems: PackingItem[]; todoItems: TodoItem[] } | null> {
-  const settled = await waitForAddonFeedSettled(requestGeneration)
+async function loadPackingAndTodoIfEnabled(
+  tripId: number | string,
+  requestGeneration: number,
+): Promise<{ packingItems?: PackingItem[]; todoItems?: TodoItem[] } | null> {
+  const settled = await waitForAddonFeedSettled()
   if (!settled || !isCurrentTripRequest(requestGeneration)) return null
   const addonStore = useAddonStore.getState()
   if (!addonStore.isEnabled('packing')) {
@@ -97,10 +110,14 @@ async function loadPackingAndTodoIfEnabled(tripId: number | string, requestGener
   if (packingResult.status === 'rejected' && isNotFoundError(packingResult.reason)) throw packingResult.reason
   if (todoResult.status === 'rejected' && isNotFoundError(todoResult.reason)) throw todoResult.reason
 
-  return {
-    packingItems: packingResult.status === 'fulfilled' ? packingResult.value.items : [],
-    todoItems: todoResult.status === 'fulfilled' ? todoResult.value.items : [],
+  const addonItems: { packingItems?: PackingItem[]; todoItems?: TodoItem[] } = {}
+  if (packingResult.status === 'fulfilled') {
+    addonItems.packingItems = packingResult.value.items
   }
+  if (todoResult.status === 'fulfilled') {
+    addonItems.todoItems = todoResult.value.items
+  }
+  return addonItems
 }
 
 export interface TripStoreState
@@ -262,8 +279,8 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
       const addonItems = await loadPackingAndTodoIfEnabled(tripId, requestGeneration)
       if (addonItems && isCurrentTripRequest(requestGeneration)) {
         set({
-          packingItems: addonItems.packingItems,
-          todoItems: addonItems.todoItems,
+          packingItems: addonItems.packingItems ?? [],
+          todoItems: addonItems.todoItems ?? [],
         })
       }
     } catch (err: unknown) {
@@ -294,29 +311,32 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
     const budgetData = budgetResult.status === 'fulfilled' ? budgetResult.value : null
     const reservationsData = reservationsResult.status === 'fulfilled' ? reservationsResult.value : null
     const filesData = filesResult.status === 'fulfilled' ? filesResult.value : null
-    const assignmentsMap: AssignmentsMap = {}
-    const dayNotesMap: DayNotesMap = {}
-    const nextDays = daysData?.days ?? currentState.days
-    for (const day of nextDays) {
-      assignmentsMap[String(day.id)] = day.assignments || []
-      dayNotesMap[String(day.id)] = day.notes_items || []
-    }
-    set({
-      days: nextDays,
+    const nextState: Partial<TripStoreState> = {
       places: placesData?.places ?? currentState.places,
-      assignments: assignmentsMap,
-      dayNotes: dayNotesMap,
       budgetItems: budgetData?.items ?? currentState.budgetItems,
       reservations: reservationsData?.reservations ?? currentState.reservations,
       files: filesData?.files ?? currentState.files,
-    })
+    }
+    if (daysData) {
+      const assignmentsMap: AssignmentsMap = {}
+      const dayNotesMap: DayNotesMap = {}
+      for (const day of daysData.days) {
+        assignmentsMap[String(day.id)] = day.assignments || []
+        dayNotesMap[String(day.id)] = day.notes_items || []
+      }
+      nextState.days = daysData.days
+      nextState.assignments = assignmentsMap
+      nextState.dayNotes = dayNotesMap
+    }
+    set(nextState)
     const addonItems = await loadPackingAndTodoIfEnabled(tripId, requestGeneration)
     if (addonItems && isCurrentTripRequest(requestGeneration)) {
-      set({
-        packingItems: addonItems.packingItems,
-        todoItems: addonItems.todoItems,
-      })
+      const nextAddonState: Partial<Pick<TripStoreState, 'packingItems' | 'todoItems'>> = {}
+      if ('packingItems' in addonItems) nextAddonState.packingItems = addonItems.packingItems ?? currentState.packingItems
+      if ('todoItems' in addonItems) nextAddonState.todoItems = addonItems.todoItems ?? currentState.todoItems
+      set(nextAddonState)
     }
+    if (!isCurrentTripRequest(requestGeneration)) return
     // Accommodations live in planner-local state, not this store — nudge the
     // planner to reload them too (e.g. a trip date change made while offline).
     window.dispatchEvent(new CustomEvent('accommodations:refresh'))

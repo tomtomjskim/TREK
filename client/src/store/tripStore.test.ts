@@ -690,6 +690,101 @@ describe('tripStore', () => {
       expect(state.error).toBeNull()
     });
 
+    it('FE-TSTORE-008d: a later hydrateActiveTrip cancels the previous addon waiter before the feed settles', async () => {
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: false });
+      const trip2DayGate = deferred<Response>()
+      let trip1PackingCalls = 0
+      let trip1TodoCalls = 0
+      let trip2PackingCalls = 0
+      let trip2TodoCalls = 0
+
+      const hydrateDays = (tripId: number) => [
+        buildDay({ id: tripId * 10 + 1, trip_id: tripId, day_number: 1 }),
+      ]
+
+      seedStore(useTripStore, { trip: buildTrip({ id: 1 }), days: [], places: [] });
+      server.use(
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: hydrateDays(1) })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 611, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => {
+          trip1PackingCalls += 1
+          return HttpResponse.json({ items: [buildPackingItem({ id: 661, trip_id: 1 })] })
+        }),
+        http.get('/api/trips/1/todo', () => {
+          trip1TodoCalls += 1
+          return HttpResponse.json({ items: [buildTodoItem({ id: 771, trip_id: 1 })] })
+        }),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/trips/2/days', () => trip2DayGate.promise),
+        http.get('/api/trips/2/places', () => HttpResponse.json({ places: [buildPlace({ id: 612, trip_id: 2 })] })),
+        http.get('/api/trips/2/packing', () => {
+          trip2PackingCalls += 1
+          return HttpResponse.json({ items: [buildPackingItem({ id: 662, trip_id: 2 })] })
+        }),
+        http.get('/api/trips/2/todo', () => {
+          trip2TodoCalls += 1
+          return HttpResponse.json({ items: [buildTodoItem({ id: 772, trip_id: 2 })] })
+        }),
+        http.get('/api/trips/2/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/2/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/2/files', () => HttpResponse.json({ files: [] })),
+      );
+
+      const hydrate1 = useTripStore.getState().hydrateActiveTrip(1)
+      await waitFor(() => expect(useTripStore.getState().days[0]?.trip_id).toBe(1))
+
+      const hydrate2 = useTripStore.getState().hydrateActiveTrip(2)
+      useAddonStore.setState({
+        addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+        bagTracking: false,
+        loaded: true,
+      })
+      trip2DayGate.resolve(HttpResponse.json({ days: hydrateDays(2) }))
+
+      await expect(hydrate1).resolves.toBeUndefined()
+      await expect(hydrate2).resolves.toBeUndefined()
+
+      const state = useTripStore.getState()
+      expect(trip1PackingCalls).toBe(0)
+      expect(trip1TodoCalls).toBe(0)
+      expect(trip2PackingCalls).toBe(1)
+      expect(trip2TodoCalls).toBe(1)
+      expect(state.packingItems.map(i => i.id)).toEqual([662])
+      expect(state.todoItems.map(i => i.id)).toEqual([772])
+    });
+
+    it('FE-TSTORE-008e: a cold-start addon feed still throws on a genuine enabled 404', async () => {
+      useAddonStore.setState({
+        addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+        bagTracking: false,
+        loaded: true,
+      });
+      const stalePacking = buildPackingItem({ id: 188, trip_id: 1 });
+      const staleTodo = buildTodoItem({ id: 189, trip_id: 1 });
+      seedStore(useTripStore, {
+        trip: buildTrip({ id: 1 }),
+        packingItems: [stalePacking],
+        todoItems: [staleTodo],
+      });
+
+      server.use(
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 113, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => HttpResponse.json({ error: 'missing packing' }, { status: 404 })),
+        http.get('/api/trips/1/todo', () => HttpResponse.json({ items: [buildTodoItem({ id: 72, trip_id: 1 })] })),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+      );
+
+      await expect(useTripStore.getState().hydrateActiveTrip(1)).rejects.toThrow();
+
+      expect(useTripStore.getState().packingItems.map(i => i.id)).toEqual([188]);
+      expect(useTripStore.getState().todoItems.map(i => i.id)).toEqual([189]);
+    });
+
     it('FE-TSTORE-009: one failing resource does not wipe the others', async () => {
       const stalePlace = buildPlace({ id: 111, trip_id: 1, name: 'Kept' });
       seedStore(useTripStore, { places: [stalePlace], packingItems: [], todoItems: [] });
@@ -706,6 +801,64 @@ describe('tripStore', () => {
 
       expect(useTripStore.getState().places.map(p => p.name)).toEqual(['Kept']);
       expect(useTripStore.getState().todoItems.map(i => i.id)).toEqual([72]);
+    });
+
+    it('FE-TSTORE-009b: a failing addon resource preserves stale packing while todo still refreshes', async () => {
+      const stalePacking = buildPackingItem({ id: 88, trip_id: 1 });
+      seedStore(useTripStore, {
+        trip: buildTrip({ id: 1 }),
+        packingItems: [stalePacking],
+        todoItems: [],
+      });
+
+      server.use(
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 111, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => HttpResponse.json({ error: 'packing down' }, { status: 500 })),
+        http.get('/api/trips/1/todo', () => HttpResponse.json({ items: [buildTodoItem({ id: 72, trip_id: 1 })] })),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+      );
+
+      await expect(useTripStore.getState().hydrateActiveTrip(1)).resolves.toBeUndefined();
+
+      expect(useTripStore.getState().packingItems.map(i => i.id)).toEqual([88]);
+      expect(useTripStore.getState().todoItems.map(i => i.id)).toEqual([72]);
+    });
+
+    it('FE-TSTORE-009c: a failing day resource preserves the existing day maps', async () => {
+      const staleDay = buildDay({
+        id: 99,
+        trip_id: 1,
+        day_number: 9,
+        assignments: [buildAssignment({ id: 901, day_id: 99 })],
+        notes_items: [buildDayNote({ id: 801, day_id: 99, text: 'Nested stale note' })],
+      });
+      seedStore(useTripStore, {
+        trip: buildTrip({ id: 1 }),
+        days: [staleDay],
+        assignments: { '99': [buildAssignment({ id: 199, day_id: 99 })] },
+        dayNotes: { '99': [buildDayNote({ id: 299, day_id: 99, text: 'Keep this note' })] },
+      });
+
+      server.use(
+        http.get('/api/trips/1/days', () => HttpResponse.json({ error: 'day down' }, { status: 500 })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 111, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/todo', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+      );
+
+      await expect(useTripStore.getState().hydrateActiveTrip(1)).resolves.toBeUndefined();
+
+      const state = useTripStore.getState();
+      expect(state.days.map(d => d.id)).toEqual([99]);
+      expect(state.assignments['99']?.map(a => a.id)).toEqual([199]);
+      expect(state.dayNotes['99']?.map(n => n.id)).toEqual([299]);
+      expect(state.places.map(p => p.id)).toEqual([111]);
     });
   });
 
