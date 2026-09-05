@@ -123,8 +123,8 @@ export interface GuestMember {
 /**
  * Trip aggregate root, DI-native. Membership, the calendar export and the two
  * read aggregates live in their own domains now; what is left is the write core
- * plus day generation, which is why the constructor is eight parameters instead
- * of fourteen. The SQL moved 1:1 from the legacy
+ * plus day generation and one generic addon capability collaborator. The SQL
+ * moved 1:1 from the legacy
  * services/tripService.ts: identical statements, the `||` falsy-coercion
  * defaults, the post-write TRIP_SELECT re-selects and the mixed
  * named/positional parameter styles are all preserved byte-for-byte.
