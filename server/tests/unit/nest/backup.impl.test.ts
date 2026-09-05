@@ -2035,6 +2035,54 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
     fsMock.rmSync.mockReturnValue(undefined);
   }
 
+  function setupEmptyUploadArchive() {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    fsMock.existsSync.mockImplementation((p: string) => !String(p).includes('/uploads') && !String(p).endsWith('.encryption_key'));
+    fsMock.copyFileSync.mockReturnValue(undefined);
+    fsMock.rmSync.mockReturnValue(undefined);
+  }
+
+  function storageWithExistingUpload(overrides: Record<string, unknown> = {}) {
+    return stubStorage({
+      list: vi.fn((category: string) =>
+        (async function* () {
+          if (category === 'files') yield { key: 'old.bin', size: 4, mtimeMs: 0 };
+        })(),
+      ),
+      ...overrides,
+    });
+  }
+
+  it('BACKUP-046h — reconciles every upload category when the archive has no upload entries', async () => {
+    setupEmptyUploadArchive();
+    const storage = storageWithExistingUpload();
+
+    await expect(restoreFromZip(storage, '/data/tmp/empty-uploads.zip')).resolves.toEqual({ success: true });
+
+    expect(storage.delete).toHaveBeenCalledWith('files', 'old.bin');
+  });
+
+  it('BACKUP-046i — compensates an empty-upload reconcile when a later restore phase fails', async () => {
+    setupEmptyUploadArchive();
+    pluginBackupMock.stageExtractedPluginTrees.mockImplementationOnce(() => {
+      throw new Error('plugin stage failed after upload reconcile');
+    });
+    const storage = storageWithExistingUpload({
+      put: vi.fn(async () => {}),
+    });
+
+    await expect(restoreFromZip(storage, '/data/tmp/empty-uploads-failure.zip'))
+      .rejects.toThrow('plugin stage failed after upload reconcile');
+
+    expect(storage.delete).toHaveBeenCalledWith('files', 'old.bin');
+    expect(storage.put).toHaveBeenCalledWith(
+      'files',
+      'old.bin',
+      { tmpPath: expect.stringMatching(/restore-journal-\d+-[0-9a-f-]+\/uploads\/files\/old\.bin$/) },
+    );
+  });
+
   it('BACKUP-046a — writes all archive entries before removing stale existing objects', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();

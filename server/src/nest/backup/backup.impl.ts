@@ -791,20 +791,19 @@ async function restoreFromZipUnlocked(storage: StorageService, zipPath: string):
       restoredStorageConfig = true;
 
       const extractedUploads = path.join(extractDir, 'uploads');
-      if (fs.existsSync(extractedUploads)) {
-        const entries = extractedUploadEntries(extractedUploads);
-        desiredUploads = entries.map(({ category, key }) => ({ category, key }));
-        // The target backend is derived from the restored DB. Snapshot all of
-        // its current bytes before any mutation, using bounded on-disk spools
-        // so neither same-key overwrites nor later stale deletes are permanent
-        // if a following operation fails.
-        uploadSnapshots = await snapshotUploadInventory(storage, journalDir);
-        const restored = await rehydrateUploads(storage, entries);
-        for (const category of BACKUP_UPLOAD_CATEGORIES) {
-          for await (const obj of storage.list(category)) {
-            if (!restored.has(`${category}/${obj.key}`)) {
-              await storage.delete(category, obj.key);
-            }
+      const entries = fs.existsSync(extractedUploads) ? extractedUploadEntries(extractedUploads) : [];
+      desiredUploads = entries.map(({ category, key }) => ({ category, key }));
+      // The target backend is derived from the restored DB. Snapshot all of
+      // its current bytes before any mutation, using bounded on-disk spools
+      // so neither same-key overwrites nor later stale deletes are permanent
+      // if a following operation fails. Reconcile even when the archive has
+      // no uploads: an empty desired inventory must remove stale live objects.
+      uploadSnapshots = await snapshotUploadInventory(storage, journalDir);
+      const restored = await rehydrateUploads(storage, entries);
+      for (const category of BACKUP_UPLOAD_CATEGORIES) {
+        for await (const obj of storage.list(category)) {
+          if (!restored.has(`${category}/${obj.key}`)) {
+            await storage.delete(category, obj.key);
           }
         }
       }
