@@ -9,6 +9,7 @@ import { NtfyService } from './transports/ntfy.service';
 import { WebhookService } from './transports/webhook.service';
 import { MailerModule } from './mailer/mailer.module';
 import { AuthModule } from '../auth/auth.module';
+import { AddonsModule } from '../addons/addons.module';
 import { SchedulingModule } from '../scheduling/scheduling.module';
 import { StorageModule } from '../storage/storage.module';
 
@@ -23,7 +24,7 @@ import { StorageModule } from '../storage/storage.module';
  *  in-container consumers (AdminController's dev test send and preferences tab,
  *  the plugin RPC surface, HostSurfaceRpc). */
 @Module({
-  imports: [AuthModule, MailerModule, SchedulingModule, StorageModule],
+  imports: [AuthModule, MailerModule, SchedulingModule, StorageModule, AddonsModule],
   controllers: [NotificationsController, AdminNotificationPreferencesController],
   providers: [
     NotificationsService,

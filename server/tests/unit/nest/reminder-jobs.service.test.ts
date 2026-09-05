@@ -36,6 +36,8 @@ import { createUser, createTrip, createTodoItem, setAppSetting, setNotificationC
 import { DatabaseService } from '../../../src/nest/database/database.service';
 import { ReminderJobsService } from '../../../src/nest/notifications/reminder-jobs.service';
 import { notificationsStub } from '../../helpers/notifications';
+import { ADDON_IDS } from '../../../src/addons';
+import type { AddonsService } from '../../../src/nest/addons/addons.service';
 import type { NotificationsService } from '../../../src/nest/notifications/notifications.service';
 import type { CronRegistrarService } from '../../../src/nest/scheduling/cron-registrar.service';
 
@@ -45,7 +47,7 @@ interface Registered {
   onTick: () => Promise<void> | void;
 }
 
-function makeJobs(overrides: { notifications?: NotificationsService } = {}) {
+function makeJobs(overrides: { notifications?: NotificationsService; addons?: AddonsService } = {}) {
   const registered: Registered[] = [];
   const registrar = {
     isEnabled: vi.fn(() => true),
@@ -60,6 +62,7 @@ function makeJobs(overrides: { notifications?: NotificationsService } = {}) {
     new DatabaseService(testDb),
     overrides.notifications ?? notificationsStub(send),
     registrar as unknown as CronRegistrarService,
+    overrides.addons ?? ({ isAddonEnabled: vi.fn(() => true) } as unknown as AddonsService),
   );
   return { svc, registered, registrar, send };
 }
@@ -165,6 +168,7 @@ describe('trip reminder tick', () => {
       { get: () => { throw new Error('db gone'); }, all: () => { throw new Error('db gone'); }, run: () => { throw new Error('db gone'); } } as unknown as DatabaseService,
       broken,
       { isEnabled: () => true, register: () => true, unregister: () => {} } as unknown as CronRegistrarService,
+      { isAddonEnabled: () => true } as unknown as AddonsService,
     );
     await expect(svc.tripTick()).resolves.toBeUndefined();
     expect(logMock.logError).toHaveBeenCalledWith('Trip reminder check failed: db gone');
@@ -174,6 +178,28 @@ describe('trip reminder tick', () => {
 });
 
 describe('todo reminder tick', () => {
+  it('RJOB-007b — a disabled Packing addon returns before todo settings or rows are queried', async () => {
+    const get = vi.fn();
+    const all = vi.fn();
+    const run = vi.fn();
+    const send = vi.fn();
+    const isAddonEnabled = vi.fn(() => false);
+    const svc = new ReminderJobsService(
+      { get, all, run } as unknown as DatabaseService,
+      notificationsStub(send),
+      { isEnabled: () => true, register: () => true, unregister: () => {} } as unknown as CronRegistrarService,
+      { isAddonEnabled } as unknown as AddonsService,
+    );
+
+    await svc.todoTick();
+
+    expect(isAddonEnabled).toHaveBeenCalledWith(ADDON_IDS.PACKING);
+    expect(get).not.toHaveBeenCalled();
+    expect(all).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('RJOB-008 — sends for a due todo, routes trip-scope, stamps reminded_at, and dedups within 20h', async () => {
     const { user } = createUser(testDb);
     const trip = createTrip(testDb, user.id, { title: 'Lisbon' });

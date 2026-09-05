@@ -1,6 +1,8 @@
 import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 import { logInfo, logError } from '../audit/audit-log.logger';
 import { DatabaseService } from '../database/database.service';
+import { ADDON_IDS } from '../../addons';
+import { AddonsService } from '../addons/addons.service';
 import { NotificationsService } from './notifications.service';
 import { CronRegistrarService } from '../scheduling/cron-registrar.service';
 
@@ -24,6 +26,7 @@ export class ReminderJobsService implements OnApplicationBootstrap {
     private readonly db: DatabaseService,
     private readonly notifications: NotificationsService,
     private readonly registrar: CronRegistrarService,
+    private readonly addons: AddonsService,
   ) {}
 
   private getSetting(key: string): string | undefined {
@@ -86,6 +89,10 @@ export class ReminderJobsService implements OnApplicationBootstrap {
   /** Daily check for unchecked todos due inside the lead window. */
   async todoTick(): Promise<void> {
     try {
+      // Todo/list is part of the Packing addon. Check the capability before
+      // even reading its reminder setting so disabling the addon leaves no
+      // background read, notification or reminded_at write path behind.
+      if (!this.addons.isAddonEnabled(ADDON_IDS.PACKING)) return;
       if (this.getSetting('notify_todo_due') === 'false') return;
 
       // Select unchecked todos with a due date inside the lead window
