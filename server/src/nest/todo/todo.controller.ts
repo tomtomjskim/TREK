@@ -13,6 +13,9 @@ import {
 import type { User } from '../../types';
 import { TodoService } from './todo.service';
 import { TodoCreateItemDto, TodoUpdateItemDto, TodoReorderDto, TodoCategoryAssigneesDto } from './todo.dto';
+import { AddonGuard } from '../addons/addon.guard';
+import { RequireAddon } from '../addons/require-addon.decorator';
+import { ADDON_IDS } from '../../addons';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequirePermission, TripAccessGuard } from '../permissions/trip-access.guard';
@@ -26,13 +29,13 @@ import { RequirePermission, TripAccessGuard } from '../permissions/trip-access.g
  * it wins over the param. Bodies validate against the @trek/shared todo schemas
  * via the DTO classes in todo.dto.ts + the global ZodValidationPipe (400 with
  * the standard `{ error }` envelope on mismatch — this replaced the legacy
- * bespoke 'Item name is required' check).
+ * bespoke 'Item name is required' check). The Packing addon gate answers 404
+ * before auth so disabled todo routes disappear for anonymous and authenticated
+ * callers alike.
  */
 @Controller('api/trips/:tripId/todo')
-// TripAccessGuard resolves :tripId and 404s a trip the user cannot reach; mutations
-// add @RequirePermission('packing_edit'), the same action string the service's canEdit
-// passes, so the HTTP and MCP paths cannot demand different rights.
-@UseGuards(JwtAuthGuard, TripAccessGuard)
+@UseGuards(AddonGuard, JwtAuthGuard, TripAccessGuard)
+@RequireAddon(ADDON_IDS.PACKING, 'Packing')
 export class TodoController {
   constructor(private readonly todo: TodoService) {}
 

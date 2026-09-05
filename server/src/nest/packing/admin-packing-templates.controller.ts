@@ -2,6 +2,9 @@ import { Body, Controller, Delete, Get, HttpCode, HttpException, Param, Post, Pu
 import type { Request } from 'express';
 import { PackingService } from './packing.service';
 import { AdminTemplateNameDto } from '../admin/admin.dto';
+import { AddonGuard } from '../addons/addon.guard';
+import { RequireAddon } from '../addons/require-addon.decorator';
+import { ADDON_IDS } from '../../addons';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -29,9 +32,12 @@ function ok<T>(result: T): Exclude<T, { error: string }> {
  *
  * The path, the admin gate, the {error,status} envelope, the create-201-vs-rest-200
  * split and the audit-log writes are unchanged — this is a move, not a redesign.
+ * The Packing addon gate still answers 404 before auth so disabled templates
+ * disappear for anonymous and authenticated callers alike.
  */
 @Controller('api/admin/packing-templates')
-@UseGuards(JwtAuthGuard, AdminGuard)
+@UseGuards(AddonGuard, JwtAuthGuard, AdminGuard)
+@RequireAddon(ADDON_IDS.PACKING, 'Packing')
 export class AdminPackingTemplatesController {
   constructor(
     private readonly packing: PackingService,

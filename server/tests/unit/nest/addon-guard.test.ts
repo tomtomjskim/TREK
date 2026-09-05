@@ -19,6 +19,10 @@ import { AddonGuard } from '../../../src/nest/addons/addon.guard';
 import { RequireAddon, REQUIRE_ADDON, type RequireAddonMeta } from '../../../src/nest/addons/require-addon.decorator';
 import type { AddonsService } from '../../../src/nest/addons/addons.service';
 import { ADDON_IDS } from '../../../src/addons';
+import { AdminPackingTemplatesController } from '../../../src/nest/packing/admin-packing-templates.controller';
+import { PackingController } from '../../../src/nest/packing/packing.controller';
+import { TodoController } from '../../../src/nest/todo/todo.controller';
+import { VacayController } from '../../../src/nest/vacay/vacay.controller';
 import { JourneyController } from '../../../src/nest/journey/journey.controller';
 import { CollectionsController } from '../../../src/nest/collections/collections.controller';
 import { AirtrailController } from '../../../src/nest/integrations/airtrail.controller';
@@ -98,6 +102,10 @@ describe('the gated route groups still declare their addon', () => {
     ['JourneyController', JourneyController, ADDON_IDS.JOURNEY, 'Journey'],
     ['CollectionsController', CollectionsController, ADDON_IDS.COLLECTIONS, 'Collections'],
     ['AirtrailController', AirtrailController, ADDON_IDS.AIRTRAIL, 'AirTrail'],
+    ['VacayController', VacayController, ADDON_IDS.VACAY, 'Vacay'],
+    ['PackingController', PackingController, ADDON_IDS.PACKING, 'Packing'],
+    ['AdminPackingTemplatesController', AdminPackingTemplatesController, ADDON_IDS.PACKING, 'Packing'],
+    ['TodoController', TodoController, ADDON_IDS.PACKING, 'Packing'],
   ])('ADDON-GUARD-005: %s gates on the right addon, with AddonGuard first', (_name, cls, addonId, label) => {
     expect(metaOf(cls)).toEqual({ addonId, label });
     // Order is the contract: a disabled addon has to answer 404 to anonymous

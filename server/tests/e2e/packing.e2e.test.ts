@@ -11,6 +11,7 @@ import request from 'supertest';
 import cookieParser from 'cookie-parser';
 import type { Server } from 'http';
 import { Test } from '@nestjs/testing';
+import { ADDON_IDS } from '../../src/addons';
 import { seedUser, sessionCookie } from './harness';
 
 const { db } = vi.hoisted(() => {
@@ -23,6 +24,7 @@ const { db } = vi.hoisted(() => {
     display_name TEXT, avatar TEXT);`);
   tmp.exec('CREATE TABLE trips (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, title TEXT);');
   tmp.exec('CREATE TABLE trip_members (trip_id INTEGER NOT NULL, user_id INTEGER NOT NULL);');
+  tmp.exec(`CREATE TABLE addons (id TEXT PRIMARY KEY, name TEXT, type TEXT, icon TEXT, enabled INTEGER, sort_order INTEGER);`);
   // The post-migration shape of the packing tables (schema.ts + migrations.ts).
   tmp.exec(`CREATE TABLE packing_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -156,6 +158,9 @@ describe('Packing e2e (real auth guard + real SQL over temp SQLite)', () => {
     seedUser(db as never, { id: 1 });
     seedUser(db as never, { id: 2, email: 'stranger@example.test' });
     seedUser(db as never, { id: 3, email: 'admin@example.test', role: 'admin' });
+    db.prepare(
+      'INSERT INTO addons (id, name, type, icon, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(ADDON_IDS.PACKING, 'Packing', 'trip', 'Backpack', 1, 1);
     app = await build();
     checkPermission = vi.spyOn(app.get(PermissionsService), 'checkPermission');
     server = app.getHttpServer();
@@ -184,6 +189,25 @@ describe('Packing e2e (real auth guard + real SQL over temp SQLite)', () => {
   it('401 without a session cookie', async () => {
     const res = await request(server).get(`/api/trips/${tripId}/packing`);
     expect(res.status).toBe(401);
+  });
+
+  it('404 when the Packing addon is disabled, regardless of auth', async () => {
+    db.prepare('UPDATE addons SET enabled = 0 WHERE id = ?').run(ADDON_IDS.PACKING);
+    try {
+      const anon = await request(server).get(`/api/trips/${tripId}/packing`);
+      expect(anon.status).toBe(404);
+      expect(anon.body).toEqual({ error: 'Packing addon is not enabled' });
+
+      const authed = await request(server).get(`/api/trips/${tripId}/packing`).set('Cookie', sessionCookie(1));
+      expect(authed.status).toBe(404);
+      expect(authed.body).toEqual({ error: 'Packing addon is not enabled' });
+
+      const adminTemplates = await request(server).get('/api/admin/packing-templates').set('Cookie', sessionCookie(3));
+      expect(adminTemplates.status).toBe(404);
+      expect(adminTemplates.body).toEqual({ error: 'Packing addon is not enabled' });
+    } finally {
+      db.prepare('UPDATE addons SET enabled = 1 WHERE id = ?').run(ADDON_IDS.PACKING);
+    }
   });
 
   it('200 list, hiding another member\'s private items from the viewer (#858)', async () => {

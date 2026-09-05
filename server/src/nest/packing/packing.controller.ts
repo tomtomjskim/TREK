@@ -15,6 +15,9 @@ import type { TrekWsPayload, TrekWsTripEventName } from '@trek/shared';
 import type { User } from '../../types';
 import { isInvalidBagRef, isPackingUpdateForbidden, PackingService } from './packing.service';
 import { isUpdateConflict } from '../common/conflictResult';
+import { AddonGuard } from '../addons/addon.guard';
+import { RequireAddon } from '../addons/require-addon.decorator';
+import { ADDON_IDS } from '../../addons';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 import { RequirePermission, TripAccessGuard } from '../permissions/trip-access.guard';
@@ -50,13 +53,13 @@ type PackingItemRow = { is_private?: number; owner_id?: number | null; recipient
  * global ZodValidationPipe). The pipe's 400 envelope replaced the legacy
  * bespoke name checks that the schemas now enforce (missing item name, invalid
  * visibility); checks the schemas cannot express (whitespace-only names, empty
- * import arrays, the admin template gate) keep their exact legacy strings.
+ * import arrays, the admin template gate) keep their exact legacy strings. The
+ * Packing addon gate answers 404 before auth so disabled packing and admin
+ * template routes disappear for anonymous and authenticated callers alike.
  */
 @Controller('api/trips/:tripId/packing')
-// TripAccessGuard resolves :tripId and 404s a trip the user cannot reach; mutations
-// add @RequirePermission('packing_edit'), the same action string the service's canEdit
-// passes, so the HTTP and MCP paths cannot demand different rights.
-@UseGuards(JwtAuthGuard, TripAccessGuard)
+@UseGuards(AddonGuard, JwtAuthGuard, TripAccessGuard)
+@RequireAddon(ADDON_IDS.PACKING, 'Packing')
 export class PackingController {
   constructor(private readonly packing: PackingService) {}
 

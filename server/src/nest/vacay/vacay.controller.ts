@@ -36,6 +36,9 @@ import {
   VacayUpdateStatsDto,
   VacayYearSettingsDto,
 } from './vacay.dto';
+import { AddonGuard } from '../addons/addon.guard';
+import { RequireAddon } from '../addons/require-addon.decorator';
+import { ADDON_IDS } from '../../addons';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
 
@@ -98,7 +101,8 @@ function parseCanonicalPositiveId(value: unknown, field: 'user_id' | 'plan_id'):
  * endpoints require auth; the X-Socket-Id header is forwarded to the services so
  * the originating client is excluded from the broadcast; POSTs answer 200 (the
  * legacy route uses res.json, not 201); and the bespoke 403/404/502 bodies are
- * reproduced exactly. No addon gate — the legacy mount has none.
+ * reproduced exactly. The addon gate answers 404 before auth so the disabled
+ * surface looks missing to anonymous and authenticated callers alike.
  *
  * Bodies validate against the @trek/shared vacay schemas via the DTO classes in
  * vacay.dto.ts + the global ZodValidationPipe (400 with the standard `{ error }`
@@ -108,7 +112,8 @@ function parseCanonicalPositiveId(value: unknown, field: 'user_id' | 'plan_id'):
  * rejected with those exact bodies.
  */
 @Controller('api/addons/vacay')
-@UseGuards(JwtAuthGuard)
+@UseGuards(AddonGuard, JwtAuthGuard)
+@RequireAddon(ADDON_IDS.VACAY, 'Vacay')
 export class VacayController {
   constructor(private readonly vacay: VacayService) {}
 

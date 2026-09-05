@@ -10,6 +10,7 @@ import request from 'supertest';
 import cookieParser from 'cookie-parser';
 import type { Server } from 'http';
 import { Test } from '@nestjs/testing';
+import { ADDON_IDS } from '../../src/addons';
 import { seedUser, sessionCookie } from './harness';
 
 const { db } = vi.hoisted(() => {
@@ -19,6 +20,7 @@ const { db } = vi.hoisted(() => {
   tmp.exec('PRAGMA journal_mode = WAL');
   tmp.exec(`CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL,
     email TEXT NOT NULL UNIQUE, role TEXT NOT NULL DEFAULT 'user', password_version INTEGER NOT NULL DEFAULT 0);`);
+  tmp.exec(`CREATE TABLE addons (id TEXT PRIMARY KEY, name TEXT, type TEXT, icon TEXT, enabled INTEGER, sort_order INTEGER);`);
   // The vacay tables VacayService's real SQL touches (trimmed from src/db/schema.ts,
   // with the fraction/kind columns the migrations add to vacay_entries).
   tmp.exec(`CREATE TABLE vacay_plans (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,6 +100,9 @@ describe('Vacay e2e (real auth guard + temp SQLite)', () => {
 
   beforeAll(async () => {
     seedUser(db as never, { id: 1 });
+    db.prepare(
+      'INSERT INTO addons (id, name, type, icon, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(ADDON_IDS.VACAY, 'Vacay', 'trip', 'SunMedium', 1, 1);
     app = await build();
     server = app.getHttpServer();
   });
@@ -109,6 +114,21 @@ describe('Vacay e2e (real auth guard + temp SQLite)', () => {
   it('401 without a session cookie', async () => {
     const res = await request(server).get('/api/addons/vacay/plan');
     expect(res.status).toBe(401);
+  });
+
+  it('404 when the Vacay addon is disabled, regardless of auth', async () => {
+    db.prepare('UPDATE addons SET enabled = 0 WHERE id = ?').run(ADDON_IDS.VACAY);
+    try {
+      const anon = await request(server).get('/api/addons/vacay/plan');
+      expect(anon.status).toBe(404);
+      expect(anon.body).toEqual({ error: 'Vacay addon is not enabled' });
+
+      const authed = await request(server).get('/api/addons/vacay/plan').set('Cookie', sessionCookie(1));
+      expect(authed.status).toBe(404);
+      expect(authed.body).toEqual({ error: 'Vacay addon is not enabled' });
+    } finally {
+      db.prepare('UPDATE addons SET enabled = 1 WHERE id = ?').run(ADDON_IDS.VACAY);
+    }
   });
 
   it('200 plan for an authenticated user (lazily creates the plan)', async () => {
