@@ -102,6 +102,11 @@ describe('PackingRpc through the router', () => {
     expect(f.realtime.broadcast).not.toHaveBeenCalled();
     expect(f.db.canAccessTrip).not.toHaveBeenCalled();
     expect(f.db.prepare).not.toHaveBeenCalled();
+
+    const registered = createTestPluginRegistry([f.rpc]).methodNames();
+    expect(new Set(cases.map(([method]) => method))).toEqual(
+      new Set([...registered].filter(method => method.startsWith('packing.'))),
+    );
   });
 
   it('PACKING-RPC-001 packing.list is membership-checked and scoped to the acting user', async () => {

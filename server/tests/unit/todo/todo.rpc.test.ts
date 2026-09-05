@@ -42,7 +42,7 @@ function build(canEdit = true, addonOn = true) {
   const rpc = new TodoRpc(todos, realtime, guards);
   const host = (...grants: string[]) =>
     new PluginRpcHost('p', new Set(grants), makeDeps(), createTestPluginRegistry([rpc]));
-  return { todos, realtime, permissions, db, host };
+  return { todos, realtime, permissions, db, rpc, host };
 }
 
 describe('TodoRpc through the router', () => {
@@ -75,6 +75,11 @@ describe('TodoRpc through the router', () => {
     expect(disabled.realtime.broadcast).not.toHaveBeenCalled();
     expect(disabled.db.canAccessTrip).not.toHaveBeenCalled();
     expect(disabled.db.prepare).not.toHaveBeenCalled();
+
+    const registered = createTestPluginRegistry([disabled.rpc]).methodNames();
+    expect(new Set(cases.map(([method]) => method))).toEqual(
+      new Set([...registered].filter(method => method.startsWith('todos.'))),
+    );
   });
 
   it('TODO-RPC-001 todos.list is trip-membership-gated', async () => {
