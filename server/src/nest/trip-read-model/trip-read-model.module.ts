@@ -11,12 +11,13 @@ import { PlacesModule } from '../places/places.module';
 import { TodoModule } from '../todo/todo.module';
 import { FilesModule } from '../files/files.module';
 import { TripMembersModule } from '../trip-members/trip-members.module';
+import { AddonsModule } from '../addons/addons.module';
 
 /** Where the trip read aggregates keep their fan-out, so the write path does not
  *  have to carry it. Nothing imports this except trips. */
 @Module({
   imports: [
-    DatabaseModule, TripMembersModule, DaysModule, AccommodationsModule, BudgetModule,
+    DatabaseModule, TripMembersModule, DaysModule, AccommodationsModule, BudgetModule, AddonsModule,
     PackingModule, ReservationsModule, CollabModule, PlacesModule, TodoModule, FilesModule,
   ],
   providers: [TripReadModelService],

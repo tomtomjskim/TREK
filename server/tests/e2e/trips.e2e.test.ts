@@ -99,6 +99,8 @@ const { db } = vi.hoisted(() => {
   // StorageRegistryService (behind StorageModule, now in this module chain) reads
   // this at onModuleInit.
   tmp.exec('CREATE TABLE app_settings (key TEXT PRIMARY KEY, value TEXT);');
+  // TripReadModelService reads the PACKING addon state before its bundle fan-out.
+  tmp.exec('CREATE TABLE addons (id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0);');
   return { db: tmp };
 });
 
@@ -158,6 +160,7 @@ describe('Trips e2e (real auth guard + temp SQLite)', () => {
     db.prepare('DELETE FROM trip_members').run();
     db.prepare('DELETE FROM days').run();
     db.prepare('DELETE FROM audit_log').run();
+    db.prepare("INSERT OR REPLACE INTO addons (id, name, enabled) VALUES ('packing', 'Packing', 1)").run();
     canAccessTrip.mockReturnValue({ user_id: 1 });
     checkPermission.mockReturnValue(true);
   });
@@ -250,6 +253,18 @@ describe('Trips e2e (real auth guard + temp SQLite)', () => {
     const res = await request(server).get(`/api/trips/${tripId}/bundle`).set('Cookie', sessionCookie(1));
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ trip: { id: tripId }, days: [], members: [{ id: 1, role: 'owner' }] });
+  });
+
+  it('200 bundle returns empty packing and todo projections when PACKING is disabled', async () => {
+    const tripId = seedTrip('disabled-packing');
+    db.prepare("INSERT INTO packing_items (trip_id, name) VALUES (?, 'hidden packing')").run(tripId);
+    db.prepare("INSERT INTO todo_items (trip_id, name) VALUES (?, 'hidden todo')").run(tripId);
+    db.prepare("UPDATE addons SET enabled = 0 WHERE id = 'packing'").run();
+
+    const res = await request(server).get(`/api/trips/${tripId}/bundle`).set('Cookie', sessionCookie(1));
+    expect(res.status).toBe(200);
+    expect(res.body.packingItems).toEqual([]);
+    expect(res.body.todoItems).toEqual([]);
   });
 
   it('200 delete cleans up synced journey entries (real SQL)', async () => {

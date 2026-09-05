@@ -175,17 +175,18 @@ export function createMcpTestRegistry(): McpRegistry {
     new UnsplashService(dbService, new RuntimeEnvService(), generalStorage),
     generalStorage,
   );
+  const addonsService = new AddonsService(dbService);
   const readModelService = new TripReadModelService(
     dbService, membersService, daysService, accommodationsService, budgetService,
     packingService, reservationsService, collabService, placesService, todoService,
     new FilesService(dbService, permissionsService, realtimeService, new EphemeralTokenService(), generalStorage),
+    addonsService,
   );
   const calendarService = new CalendarService(dbService, reservationsService);
   // The nine addon-gated surfaces read their toggle off an injected service now
   // rather than off addons.bridge's own instance, so the harness has to supply
   // one — against the same test DB, which is what makes the `when:` gates
   // answer truthfully here instead of against the process-wide singleton.
-  const addonsService = new AddonsService(dbService);
   // One instance, three consumers: AssignmentsMcp, ReservationsMcp and PlacesMcp.
   const assignmentsService = new AssignmentsService(dbService, permissionsService, realtimeService, queryHelpersService, journeyDomain);
   // The two photo providers, shared by MemoriesMcp (which browses them) and by
@@ -218,7 +219,7 @@ export function createMcpTestRegistry(): McpRegistry {
       new VacayMcp(new VacayService(dbService, realtimeService, notificationsStub()), authService, addonsService),
       new TripsMcp(tripsService, todoService, collabService, authService, calendarService, membersService, readModelService, addonsService, guards),
       new TripPromptsMcp(tripsService, readModelService, packingService, addonsService),
-      new ShareMcp(new ShareService(dbService, permissionsService, placePhotoCache), authService, guards),
+      new ShareMcp(new ShareService(dbService, permissionsService, placePhotoCache, addonsService), authService, guards),
       new FeedsMcp(new FeedsService(dbService, calendarService), dbService, new RuntimeEnvService(), guards),
       new TripInviteMcp(new TripInviteService(dbService, permissionsService, new TripMembershipService(dbService)), dbService, new RuntimeEnvService(), guards, new AuditService(dbService)),
       new MapsMcp(mapsService),

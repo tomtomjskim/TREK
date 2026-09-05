@@ -47,6 +47,8 @@ const permissionsStub = { checkPermission } as unknown as PermissionsService;
 // Injected stub since the photo-cache fold (was a path mock of the module).
 const serveKey = vi.fn();
 const photoCacheStub = { serveKey } as unknown as PlacePhotoCacheService;
+const isPackingAddonEnabled = vi.fn(() => true);
+const addonsStub = { isAddonEnabled: isPackingAddonEnabled } as unknown as AddonsService;
 
 import { createTables } from '../../../src/db/schema';
 import { runMigrations } from '../../../src/db/migrations';
@@ -56,10 +58,11 @@ import {
 } from '../../helpers/factories';
 import { DatabaseService } from '../../../src/nest/database/database.service';
 import type { PermissionsService } from '../../../src/nest/permissions/permissions.service';
+import type { AddonsService } from '../../../src/nest/addons/addons.service';
 import { ShareService } from '../../../src/nest/share/share.service';
 import type { User } from '../../../src/types';
 
-const svc = new ShareService(new DatabaseService(testDb), permissionsStub, photoCacheStub);
+const svc = new ShareService(new DatabaseService(testDb), permissionsStub, photoCacheStub, addonsStub);
 
 beforeAll(() => {
   createTables(testDb);
@@ -70,6 +73,7 @@ beforeEach(() => {
   resetTestDb(testDb);
   checkPermission.mockReset();
   serveKey.mockReset();
+  isPackingAddonEnabled.mockReturnValue(true);
 });
 
 afterAll(() => {
@@ -437,13 +441,48 @@ describe('getSharedTripData', () => {
     createDay(testDb, trip.id);
     const database = new DatabaseService(testDb);
     const allSpy = vi.spyOn(database, 'all');
-    const isolated = new ShareService(database, permissionsStub, photoCacheStub);
+    const isolated = new ShareService(database, permissionsStub, photoCacheStub, addonsStub);
 
     isolated.getSharedTripData(token);
 
     const queries = allSpy.mock.calls.map(([sql]) => String(sql));
     expect(queries.some((sql) => /\b(days|day_assignments|day_notes|places|categories|reservations|packing_items|budget_items|collab_messages)\b/i.test(sql))).toBe(false);
     allSpy.mockRestore();
+  });
+
+  it('SHARE-SVC-019c: a disabled packing addon with a stored share flag returns no packing and issues no packing query', () => {
+    const { trip, token } = seedSharedTrip({
+      share_map: false, share_bookings: false, share_packing: true, share_budget: false, share_collab: false,
+    });
+    testDb.prepare("INSERT INTO packing_items (trip_id, name) VALUES (?, 'NO_QUERY_PACKING_ADDON_SENTINEL')").run(trip.id);
+    isPackingAddonEnabled.mockReturnValue(false);
+    const database = new DatabaseService(testDb);
+    const allSpy = vi.spyOn(database, 'all');
+    const isolated = new ShareService(database, permissionsStub, photoCacheStub, addonsStub);
+
+    try {
+      const data = isolated.getSharedTripData(token)!;
+      expect(data.permissions.share_packing).toBe(false);
+      expect(data.packing).toEqual([]);
+      expect(allSpy.mock.calls.map(([sql]) => String(sql)).join('\n')).not.toContain('packing_items');
+      expect(shareRow(trip.id).share_packing).toBe(1);
+    } finally {
+      allSpy.mockRestore();
+    }
+  });
+
+  it('SHARE-SVC-019d: re-enabling the packing addon restores the stored public share projection', () => {
+    const { trip, token } = seedSharedTrip({
+      share_map: false, share_bookings: false, share_packing: true, share_budget: false, share_collab: false,
+    });
+    testDb.prepare("INSERT INTO packing_items (trip_id, name) VALUES (?, 'RESTORED_PACKING_ADDON_SENTINEL')").run(trip.id);
+    isPackingAddonEnabled.mockReturnValue(false);
+    expect(svc.getSharedTripData(token)!.packing).toEqual([]);
+
+    isPackingAddonEnabled.mockReturnValue(true);
+    expect(svc.getSharedTripData(token)!.permissions.share_packing).toBe(true);
+    expect(svc.getSharedTripData(token)!.packing.map(item => item.name)).toEqual(['RESTORED_PACKING_ADDON_SENTINEL']);
+    expect(shareRow(trip.id).share_packing).toBe(1);
   });
 
   it('SHARE-SVC-020: baseCurrency falls back trip currency → EUR, with the owner default_currency winning (#1361)', () => {
@@ -466,7 +505,7 @@ describe('getSharedTripData', () => {
     const database = new DatabaseService(testDb);
     const allSpy = vi.spyOn(database, 'all');
     const getSpy = vi.spyOn(database, 'get');
-    const isolated = new ShareService(database, permissionsStub, photoCacheStub);
+    const isolated = new ShareService(database, permissionsStub, photoCacheStub, addonsStub);
 
     expect(isolated.getSharedTripData(token)!.baseCurrency).toBe('CAD');
     const sql = [...allSpy.mock.calls, ...getSpy.mock.calls].map(([query]) => String(query)).join('\n');

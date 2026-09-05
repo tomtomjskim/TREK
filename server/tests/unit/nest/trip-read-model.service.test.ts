@@ -77,6 +77,7 @@ import { makeStorageFixture } from '../../helpers/storage-fixture';
 import { JourneyDomainService } from '../../../src/nest/journey/journey-domain.service';
 import { TrekPhotosRepository } from '../../../src/nest/photos/trek-photos.repository';
 import { meteredGoogleApiTransport } from '../../helpers/google-api-transport';
+import type { AddonsService } from '../../../src/nest/addons/addons.service';
 
 // Real sibling services over the same in-memory DB — the aggregation runs the
 // actual SQL of every domain it fans out to, so a shape change downstream shows
@@ -97,7 +98,14 @@ const placesSvc = new PlacesService(
 const accommodationsSvc = new AccommodationsService(dbs(), new PermissionsService(dbs()), new RealtimeService());
 const membersSvc = new TripMembersService(dbs(), budgetSvc, new UserCleanupService(dbs(), budgetSvc), new PermissionsService(dbs()), new RealtimeService(), notificationsStub());
 
-const buildReadModel = (database: DatabaseService, roster: TripMembersService = membersSvc) =>
+const isPackingAddonEnabled = vi.fn(() => true);
+const packingAddon = { isAddonEnabled: isPackingAddonEnabled } as unknown as AddonsService;
+
+const buildReadModel = (
+  database: DatabaseService,
+  roster: TripMembersService = membersSvc,
+  addons: AddonsService = packingAddon,
+) =>
   new TripReadModelService(
     database, roster, daysSvc, accommodationsSvc, budgetSvc,
     new PackingService(dbs(), new PermissionsService(dbs()), new RealtimeService(), notificationsStub()),
@@ -106,6 +114,7 @@ const buildReadModel = (database: DatabaseService, roster: TripMembersService = 
     placesSvc,
     new TodoService(dbs(), new PermissionsService(dbs()), new RealtimeService()),
     new FilesService(dbs(), new PermissionsService(dbs()), new RealtimeService(), new EphemeralTokenService(), makeStorageFixture('').storage),
+    addons,
   );
 
 const svc = buildReadModel(dbs());
@@ -117,6 +126,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   resetTestDb(testDb);
+  isPackingAddonEnabled.mockReturnValue(true);
 });
 
 afterAll(() => {
@@ -213,6 +223,53 @@ describe('getTripSummary shaping', () => {
 });
 
 describe('bundle shaping', () => {
+  it('TRIP-READ-011: disabled packing returns empty projections without reading packing or todos', () => {
+    const { user: owner } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addPackingItem(trip.id, 'Should stay hidden', 1);
+    testDb.prepare("INSERT INTO todo_items (trip_id, name) VALUES (?, 'Should stay hidden too')").run(trip.id);
+    isPackingAddonEnabled.mockReturnValue(false);
+    const packingRead = vi.spyOn(PackingService.prototype, 'listItems');
+    const todoRead = vi.spyOn(TodoService.prototype, 'listItems');
+
+    try {
+      const result = svc.bundle(String(trip.id), { user_id: owner.id }, owner.id) as any;
+      expect(result.packingItems).toEqual([]);
+      expect(result.todoItems).toEqual([]);
+      expect(packingRead).not.toHaveBeenCalled();
+      expect(todoRead).not.toHaveBeenCalled();
+    } finally {
+      packingRead.mockRestore();
+      todoRead.mockRestore();
+    }
+  });
+
+  it('TRIP-READ-012: disabled packing returns an empty summary without calling PackingService', () => {
+    const { user: owner } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addPackingItem(trip.id, 'Should stay hidden', 1);
+    isPackingAddonEnabled.mockReturnValue(false);
+    const packingRead = vi.spyOn(PackingService.prototype, 'listItems');
+
+    try {
+      const result = svc.getTripSummary(trip.id, owner.id) as any;
+      expect(result.packing).toEqual({ items: [], total: 0, checked: 0 });
+      expect(packingRead).not.toHaveBeenCalled();
+    } finally {
+      packingRead.mockRestore();
+    }
+  });
+
+  it('TRIP-READ-013: re-enabling packing restores the existing read projection', () => {
+    const { user: owner } = createUser(testDb);
+    const trip = createTrip(testDb, owner.id);
+    addPackingItem(trip.id, 'Visible again', 1);
+    isPackingAddonEnabled.mockReturnValue(false);
+    expect((svc.getTripSummary(trip.id, owner.id) as any).packing.items).toEqual([]);
+    isPackingAddonEnabled.mockReturnValue(true);
+    expect((svc.getTripSummary(trip.id, owner.id) as any).packing.items.map((item: any) => item.name)).toEqual(['Visible again']);
+  });
+
   it('TRIP-READ-005: keeps the member list a flat array when the roster has no members', () => {
     const { user: owner } = createUser(testDb);
     const trip = createTrip(testDb, owner.id);

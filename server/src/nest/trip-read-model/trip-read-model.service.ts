@@ -10,6 +10,8 @@ import { PlacesService } from '../places/places.service';
 import { TodoService } from '../todo/todo.service';
 import { FilesService } from '../files/files.service';
 import { TripMembersService } from '../trip-members/trip-members.service';
+import { AddonsService } from '../addons/addons.service';
+import { ADDON_IDS } from '../../addons';
 import { withoutFeedToken } from '../trips/trips.service';
 
 /**
@@ -35,6 +37,7 @@ export class TripReadModelService {
     private readonly places: PlacesService,
     private readonly todo: TodoService,
     private readonly files: FilesService,
+    private readonly addons: AddonsService,
   ) {}
 
   private get db() {
@@ -72,7 +75,9 @@ export class TripReadModelService {
 
     // Thread the viewer so another member's private/personal packing items (#858)
     // stay hidden — without it listItems returns the UNFILTERED list.
-    const packingItems = this.packing.listItems(tripId, viewerUserId);
+    const packingItems = this.addons.isAddonEnabled(ADDON_IDS.PACKING)
+      ? this.packing.listItems(tripId, viewerUserId)
+      : [];
     const packing = {
       items: packingItems,
       total: packingItems.length,
@@ -100,14 +105,15 @@ export class TripReadModelService {
   bundle(tripId: string, trip: { user_id: number }, viewerId: number) {
     const { days } = this.days.list(tripId);
     const { owner, members } = this.members.listMembers(tripId, trip.user_id);
+    const packingEnabled = this.addons.isAddonEnabled(ADDON_IDS.PACKING);
     return {
       trip,
       days,
       places: this.places.list(String(tripId), {}),
       // Scope to the requesting member so other members' private packing items
       // (#858) never land in this viewer's offline cache.
-      packingItems: this.packing.listItems(tripId, viewerId),
-      todoItems: this.todo.listItems(tripId),
+      packingItems: packingEnabled ? this.packing.listItems(tripId, viewerId) : [],
+      todoItems: packingEnabled ? this.todo.listItems(tripId) : [],
       budgetItems: this.budget.listBudgetItems(tripId),
       reservations: this.reservations.list(tripId),
       files: this.files.listFiles(tripId, false),

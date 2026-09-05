@@ -4,6 +4,8 @@ import { DatabaseService } from '../database/database.service';
 import type { TripAccess } from '../database/database.service';
 import { PermissionsService } from '../permissions/permissions.service';
 import { PlacePhotoCacheService } from '../place-photos/place-photo-cache.service';
+import { AddonsService } from '../addons/addons.service';
+import { ADDON_IDS } from '../../addons';
 import { publicReservationSql, publicStaySql } from '../reservations/reservation-visibility';
 import type { User } from '../../types';
 import type {
@@ -122,6 +124,7 @@ export class ShareService {
     private readonly dbs: DatabaseService,
     private readonly permissions: PermissionsService,
     private readonly photoCache: PlacePhotoCacheService,
+    private readonly addons: AddonsService,
   ) {}
 
   verifyTripAccess(tripId: string, userId: number) {
@@ -230,10 +233,11 @@ export class ShareService {
       currency: tripRow.currency,
     };
 
+    const packingEnabled = this.addons.isAddonEnabled(ADDON_IDS.PACKING);
     const permissions = {
       share_map: !!shareRow.share_map,
       share_bookings: !!shareRow.share_bookings,
-      share_packing: !!shareRow.share_packing,
+      share_packing: !!shareRow.share_packing && packingEnabled,
       share_budget: !!shareRow.share_budget,
       share_collab: !!shareRow.share_collab,
     };
