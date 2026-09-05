@@ -66,9 +66,12 @@ export function saveSettings(settings: BackupSettings): void {
 }
 
 function autoBackupTimestampMs(filename: string): number | null {
-  // auto-backup-2026-04-27T00-00-00.zip → 2026-04-27T00:00:00
-  const stamp = filename.slice('auto-backup-'.length, -'.zip'.length);
-  const iso = stamp.replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3');
+  // Accept both legacy auto-backup-<timestamp>.zip and the current
+  // auto-backup-<timestamp>-<uuid>.zip. Capture only the timestamp so a UUID
+  // cannot make a fresh archive look stale through the mtime fallback.
+  const match = /^auto-backup-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})(?:-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\.zip$/.exec(filename);
+  if (!match) return null;
+  const iso = match[1].replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3');
   const ms = Date.parse(iso);
   return Number.isNaN(ms) ? null : ms;
 }

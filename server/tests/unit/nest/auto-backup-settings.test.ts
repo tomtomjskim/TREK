@@ -228,6 +228,20 @@ describe('cleanupOldBackups', () => {
     expect(storage.delete).not.toHaveBeenCalled();
   });
 
+  it('parses UUID-suffixed timestamps before falling back to mtimeMs', async () => {
+    const uuid = '123e4567-e89b-12d3-a456-426614174000';
+    const fresh = isoFilename(0).replace('.zip', `-${uuid}.zip`);
+    const old = isoFilename(30).replace('.zip', `-${uuid}.zip`);
+    const storage = storageWith([
+      { key: fresh, mtimeMs: 0 },
+      { key: old, mtimeMs: 0 },
+    ]);
+
+    await cleanupOldBackups(storage, 7, NOW);
+
+    expect(deletedKeys(storage)).toEqual([old]);
+  });
+
   it('malformed filename falls back to mtimeMs: keeps recent file', async () => {
     const storage = storageWith([{ key: 'auto-backup-garbage.zip', mtimeMs: NOW - 1 * DAY }]);
     await cleanupOldBackups(storage, 7, NOW);
