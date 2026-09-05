@@ -72,6 +72,11 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
 
   const handleToggle = () => { if (canMutate) togglePackingItem(tripId, item.id, !item.checked) }
 
+  const handleQuantitySave = async (quantity: number) => {
+    try { await updatePackingItem(tripId, item.id, { quantity }) }
+    catch { toast.error(t('packing.toast.saveError')) }
+  }
+
   const handleSaveName = async () => {
     if (!canMutate) return
     if (!editName.trim()) { setEditing(false); setEditName(isPlaceholder ? '' : item.name); return }
@@ -205,7 +210,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
 
       <div className="packing-row-inline-actions" style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
         {/* Quantity */}
-        {canMutate && <QuantityInput value={item.quantity || 1} onSave={qty => updatePackingItem(tripId, item.id, { quantity: qty })} />}
+        {canMutate && <QuantityInput value={item.quantity || 1} onSave={handleQuantitySave} />}
 
         {/* Weight + Bag (when enabled) */}
         {bagTrackingEnabled && (
@@ -389,7 +394,7 @@ export function ArtikelZeile({ item, tripId, categories, onCategoryChange: _onCa
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '6px 8px' }}>
                     <span style={{ fontSize: 'calc(11px * var(--fs-scale-caption, 1))', fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: 0 }}>{t('packing.quantity')}</span>
-                    <QuantityInput value={item.quantity || 1} onSave={qty => updatePackingItem(tripId, item.id, { quantity: qty })} />
+                    <QuantityInput value={item.quantity || 1} onSave={handleQuantitySave} />
                   </div>
 
                   {bagTrackingEnabled && (

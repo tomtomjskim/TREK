@@ -160,6 +160,17 @@ describe('ArtikelZeile — quantity', () => {
 
     await waitFor(() => expect(body).toMatchObject({ quantity: 3 }))
   })
+
+  it('FE-W5ROW-005b: a failing inline quantity save surfaces a save error', async () => {
+    server.use(http.put('/api/trips/1/packing/1', () => new HttpResponse(null, { status: 500 })))
+    const { container } = setup({ item: buildPackingItem({ id: 1, name: 'Tent', quantity: 1 }) })
+
+    const qty = container.querySelector<HTMLInputElement>('.packing-row-inline-actions input')!
+    fireEvent.change(qty, { target: { value: '3' } })
+    fireEvent.blur(qty)
+
+    await waitFor(() => expect(toastSpy).toHaveBeenCalledWith('Failed to save', 'error', undefined))
+  })
 })
 
 describe('ArtikelZeile — renaming', () => {
