@@ -5,25 +5,21 @@
 
 ## Current baseline
 
-| 기준                    | 현재 값                                                                 |
-| ----------------------- | ----------------------------------------------------------------------- |
-| 애플리케이션 버전       | `3.4.1`                                                                 |
-| v3.4.x 통합 기준 commit | `86d3e9a01c73f0de1aeaa73031353a2ddb3373cd`                              |
-| Vacay hardening 기준    | `37a0784c33f01ab52fd2c84710e3c11f684e0f09`                              |
-| 포크 runtime source     | `7a50356e4cc469ea8cab902739642cf62e8ef24c`                              |
-| 운영 image              | `trek:3.4.1-jsnetworkcorp-7a50356e`                                     |
-| 공식 release 기준       | exact `v3.4.1` tag target `a0994658890eae96624fb9cbe7f55867f047fea2`    |
-| 격리 v4.1.1 중간 후보   | `a55fcccb` (`sync/upstream-v4.1.1`; main/runtime 미반영)                |
-| 공식 최신 검토 target   | exact `v4.2.0` peeled commit `09ce5cb733bb681c992dfd4f029706718aae58cc` |
-| v4.2.0 통합 후보        | `sync/upstream-v4.2.0`; 검증·복원 리허설 후 `main`/runtime 반영 예정   |
+| 기준                     | 현재 값                                                                 |
+| ------------------------ | ----------------------------------------------------------------------- |
+| 애플리케이션 버전        | `4.2.0+jsnetworkcorp.13c4a137`                                          |
+| 공식 release 기준        | exact `v4.2.0` peeled commit `09ce5cb733bb681c992dfd4f029706718aae58cc` |
+| 포크 runtime source      | `13c4a137751c53382a58521434657923e34c5080`                              |
+| 포크 `main` 검증 기준    | `13c4a137`: core CI 10 jobs 성공, Sonar token 미설정으로 Scan만 실패    |
+| 운영 image               | `trek:4.2.0-jsnetworkcorp-13c4a137`                                     |
+| 즉시 code-only rollback  | `trek:4.2.0-jsnetworkcorp-e258a7b8` (동일 schema/fork ledger)            |
+| pre-v4.2 rollback pair   | `trek:3.4.1-jsnetworkcorp-7a50356e` + 배포 직전 stopped-point snapshot  |
 
-현재 runtime은 공식 v3.4.1 통합과 custom version SemVer correctness,
-packing-template 관리자 exact-once/race guard 위에 Vacay 입력 보존·융합
-실패-폐쇄·초대/연도 무결성 hardening, 출처 없는 trip/Vacay 자동 이동 중단과 fusion
-해산 balance 보존과 사용자별 calendar week-start 연결을 적용한 포크 runtime source
-`7a50356e` 기준이다. 이 source는 개인 포크 `main`에 반영됐고 운영 image에 사용된다.
-공식 upstream PR은 수행하지 않았으며 이후의 문서 commit은 runtime contract를 바꾸지
-않는다.
+현재 runtime은 공식 v4.2.0에 공개 공유 장소 메모, keyless OpenFreeMap fallback,
+addon modular gate, restore/session/offline 격리를 적용한 포크 release source
+`13c4a137` 기준이다. 이 source와 후속 테스트·CI 보정은 개인 포크 `main`에 반영됐고,
+운영 image는 검증된 release source로 고정했다. 공식 upstream PR은 수행하지 않았으며
+후속 테스트·문서 commit은 runtime contract를 바꾸지 않는다.
 현재 운영·롤백 상태는 별도 운영 위키가, 코드와 Git 이력은 이 저장소가 source of
 truth다.
 
@@ -40,15 +36,19 @@ truth다.
 - [v4.1.1 integration design](plans/2026-09-01-upstream-v4.1.1-integration-design.md) ·
   [implementation plan](plans/2026-09-01-upstream-v4.1.1-integration.md) ·
   [evidence](plans/2026-09-01-upstream-v4.1.1-integration-evidence.md): unsigned exact tag,
-  159개 conflict, schema 175→200과 포크 변경 보존을 조건부 GO로 관리하는 격리 통합 계약.
-  Process-wide restore quiesce/crash recovery와 sanitized rehearsal 전 main/deploy는 NO-GO
+  159개 conflict, schema 175→200과 포크 변경 보존을 조건부 GO로 관리했던 중간 격리
+  계약. 당시 NO-GO 조건은 후속 v4.2.0 통합에서 충족됐다.
 - [v4.2.0 incremental preflight](plans/2026-09-04-upstream-v4.2.0-incremental-preflight.md):
   2026-09-03 공개된 새 latest tag를 v4.1.1 중간 checkpoint에 증분 통합하기 위한 87 commits,
-  605 files, schema 200→205, 42 conflict 감사와 격리 실행 순서. Direct main/deploy는 NO-GO
+  605 files, schema 200→205, 42 conflict 감사와 격리 실행 순서. 당시 direct landing
+  NO-GO 조건은 아래 landing evidence에서 충족됐다.
 - [v4.2.0 main landing design](plans/2026-09-05-v4.2.0-main-landing-design.md) ·
   [implementation plan](plans/2026-09-05-v4.2.0-main-landing.md): addon surface를
   REST/MCP/desktop/mobile/admin에서 함께 닫고, OpenFreeMap을 유지하며, 이전 image와
   logical-point backup을 한 쌍으로 복원하는 승인된 랜딩 절차
+- [v4.2.0 integration evidence](plans/2026-09-04-upstream-v4.2.0-integration-evidence.md):
+  fork `main` fast-forward/push, 불변 ARM64 image, schema 175→205 migration rehearsal,
+  운영 배포와 rollback pair까지 연결한 최종 증거 원장
 - [v4.1.1 fork preservation matrix](plans/2026-09-01-upstream-v4.1.1-preservation-matrix.md):
   DB, packing privacy, Google 비용, Vacay 데이터 안전, 지도/Fold/calendar, Android와
   Trip/Journey 공개 공유 동작을 새 v4 owner module의 RED/GREEN 증거에 연결하는 누락 방지 원장
@@ -58,8 +58,8 @@ truth다.
   `places.notes` projection/표시, 전체 anonymous DTO exact allowlist, 개인 메모 오표기와
   `share_map=false` 비노출 계약. `0842e229` + `c3b8e18f` local VERIFIED
 - [CARTO basemap runtime diagnosis](plans/2026-09-04-carto-basemap-runtime-diagnosis.md):
-  운영 v3.4.1의 빈 지도 설정이 keyless CARTO 기본값으로 연결되는 원인, 비밀값 비노출
-  운영 집계, 실제 워터마크 재현과 v4.2.0 후보의 encrypted-key/OpenFreeMap fallback 계약
+  이전 운영의 빈 지도 설정이 keyless CARTO 기본값으로 연결되는 원인, 비밀값 비노출
+  운영 집계, 실제 워터마크 재현과 v4.2.0의 encrypted-key/OpenFreeMap fallback 계약
 - [Vacay correctness extraction dossiers](upstream/vacay-correctness-extraction.md):
   최신 공식 Nest 경로에 다시 구현할 데이터 보존 후보와 공식 contract와 충돌하는
   포크 정책 변경을 제출 단위별로 분리한 자료

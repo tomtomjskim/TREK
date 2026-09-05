@@ -44,7 +44,9 @@ rebase하지 않는다.
 `sync/upstream-v4.2.0` 후보는 이 commit을 merge parent로 보존하며, 공식 numeric
 schema 205와 별도 `fork_schema_migrations` ledger를 유지한다. 운영 반영 여부는
 [`v4.2.0 landing evidence`](../plans/2026-09-04-upstream-v4.2.0-integration-evidence.md)의
-deployment section을 source of truth로 삼는다.
+deployment section을 source of truth로 삼는다. 현재 운영 이미지는
+`trek:4.2.0-jsnetworkcorp-13c4a137`이고, 현재 runtime은 같은 source commit
+`13c4a137751c53382a58521434657923e34c5080`에서 나온다.
 
 포크 기능은 [`fork extension manifest`](fork-extension-manifest.md)에 addon,
 provider/config, always-on invariant, instance-only로 분류한다. addon off는 REST/MCP와
@@ -77,7 +79,8 @@ desktop/mobile/admin UI를 함께 닫되 데이터를 지우지 않는다. 보�
 [preservation matrix](../plans/2026-09-01-upstream-v4.1.1-preservation-matrix.md),
 [implementation plan](../plans/2026-09-01-upstream-v4.1.1-integration.md),
 [evidence ledger](../plans/2026-09-01-upstream-v4.1.1-integration-evidence.md)를 따른다.
-이 문서 변경은 현재 v3.4.1 runtime/version을 바꾸지 않는다.
+이 절은 당시 v4.1.1 중간 checkpoint의 판단 기록이다. 해당 NO-GO 조건은 후속 v4.2.0
+landing evidence에서 충족됐으며, 현재 runtime/version 판단에는 그 원장을 우선한다.
 
 ## Official contribution gate
 
