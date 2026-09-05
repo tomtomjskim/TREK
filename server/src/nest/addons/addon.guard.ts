@@ -1,7 +1,18 @@
 import { CanActivate, ExecutionContext, HttpException, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import type { Request } from 'express';
 import { AddonsService } from './addons.service';
 import { REQUIRE_ADDON, type RequireAddonMeta } from './require-addon.decorator';
+
+/**
+ * Request-local proof that the global addon gate already checked this addon.
+ * A symbol keeps the marker out of serialized request data and application
+ * namespaces; the Set also supports a future request that crosses more than
+ * one addon-decorated controller boundary without making route guards query
+ * the same toggle again.
+ */
+export const ADDON_GUARD_PASSED = Symbol('trek:addon-guard-passed');
+type AddonRequest = Request & { [ADDON_GUARD_PASSED]?: Set<string> };
 
 /**
  * Enforces @RequireAddon. Replaces the three hand-written addon guards
@@ -25,9 +36,21 @@ export class AddonGuard implements CanActivate {
       context.getClass(),
     ]);
     if (!meta) return true;
+
+    const req = context.switchToHttp().getRequest<AddonRequest>();
+    if (req[ADDON_GUARD_PASSED]?.has(meta.addonId)) return true;
+
     if (!this.addons.isAddonEnabled(meta.addonId)) {
       throw new HttpException({ error: `${meta.label} addon is not enabled` }, 404);
     }
+
+    if (!req[ADDON_GUARD_PASSED]) {
+      Object.defineProperty(req, ADDON_GUARD_PASSED, {
+        configurable: true,
+        value: new Set<string>(),
+      });
+    }
+    req[ADDON_GUARD_PASSED]!.add(meta.addonId);
     return true;
   }
 }

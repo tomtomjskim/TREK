@@ -30,9 +30,11 @@ import { ReservationImportController } from '../../../src/nest/reservation-impor
 
 /** A context whose handler/class carry the decorator under test. */
 function ctxFor(handler: object, cls: object = class {}): ExecutionContext {
+  const req: Record<PropertyKey, unknown> = {};
   return {
     getHandler: () => handler,
     getClass: () => cls,
+    switchToHttp: () => ({ getRequest: () => req }),
   } as unknown as ExecutionContext;
 }
 
@@ -91,6 +93,22 @@ describe('AddonGuard', () => {
     expect(thrown(() => new AddonGuard(svc, new Reflector()).canActivate(ctxFor(handler, cls))))
       .toEqual({ status: 404, body: { error: 'AirTrail addon is not enabled' } });
     expect(svc.isAddonEnabled).toHaveBeenCalledWith(ADDON_IDS.AIRTRAIL);
+  });
+
+  it('ADDON-GUARD-007: a request marker prevents a declared route guard from repeating the lookup', () => {
+    const cls = decorated(ADDON_IDS.PACKING, 'Packing');
+    const req: Record<PropertyKey, unknown> = {};
+    const ctx = {
+      getHandler: () => () => {},
+      getClass: () => cls,
+      switchToHttp: () => ({ getRequest: () => req }),
+    } as unknown as ExecutionContext;
+    const svc = addons(true);
+    const guard = new AddonGuard(svc, new Reflector());
+
+    expect(guard.canActivate(ctx)).toBe(true);
+    expect(guard.canActivate(ctx)).toBe(true);
+    expect(svc.isAddonEnabled).toHaveBeenCalledTimes(1);
   });
 });
 

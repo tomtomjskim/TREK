@@ -57,6 +57,7 @@ import { OidcModule } from './oidc/oidc.module';
 import { OauthModule } from './oauth/oauth.module';
 import { AdminModule } from './admin/admin.module';
 import { AddonsModule } from './addons/addons.module';
+import { AddonGuard } from './addons/addon.guard';
 import { AuditModule } from './audit/audit.module';
 import { PermissionsModule } from './permissions/permissions.module';
 import { PluginsModule } from './plugins/plugins.module';
@@ -77,6 +78,12 @@ import { RealtimeGatewayModule } from './realtime/realtime-gateway.module';
 @Module({
   imports: [AppConfigModule, DatabaseModule, RealtimeModule, RealtimeGatewayModule, SchedulingModule, McpModule.forRoot({ accessPolicy: trekMcpAccessPolicy, validateAccess: trekMcpValidateAccess }), HealthModule, PlatformModule, McpTransportModule, WeatherModule, PublicApiModule, HelpModule, AirportsModule, ConfigModule, SystemNoticesModule, GeoModule, MapsModule, PlaceEnrichmentModule, CategoriesModule, TagsModule, NotificationsModule, AtlasModule, VacayModule, PackingModule, TodoModule, BudgetModule, ReservationsModule, DaysModule, DayNotesModule, AccommodationsModule, AssignmentsModule, PlacesModule, TripsModule, CollabModule, FilesModule, PhotosModule, MemoriesModule, AirtrailModule, JourneyModule, CollectionsModule, ShareModule, TripInviteModule, TransitModule, FeedsModule, SettingsModule, StorageModule, BackupModule, AuthModule, OidcModule, OauthModule, AdminModule, AddonsModule, AuditModule, PermissionsModule, PluginsModule, BookingImportModule, ReservationImportModule, LlmParseModule, ManagedExtModule],
   providers: [
+    // Addon availability is deliberately first. It must hide disabled addon
+    // routes with the common 404 before auth/MFA work can reveal that the route
+    // exists. Route-level AddonGuard instances reuse its request-local marker,
+    // so existing controller guard declarations keep their semantics without
+    // repeating the addon toggle query.
+    { provide: APP_GUARD, useClass: AddonGuard },
     // Default-deny: a route is authenticated unless it carries @Public() or
     // @OptionalAuth(), or declares its own @UseGuards chain. Protection used to
     // be opt-in, which made a forgotten guard a silent bypass instead of an error.

@@ -57,7 +57,7 @@ vi.mock('../../src/websocket', () => ({ broadcast: vi.fn(), broadcastToUser: vi.
 import { buildApp } from '../../src/bootstrap';
 import { createTables } from '../../src/db/schema';
 import { runMigrations } from '../../src/db/migrationRunner';
-import { resetTestDb, resetRateLimits } from '../helpers/test-db';
+import { resetTestDb, resetRateLimits, setAddonEnabled } from '../helpers/test-db';
 import { createUser, createAdmin, createUserWithMfa, createInviteToken, createTrip, createBudgetItem, createJourney, createJourneyEntry, addJourneyContributor, addTripPhoto, createCategory, createTag, createTodoItem, createMcpToken, createBucketListItem, createVisitedCountry, createCollabNote, addTripMember } from '../helpers/factories';
 import { authCookie, authHeader } from '../helpers/auth';
 
@@ -507,6 +507,59 @@ describe('Forced MFA policy', () => {
 
     const res = await request(app).get(`/api/trips/${trip.id}/budget`).set(authHeader(user.id));
     expect(res.status).toBe(200);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Global addon gate ordering
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Global addon gate ordering', () => {
+  const addonRoutes = [
+    ['/api/trips/1/packing', 'packing', 'Packing'],
+    ['/api/addons/vacay/plan', 'vacay', 'Vacay'],
+  ] as const;
+
+  it.each(addonRoutes)('AUTH-ADDON-001 — disabled %s is 404 before auth for anonymous callers', async (path, addonId, label) => {
+    setAddonEnabled(testDb, addonId, false);
+
+    const res = await request(app).get(path);
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: `${label} addon is not enabled` });
+  });
+
+  it.each(addonRoutes)('AUTH-ADDON-002 — disabled %s is 404 before auth/MFA DB work for authenticated non-MFA callers', async (path, addonId, label) => {
+    const { user } = createUser(testDb);
+    setAddonEnabled(testDb, addonId, false);
+    testDb.prepare("INSERT INTO app_settings (key, value) VALUES ('require_mfa', 'true')").run();
+
+    const prepareSpy = vi.spyOn(testDb, 'prepare');
+    try {
+      const res = await request(app).get(path).set(authHeader(user.id));
+
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: `${label} addon is not enabled` });
+      const sql = prepareSpy.mock.calls.map(([statement]) => String(statement)).join('\n');
+      expect(sql).not.toMatch(/FROM users/i);
+      expect(sql).not.toMatch(/FROM app_settings/i);
+    } finally {
+      prepareSpy.mockRestore();
+    }
+  });
+
+  it.each(addonRoutes)('AUTH-ADDON-003 — enabled %s preserves anonymous 401 and require_mfa 403', async (path, addonId) => {
+    setAddonEnabled(testDb, addonId, true);
+
+    const anonymous = await request(app).get(path);
+    expect(anonymous.status).toBe(401);
+    expect(anonymous.body.code).toBe('AUTH_REQUIRED');
+
+    const { user } = createUser(testDb);
+    testDb.prepare("INSERT INTO app_settings (key, value) VALUES ('require_mfa', 'true')").run();
+    const authenticated = await request(app).get(path).set(authHeader(user.id));
+    expect(authenticated.status).toBe(403);
+    expect(authenticated.body.code).toBe('MFA_REQUIRED');
   });
 });
 
