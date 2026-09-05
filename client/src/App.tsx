@@ -124,6 +124,17 @@ function ProtectedRoute({ children, adminRequired = false, addonId }: ProtectedR
     return <Navigate to="/dashboard" replace />
   }
 
+  if (addonId && !addonStore.loaded) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 border-4 border-slate-200 border-t-slate-900 rounded-full animate-spin"></div>
+          <p className="text-slate-500 text-sm">{t('common.loading')}</p>
+        </div>
+      </div>
+    )
+  }
+
   if (addonId && addonStore.loaded && !addonStore.isEnabled(addonId)) {
     return <Navigate to="/dashboard" replace />
   }
@@ -489,7 +500,7 @@ export default function App() {
           <Route
             path="/vacay"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute addonId="vacay">
                 <ViewportRoute phone={MVacayScreen} desktop={VacayPage} />
               </ProtectedRoute>
             }

@@ -478,6 +478,33 @@ describe('TripPlannerPage', () => {
         expect(screen.getByTestId('packing-list-panel')).toBeInTheDocument();
       });
     });
+
+    it('keeps the packing and todo panels out of the DOM when packing is disabled, even if the session asked for Lists', async () => {
+      server.use(
+        http.get('/api/addons', () =>
+          HttpResponse.json({ addons: [] })
+        )
+      );
+
+      sessionStorage.setItem('trip-tab-42', 'listen');
+
+      vi.useFakeTimers();
+
+      seedTripStore({ id: 42 });
+
+      renderPlannerPage(42);
+
+      act(() => { vi.runAllTimers(); });
+
+      vi.useRealTimers();
+
+      expect(screen.queryByTestId('packing-list-panel')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('todo-list-panel')).not.toBeInTheDocument();
+
+      await waitFor(() => {
+        expect(sessionStorage.getItem('trip-tab-42')).toBe('plan');
+      });
+    });
   });
 
   describe('FE-PAGE-PLANNER-012: Costs tab renders CostsPanel', () => {
@@ -1616,6 +1643,35 @@ describe('TripPlannerPage', () => {
           await act(async () => { fireEvent.click(closeButtons[0]); });
         }
       }
+
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 });
+    });
+  });
+
+  describe('FE-PAGE-PLANNER-052: Mobile Lists tab stays detached when packing is disabled', () => {
+    it('does not mount packing or todo panels on mobile when the addon feed disables packing', async () => {
+      server.use(
+        http.get('/api/addons', () =>
+          HttpResponse.json({ addons: [] })
+        )
+      );
+
+      sessionStorage.setItem('trip-tab-42', 'listen');
+      vi.useFakeTimers();
+      Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 375 });
+
+      seedTripStore({ id: 42 });
+
+      renderPlannerPage(42);
+      act(() => { vi.runAllTimers(); });
+      vi.useRealTimers();
+
+      expect(screen.queryByTestId('packing-list-panel')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('todo-list-panel')).not.toBeInTheDocument();
+
+      await waitFor(() => {
+        expect(sessionStorage.getItem('trip-tab-42')).toBe('plan');
+      });
 
       Object.defineProperty(window, 'innerWidth', { writable: true, configurable: true, value: 1024 });
     });

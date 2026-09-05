@@ -237,6 +237,25 @@ describe('MTripShell', () => {
     expect(screen.queryByTestId('places-browser')).not.toBeInTheDocument()
   })
 
+  it('FE-MOB-SHELL-017b: a stored listen tab falls back to plan when packing is not in TRIP_TABS', () => {
+    const { planner } = renderShell({
+      activeTab: 'listen',
+      TRIP_TABS: [
+        { id: 'plan', label: 'Plan' },
+        { id: 'transports', label: 'Transport' },
+        { id: 'buchungen', label: 'Bookings' },
+        { id: 'finanzplan', label: 'Budget' },
+        { id: 'dateien', label: 'Files' },
+        { id: 'collab', label: 'Collaboration' },
+      ],
+    } as Partial<TripPlanner>)
+
+    expect(shellApi.trTab).toBe('plan')
+    expect(screen.getByTestId('plan-timeline')).toBeInTheDocument()
+    expect(screen.queryByTestId('tab-panel')).not.toBeInTheDocument()
+    expect(planner.handleTabChange).not.toHaveBeenCalledWith('listen')
+  })
+
   it('FE-MOB-SHELL-018: day chips render weekday + date and mark the active one', () => {
     renderShell()
     const chip = screen.getByRole('button', { name: 'Sat 2' })

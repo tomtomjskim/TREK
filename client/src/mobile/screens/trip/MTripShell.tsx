@@ -287,14 +287,6 @@ export default function MTripShell({
   const openSheet = (id: string, payload?: unknown) => setSheet({ id, payload })
   const closeSheet = () => setSheet(null)
 
-  const shell: MTripShellApi = {
-    view, mode, trTab, setTrTab, setTravelMode, toggleView, browseFromEdit,
-    sheet, openSheet, closeSheet,
-    listsTab, setListsTab, collabTab, setCollabTab,
-    transportsCompact, bookingsCompact,
-    addExpenseSignal, exportCostsCsvSignal, uploadFilesSignal, openFilesTrashSignal,
-  }
-
   // Splash — same gate as the desktop page, in the mobile design language.
   if (planner.isLoading || !planner.splashDone) {
     return <MTripLoadingSplash title={trip?.title || ''} />
@@ -302,8 +294,16 @@ export default function MTripShell({
   if (!trip) return null
 
   const enabledTabIds = new Set(planner.TRIP_TABS.map(tab => tab.id))
+  const safeTrTab = enabledTabIds.has(trTab) ? trTab : 'plan'
   const dockTabs = DOCK_TABS.filter(d => enabledTabIds.has(d.id))
   const tabLabel = (id: string) => planner.TRIP_TABS.find(tab => tab.id === id)?.label ?? id
+  const shell: MTripShellApi = {
+    view, mode, trTab: safeTrTab, setTrTab, setTravelMode, toggleView, browseFromEdit,
+    sheet, openSheet, closeSheet,
+    listsTab, setListsTab, collabTab, setCollabTab,
+    transportsCompact, bookingsCompact,
+    addExpenseSignal, exportCostsCsvSignal, uploadFilesSignal, openFilesTrashSignal,
+  }
 
   const onDayChipTap = (dayId: number) => {
     if (dayId === planner.selectedDayId) openSheet('day', { dayId })
@@ -324,7 +324,7 @@ export default function MTripShell({
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-[color:var(--m-bg)] bg-[image:var(--m-scr)] text-m-ink">
       {/* ── Content layers ─────────────────────────────────────────────── */}
-      {trTab === 'plan' && (
+      {safeTrTab === 'plan' && (
         <div className="absolute inset-0">
           <MapArea planner={planner} shell={shell} />
           {view === 'plan' && mode !== 'browse' && (
@@ -339,9 +339,9 @@ export default function MTripShell({
           )}
         </div>
       )}
-      {trTab !== 'plan' && (
+      {safeTrTab !== 'plan' && (
         <div className="absolute inset-0 z-30 bg-[color:var(--m-bg)] bg-[image:var(--m-scr)]">
-          <TabPanel planner={planner} shell={shell} tab={trTab} />
+          <TabPanel planner={planner} shell={shell} tab={safeTrTab} />
         </div>
       )}
 
@@ -385,7 +385,7 @@ export default function MTripShell({
           <ChevronLeft size={19} strokeWidth={2.2} />
         </MIconBtn>
 
-        {trTab === 'plan' && (
+        {safeTrTab === 'plan' && (
           <GlassSegment>
             {([
               { value: 'go' as const, label: t('mobileTrip.travel') },
@@ -406,7 +406,7 @@ export default function MTripShell({
           </GlassSegment>
         )}
 
-        {trTab === 'transports' && (
+        {safeTrTab === 'transports' && (
           <div className="absolute left-[52px] right-2 top-1/2 flex -translate-y-1/2 items-center justify-center gap-[7px]">
             <PrimaryPill
               label={t('transport.addTransport')}
@@ -431,7 +431,7 @@ export default function MTripShell({
           </div>
         )}
 
-        {trTab === 'buchungen' && (
+        {safeTrTab === 'buchungen' && (
           <div className="absolute left-[52px] right-2 top-1/2 flex -translate-y-1/2 items-center justify-center gap-[7px]">
             <PrimaryPill
               label={t('mobileTrip.newReservation')}
@@ -446,7 +446,7 @@ export default function MTripShell({
           </div>
         )}
 
-        {trTab === 'finanzplan' && (
+        {safeTrTab === 'finanzplan' && (
           <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-[7px]">
             <PrimaryPill label={t('costs.addExpense')} onClick={() => setAddExpenseSignal(s => s + 1)} />
             <MIconBtn ariaLabel={t('budget.exportCsv')} onClick={() => setExportCostsCsvSignal(s => s + 1)} size={40} className="text-m-muted backdrop-blur-[24px] backdrop-saturate-[1.7]">
@@ -455,7 +455,7 @@ export default function MTripShell({
           </div>
         )}
 
-        {trTab === 'listen' && (
+        {safeTrTab === 'listen' && (
           <GlassSegment>
             {([
               { value: 'packing' as const, label: t('todo.subtab.packing'), count: `${packedCount}/${packingItems.length}` },
@@ -478,7 +478,7 @@ export default function MTripShell({
           </GlassSegment>
         )}
 
-        {trTab === 'collab' && (
+        {safeTrTab === 'collab' && (
           <GlassSegment>
             {([
               { value: 'chat' as const, label: t('collab.tabs.chat') },
@@ -499,7 +499,7 @@ export default function MTripShell({
           </GlassSegment>
         )}
 
-        {trTab === 'dateien' && (
+        {safeTrTab === 'dateien' && (
           <div className="absolute left-1/2 top-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-[7px]">
             <PrimaryPill icon={<Upload size={13} strokeWidth={2.2} />} label={t('common.upload')} onClick={() => setUploadFilesSignal(s => s + 1)} />
             <MIconBtn ariaLabel={t('files.trash')} onClick={() => setOpenFilesTrashSignal(s => s + 1)} size={40} className="text-m-muted backdrop-blur-[24px] backdrop-saturate-[1.7]">
@@ -512,8 +512,8 @@ export default function MTripShell({
             not in the dock, so nothing was lit up there either, and the screen
             gave no clue which plugin was open. Same treatment as the others, from
             the tab entry the planner already builds (id, label, icon). */}
-        {trTab.startsWith('plugin:') && (() => {
-          const tab = planner.TRIP_TABS.find(x => x.id === trTab)
+        {safeTrTab.startsWith('plugin:') && (() => {
+          const tab = planner.TRIP_TABS.find(x => x.id === safeTrTab)
           if (!tab) return null
           const Icon = tab.icon
           return (
@@ -526,7 +526,7 @@ export default function MTripShell({
           )
         })()}
 
-        {trTab === 'plan' ? (
+        {safeTrTab === 'plan' ? (
           <MIconBtn
             ariaLabel={view === 'plan' ? t('mobileTrip.mapView') : t('mobileTrip.listView')}
             onClick={toggleView}
@@ -542,7 +542,7 @@ export default function MTripShell({
       {/* ── Bottom dock (replaces the global bottom nav on this screen) ── */}
       <nav className="absolute left-4 right-4 z-40 flex h-[62px] items-center justify-around rounded-[31px] border border-[color:var(--m-gbr)] bg-[color:var(--m-glass)] px-[14px] shadow-[0_16px_44px_-14px_rgba(0,0,0,.35)] backdrop-blur-[30px] backdrop-saturate-[1.8] bottom-[calc(env(safe-area-inset-bottom,0px)+12px)]">
         {dockTabs.map(({ id, icon: Icon }) => {
-          const active = trTab === id
+          const active = safeTrTab === id
           return (
             <button
               key={id}

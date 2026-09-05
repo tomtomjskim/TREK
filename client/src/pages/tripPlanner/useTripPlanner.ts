@@ -83,10 +83,10 @@ export function useTripPlanner() {
     toast.info(t('undo.done', { action: label ?? '' }))
   }, [undo, lastActionLabel, toast])
 
-  const [enabledAddons, setEnabledAddons] = useState<Record<string, boolean>>({ packing: true, budget: true, documents: true, collab: false })
-  // The values above are an optimistic guess until the addon feed answers. The
-  // tab guard below waits for this before evicting anything, so a tab we were
-  // asked to open ('collab' in particular, guessed off) survives the gap.
+  const [enabledAddons, setEnabledAddons] = useState<Record<string, boolean>>({ packing: false, budget: false, documents: false, collab: false })
+  // Addon-gated tabs stay dark until the feed confirms them. The hook still
+  // tolerates a stale stored tab while loading, but it no longer paints the
+  // packing/todo tree optimistically and then tears it back down a frame later.
   const [addonsLoaded, setAddonsLoaded] = useState<boolean>(false)
   const [collabFeatures, setCollabFeatures] = useState<{ chat: boolean; notes: boolean; polls: boolean; whatsnext: boolean }>({ chat: true, notes: true, polls: true, whatsnext: true })
   const [tripAccommodations, setTripAccommodations] = useState<Accommodation[]>([])

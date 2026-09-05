@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { delay, http, HttpResponse } from 'msw';
 import { server } from '../../../tests/helpers/msw/server';
 import { useAuthStore } from '../../store/authStore';
+import { useAddonStore } from '../../store/addonStore';
 import { useTripStore } from '../../store/tripStore';
 import { usePermissionsStore } from '../../store/permissionsStore';
 import { resetAllStores, seedStore } from '../../../tests/helpers/store';
@@ -74,6 +75,11 @@ beforeEach(() => {
   );
   seedStore(useAuthStore, { user: ownerUser, isAuthenticated: true });
   seedStore(useTripStore, { trip: buildTrip({ id: 1, title: 'Test Trip' }) });
+  seedStore(useAddonStore, {
+    addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+    bagTracking: false,
+    loaded: true,
+  });
   addToast = vi.fn<AddToast>(() => 0);
   window.__addToast = addToast;
 });
@@ -343,6 +349,11 @@ describe('TripMembersModal', () => {
     const user = userEvent.setup();
     seedStore(usePermissionsStore, { permissions: { share_manage: 'trip_owner' } });
     seedStore(useTripStore, { trip: buildTrip({ id: 1, user_id: ownerUser.id }) });
+    seedStore(useAddonStore, {
+      addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+      bagTracking: false,
+      loaded: true,
+    });
 
     let postedPerms: Record<string, unknown> | null = null;
     server.use(
@@ -365,14 +376,36 @@ describe('TripMembersModal', () => {
     render(<TripMembersModal {...defaultProps} />);
     // Wait for the share section to load
     await screen.findByText('Public Link');
-    // Click the "Packing" permission pill to toggle it on
-    const packingBtn = await screen.findByText('Packing');
-    await user.click(packingBtn);
+    const bookingsBtn = await screen.findByText('Bookings');
+    await user.click(bookingsBtn);
 
     await waitFor(() => {
       expect(postedPerms).not.toBeNull();
-      expect(postedPerms).toMatchObject({ share_packing: true });
+      expect(postedPerms).toMatchObject({ share_bookings: false });
     });
+  });
+
+  it('FE-COMP-MEMBERS-021b: packing share is hidden when the packing addon is disabled', async () => {
+    seedStore(usePermissionsStore, { permissions: { share_manage: 'trip_owner' } });
+    seedStore(useTripStore, { trip: buildTrip({ id: 1, user_id: ownerUser.id }) });
+    seedStore(useAddonStore, { addons: [], bagTracking: false, loaded: true });
+
+    render(<TripMembersModal {...defaultProps} />);
+    await screen.findByText('Public Link');
+
+    expect(screen.queryByText('Packing')).not.toBeInTheDocument();
+    expect(screen.getByText('Bookings')).toBeInTheDocument();
+  });
+
+  it('FE-COMP-MEMBERS-021c: packing share stays hidden until the addon feed has loaded', async () => {
+    seedStore(usePermissionsStore, { permissions: { share_manage: 'trip_owner' } });
+    seedStore(useTripStore, { trip: buildTrip({ id: 1, user_id: ownerUser.id }) });
+    seedStore(useAddonStore, { addons: [], bagTracking: false, loaded: false });
+
+    render(<TripMembersModal {...defaultProps} />);
+    await screen.findByText('Public Link');
+
+    expect(screen.queryByText('Packing')).not.toBeInTheDocument();
   });
 
   // ── Member management (022-025) ────────────────────────────────────────────
@@ -589,13 +622,18 @@ describe('TripMembersModal', () => {
   it('FE-COMP-MEMBERS-034: a failing permission update is reported', async () => {
     const user = userEvent.setup();
     asShareOwner();
+    seedStore(useAddonStore, {
+      addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+      bagTracking: false,
+      loaded: true,
+    });
     server.use(
       http.get('/api/trips/1/share-link', () => HttpResponse.json({ token: 'tok77' })),
       http.post('/api/trips/1/share-link', () => HttpResponse.json({}, { status: 500 })),
     );
     render(<TripMembersModal {...defaultProps} />);
 
-    await user.click(await screen.findByText('Packing'));
+    await user.click(await screen.findByText('Bookings'));
 
     await waitFor(() => expect(addToast).toHaveBeenCalledWith('Could not create link', 'error', undefined));
   });

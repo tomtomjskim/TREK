@@ -16,6 +16,7 @@ import AdminStoragePanel from '../components/Admin/storage/AdminStoragePanel'
 import { Users, Map, Briefcase, Shield, FileText, SlidersHorizontal, UserCog, Puzzle, Blocks, Settings as SettingsIcon, Bell, Database, ScrollText, KeyRound, GitBranch, Bug, HardDrive } from 'lucide-react'
 import PageSidebar, { type PageSidebarTab } from '../components/Layout/PageSidebar'
 import { useAdmin } from './admin/useAdmin'
+import { useAddonStore } from '../store/addonStore'
 import AdminUpdateBanner from './admin/AdminUpdateBanner'
 import AdminStatCard from './admin/AdminStatCard'
 import AdminUsersTab from './admin/AdminUsersTab'
@@ -35,6 +36,7 @@ function AdminPageDesktop(): React.ReactElement {
   // Page = wiring container: all admin data slices + handlers live in the hook,
   // each tab/section renders from a dedicated sub-component.
   const admin = useAdmin()
+  const packingEnabled = useAddonStore((s) => s.isEnabled('packing'))
   const {
     demoMode, mcpEnabled, devMode, managed, toast,
     activeTab, setActiveTab, stats,
@@ -149,7 +151,7 @@ function AdminPageDesktop(): React.ReactElement {
 
           {activeTab === 'config' && (
             <div className="space-y-6">
-              <PackingTemplateManager />
+              {packingEnabled && <PackingTemplateManager />}
               <CategoryManager />
             </div>
           )}

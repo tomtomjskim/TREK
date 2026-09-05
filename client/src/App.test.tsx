@@ -293,6 +293,28 @@ describe('ProtectedRoute — admin role check', () => {
     renderApp('/admin')
     await waitFor(() => expect(screen.getByText('Admin')).toBeInTheDocument())
   })
+
+  it('FE-COMP-APP-011b: /vacay redirects away when the VACAY addon is disabled', async () => {
+    seedAuth({
+      isAuthenticated: true,
+      user: buildUser({ role: 'admin' }),
+    })
+    useAddonStore.setState({ addons: [], bagTracking: false, loaded: true })
+    renderApp('/vacay')
+    await waitFor(() => expect(screen.getByText('Dashboard')).toBeInTheDocument())
+    expect(screen.queryByText('Vacay')).not.toBeInTheDocument()
+  })
+
+  it('FE-COMP-APP-011c: /vacay stays in a loading state until the addon feed has loaded', () => {
+    seedAuth({
+      isAuthenticated: true,
+      user: buildUser({ role: 'admin' }),
+    })
+    useAddonStore.setState({ addons: [], bagTracking: false, loaded: false })
+    renderApp('/vacay')
+    expect(document.querySelector('.animate-spin')).toBeInTheDocument()
+    expect(screen.queryByText('Vacay')).not.toBeInTheDocument()
+  })
 })
 
 // ── Public routes ──────────────────────────────────────────────────────────────

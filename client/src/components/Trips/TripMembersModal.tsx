@@ -5,6 +5,7 @@ import { useToast } from '../shared/Toast'
 import { useAuthStore } from '../../store/authStore'
 import { useCanDo } from '../../store/permissionsStore'
 import { useTripStore } from '../../store/tripStore'
+import { useAddonStore } from '../../store/addonStore'
 import { Crown, UserMinus, UserPlus, Users, LogOut, Link2, Trash2, Copy, Check, UserRound, Pencil, Plus } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { getApiErrorMessage } from '../../types'
@@ -40,6 +41,7 @@ function ShareLinkSection({ tripId, t }: { tripId: number; t: (key: string, para
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
   const [perms, setPerms] = useState({ share_map: true, share_bookings: true, share_packing: false, share_budget: false, share_collab: false })
+  const packingEnabled = useAddonStore((s) => s.loaded && s.isEnabled('packing'))
   const toast = useToast()
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -102,10 +104,9 @@ function ShareLinkSection({ tripId, t }: { tripId: number; t: (key: string, para
         {[
           { key: 'share_map', label: t('share.permMap'), always: true },
           { key: 'share_bookings', label: t('share.permBookings') },
-          { key: 'share_packing', label: t('share.permPacking') },
           { key: 'share_budget', label: t('share.permBudget') },
           { key: 'share_collab', label: t('share.permCollab') },
-        ].map(opt => (
+        ].filter(opt => opt.key !== 'share_packing' || packingEnabled).map(opt => (
           <button type="button" key={opt.key} onClick={() => !opt.always && handleUpdatePerms(opt.key, !perms[opt.key])}
             style={{
               display: 'flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20,

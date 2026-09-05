@@ -205,6 +205,11 @@ describe('MAdmin', () => {
   });
 
   it('FE-MOB-ADMIN-008: every remaining section is reachable from the dropdown', async () => {
+    useAddonStore.setState({
+      addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+      bagTracking: false,
+      loaded: true,
+    });
     renderAdmin();
     await waitFor(() => expect(screen.getByText('alice')).toBeInTheDocument());
 
@@ -226,6 +231,17 @@ describe('MAdmin', () => {
 
     await openSection('Backup');
     expect(screen.getByTestId('backup-panel')).toBeInTheDocument();
+  });
+
+  it('FE-MOB-ADMIN-008b: packing template manager stays hidden when the packing addon is disabled', async () => {
+    useAddonStore.setState({ addons: [], bagTracking: false, loaded: true });
+    renderAdmin();
+    await waitFor(() => expect(screen.getByText('alice')).toBeInTheDocument());
+
+    await openSection('Personalization');
+
+    expect(screen.queryByTestId('packing-templates')).not.toBeInTheDocument();
+    expect(screen.getByTestId('category-manager')).toBeInTheDocument();
   });
 
   it('FE-MOB-ADMIN-009: the audit and GitHub panels get the server timezone and prerelease flag', async () => {

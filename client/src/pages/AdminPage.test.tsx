@@ -6,6 +6,7 @@ import { fireEvent, render, screen, waitFor, within } from '../../tests/helpers/
 import { resetAllStores, seedStore } from '../../tests/helpers/store';
 import { ToastContainer } from '../components/shared/Toast';
 import { useAuthStore } from '../store/authStore';
+import { useAddonStore } from '../store/addonStore';
 import AdminPage from './AdminPage';
 
 // Mock heavy sub-panels to focus on page-level concerns
@@ -209,11 +210,29 @@ describe('AdminPage', () => {
 
       expect(screen.getByTestId('category-manager')).toBeInTheDocument();
     });
+
+    it('hides the packing template manager when the packing addon is disabled', async () => {
+      seedStore(useAuthStore, { isAuthenticated: true, user: buildAdmin() });
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: true });
+      render(<AdminPage />);
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /^users$/i })).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /personalization/i }));
+
+      expect(screen.queryByTestId('packing-template-manager')).not.toBeInTheDocument();
+      expect(screen.getByTestId('category-manager')).toBeInTheDocument();
+    });
   });
 
   describe('FE-PAGE-ADMIN-008: Addons tab renders AddonManager', () => {
     it('clicking Addons tab shows addon-manager', async () => {
       seedStore(useAuthStore, { isAuthenticated: true, user: buildAdmin() });
+      useAddonStore.setState({
+        addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+        bagTracking: false,
+        loaded: true,
+      });
       render(<AdminPage />);
 
       await waitFor(() => expect(screen.getByRole('button', { name: /^users$/i })).toBeInTheDocument());

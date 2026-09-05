@@ -789,7 +789,7 @@ function TripPlannerPageDesktop(): React.ReactElement | null {
           </div>
         )}
 
-        {activeTab === 'listen' && (
+        {activeTab === 'listen' && enabledAddons.packing && (
           <div style={{ height: '100%', overflowY: 'auto', overscrollBehavior: 'contain', width: '100%', paddingBottom: 'var(--bottom-nav-h)' }}>
             <ListsContainer tripId={tripId} packingItems={packingItems} todoItems={todoItems} />
           </div>

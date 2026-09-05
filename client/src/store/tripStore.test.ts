@@ -18,6 +18,7 @@ import {
 } from '../../tests/helpers/factories';
 import { offlineDb } from '../db/offlineDb';
 import { setForcedOffline } from '../sync/networkMode';
+import { useAddonStore } from './addonStore';
 import { useTripStore } from './tripStore';
 
 /** Every cache table loadTrip reads from, so one test can never see another's writes. */
@@ -199,6 +200,40 @@ describe('tripStore', () => {
       expect(state.reservations).toEqual([]);
       expect(state.files).toEqual([]);
       expect(state.error).toBeNull();
+    });
+
+    it('FE-TSTORE-005b: packing and todo failures stay non-fatal when the addon feed disables packing', async () => {
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: true });
+      let packingCalls = 0;
+      let todoCalls = 0;
+      server.use(
+        http.get('/api/trips/1', () => HttpResponse.json({ trip: buildTrip({ id: 1, title: 'Paris' }) })),
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 500, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => {
+          packingCalls += 1;
+          return HttpResponse.json({ error: 'packing disabled' }, { status: 404 });
+        }),
+        http.get('/api/trips/1/todo', () => {
+          todoCalls += 1;
+          return HttpResponse.json({ error: 'todo disabled' }, { status: 404 });
+        }),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/tags', () => HttpResponse.json({ tags: [] })),
+        http.get('/api/categories', () => HttpResponse.json({ categories: [] })),
+      );
+
+      await useTripStore.getState().loadTrip(1);
+
+      const state = useTripStore.getState();
+      expect(state.trip?.title).toBe('Paris');
+      expect(state.packingItems).toEqual([]);
+      expect(state.todoItems).toEqual([]);
+      expect(state.error).toBeNull();
+      expect(packingCalls).toBe(0);
+      expect(todoCalls).toBe(0);
     });
 
     it('FE-TSTORE-006: falls back to the cached tags and categories when their endpoints fail', async () => {

@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { StoreApi } from 'zustand'
 import { tripsApi, tagsApi, categoriesApi } from '../api/client'
 import { offlineDb } from '../db/offlineDb'
+import { useAddonStore } from './addonStore'
 import { tripRepo } from '../repo/tripRepo'
 import { dayRepo } from '../repo/dayRepo'
 import { placeRepo } from '../repo/placeRepo'
@@ -36,6 +37,10 @@ import type { TodoSlice } from './slices/todoSlice'
 import type { BudgetSlice } from './slices/budgetSlice'
 import type { ReservationsSlice } from './slices/reservationsSlice'
 import type { FilesSlice } from './slices/filesSlice'
+
+function isNotFoundError(err: unknown): boolean {
+  return (err as { response?: { status?: number } }).response?.status === 404
+}
 
 export interface TripStoreState
   extends PlacesSlice,
@@ -130,12 +135,26 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
     get().resetTrip()
     set({ isLoading: true, error: null })
     try {
+      const addonStore = useAddonStore.getState()
+      const packingLoadedAndDisabled = addonStore.loaded && !addonStore.isEnabled('packing')
+      const packingPromise = packingLoadedAndDisabled
+        ? Promise.resolve({ items: [] as PackingItem[] })
+        : packingRepo.list(tripId).catch((err: unknown) => {
+            if (isNotFoundError(err)) return { items: [] as PackingItem[] }
+            throw err
+          })
+      const todoPromise = packingLoadedAndDisabled
+        ? Promise.resolve({ items: [] as TodoItem[] })
+        : todoRepo.list(tripId).catch((err: unknown) => {
+            if (isNotFoundError(err)) return { items: [] as TodoItem[] }
+            throw err
+          })
       const [tripData, daysData, placesData, packingData, todoData, budgetData, reservationsData, filesData, tagsData, categoriesData] = await Promise.all([
         tripRepo.get(tripId),
         dayRepo.list(tripId),
         placeRepo.list(tripId),
-        packingRepo.list(tripId),
-        todoRepo.list(tripId),
+        packingPromise,
+        todoPromise,
         // Budget / reservations / files are hydrated here too so the offline
         // path is uniform (no separate tab-gated effects). Non-fatal: a failure
         // in any of these must not blank the whole trip.

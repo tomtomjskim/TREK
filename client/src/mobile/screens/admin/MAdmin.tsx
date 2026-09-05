@@ -26,6 +26,7 @@ import type { LucideIcon } from 'lucide-react'
 import { adminApi } from '../../../api/client'
 import { useTranslation } from '../../../i18n'
 import { useCountUp } from '../../../hooks/useCountUp'
+import { useAddonStore } from '../../../store/addonStore'
 import { useAdmin } from '../../../pages/admin/useAdmin'
 import MAdminAddonManager from './MAdminAddonManager'
 import MAdminMcpTokensPanel from './MAdminMcpTokensPanel'
@@ -69,6 +70,7 @@ function MAdminStat({ label, value, icon: Icon }: { label: string; value: number
 export default function MAdmin() {
   const { t, locale } = useTranslation()
   const admin = useAdmin()
+  const packingEnabled = useAddonStore((s) => s.isEnabled('packing'))
   const {
     demoMode, mcpEnabled, devMode, managed, toast, navigate,
     activeTab, setActiveTab, stats, serverTimezone,
@@ -212,7 +214,7 @@ export default function MAdmin() {
       {activeTab === 'defaults' && <MAdminDefaultUserSettings />}
       {activeTab === 'config' && (
         <div className="space-y-4">
-          <MAdminPackingTemplateManager />
+          {packingEnabled && <MAdminPackingTemplateManager />}
           <MAdminCategoryManager />
         </div>
       )}
