@@ -3,6 +3,7 @@ import type { StoreApi } from 'zustand'
 import type { TripStoreState } from '../tripStore'
 import type { DayNote } from '../../types'
 import { getApiErrorMessage } from '../../types'
+import { assertStoreSessionLeaseValid, captureStoreSessionLease, isStoreSessionLeaseValid } from '../sessionGate'
 
 type SetState = StoreApi<TripStoreState>['setState']
 type GetState = StoreApi<TripStoreState>['getState']
@@ -18,28 +19,35 @@ export interface DayNotesSlice {
 
 export const createDayNotesSlice = (set: SetState, get: GetState): DayNotesSlice => ({
   updateDayNotes: async (tripId, dayId, notes) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       await daysApi.update(tripId, dayId, { notes })
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({
         days: state.days.map(d => d.id === Number.parseInt(String(dayId)) ? { ...d, notes } : d)
       }))
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error updating notes'))
     }
   },
 
   updateDayTitle: async (tripId, dayId, title) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       await daysApi.update(tripId, dayId, { title })
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({
         days: state.days.map(d => d.id === Number.parseInt(String(dayId)) ? { ...d, title } : d)
       }))
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error updating day name'))
     }
   },
 
   addDayNote: async (tripId, dayId, data) => {
+    const sessionLease = captureStoreSessionLease()
     const tempId = Date.now() * -1
     const tempNote: DayNote = { id: tempId, day_id: dayId as number, ...data, created_at: new Date().toISOString() } as DayNote
     set(state => ({
@@ -50,6 +58,7 @@ export const createDayNotesSlice = (set: SetState, get: GetState): DayNotesSlice
     }))
     try {
       const result = await dayNotesApi.create(tripId, dayId, data)
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({
         dayNotes: {
           ...state.dayNotes,
@@ -58,6 +67,7 @@ export const createDayNotesSlice = (set: SetState, get: GetState): DayNotesSlice
       }))
       return result.note
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({
         dayNotes: {
           ...state.dayNotes,
@@ -69,8 +79,10 @@ export const createDayNotesSlice = (set: SetState, get: GetState): DayNotesSlice
   },
 
   updateDayNote: async (tripId, dayId, id, data) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const result = await dayNotesApi.update(tripId, dayId, id, data)
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({
         dayNotes: {
           ...state.dayNotes,
@@ -79,11 +91,13 @@ export const createDayNotesSlice = (set: SetState, get: GetState): DayNotesSlice
       }))
       return result.note
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error updating note'))
     }
   },
 
   deleteDayNote: async (tripId, dayId, id) => {
+    const sessionLease = captureStoreSessionLease()
     const prev = get().dayNotes
     set(state => ({
       dayNotes: {
@@ -93,13 +107,16 @@ export const createDayNotesSlice = (set: SetState, get: GetState): DayNotesSlice
     }))
     try {
       await dayNotesApi.delete(tripId, dayId, id)
+      assertStoreSessionLeaseValid(sessionLease)
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       set({ dayNotes: prev })
       throw new Error(getApiErrorMessage(err, 'Error deleting note'))
     }
   },
 
   moveDayNote: async (tripId, fromDayId, toDayId, noteId, sort_order = 9999) => {
+    const sessionLease = captureStoreSessionLease()
     const state = get()
     const note = (state.dayNotes[String(fromDayId)] || []).find(n => n.id === noteId)
     if (!note) return
@@ -122,13 +139,20 @@ export const createDayNotesSlice = (set: SetState, get: GetState): DayNotesSlice
       const result = await dayNotesApi.create(tripId, toDayId, {
         text: note.text, time: note.time, icon: note.icon, color: note.color ?? null, sort_order,
       })
+      assertStoreSessionLeaseValid(sessionLease)
       try {
+        assertStoreSessionLeaseValid(sessionLease)
         await dayNotesApi.delete(tripId, fromDayId, noteId)
+        assertStoreSessionLeaseValid(sessionLease)
       } catch (delErr: unknown) {
         // The source survived, so drop the copy rather than leave a duplicate behind.
-        await dayNotesApi.delete(tripId, toDayId, result.note.id).catch(() => {})
+        if (isStoreSessionLeaseValid(sessionLease)) {
+          await dayNotesApi.delete(tripId, toDayId, result.note.id).catch(() => {})
+          assertStoreSessionLeaseValid(sessionLease)
+        }
         throw delErr
       }
+      assertStoreSessionLeaseValid(sessionLease)
       set(s => ({
         dayNotes: {
           ...s.dayNotes,
@@ -136,6 +160,7 @@ export const createDayNotesSlice = (set: SetState, get: GetState): DayNotesSlice
         }
       }))
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       set(s => ({
         dayNotes: {
           ...s.dayNotes,

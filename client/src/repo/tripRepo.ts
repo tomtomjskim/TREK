@@ -1,8 +1,8 @@
+import type { ActiveTripResponse } from '@trek/shared'
 import { tripsApi } from '../api/client'
 import { offlineDb, upsertTrip } from '../db/offlineDb'
-import { onlineThenCache } from './withOfflineFallback'
 import type { Trip } from '../types'
-import type { ActiveTripResponse } from '@trek/shared'
+import { assertCacheWriteAllowed, cacheWriteGuard, onlineThenCache, type CacheWriteGuard } from './withOfflineFallback'
 
 /**
  * Offline stand-in for GET /trips/active. Mirrors the server's ranking
@@ -31,14 +31,13 @@ function pickActive(trips: Trip[]): Trip | null {
 
 export const tripRepo = {
   async list(): Promise<{ trips: Trip[]; archivedTrips: Trip[] }> {
+    const mayWriteCache = cacheWriteGuard()
     return onlineThenCache(
       async () => {
-        const [active, archived] = await Promise.all([
-          tripsApi.list(),
-          tripsApi.list({ archived: 1 }),
-        ])
-        active.trips.forEach(t => upsertTrip(t))
-        archived.trips.forEach(t => upsertTrip(t))
+        const [active, archived] = await Promise.all([tripsApi.list(), tripsApi.list({ archived: 1 })])
+        assertCacheWriteAllowed(mayWriteCache)
+        await Promise.all([...active.trips, ...archived.trips].map(trip => upsertTrip(trip))).catch(() => {})
+        assertCacheWriteAllowed(mayWriteCache)
         return { trips: active.trips, archivedTrips: archived.trips }
       },
       async () => {
@@ -63,19 +62,20 @@ export const tripRepo = {
         const all = await offlineDb.trips.toArray()
         const trip = pickActive(all.filter(t => !t.is_archived))
         return {
-          trip: trip
-            ? { id: trip.id, title: trip.title, start_date: trip.start_date, end_date: trip.end_date }
-            : null,
+          trip: trip ? { id: trip.id, title: trip.title, start_date: trip.start_date, end_date: trip.end_date } : null,
         }
       },
     )
   },
 
-  async get(tripId: number | string): Promise<{ trip: Trip }> {
+  async get(tripId: number | string, mayWriteCache: CacheWriteGuard = () => true): Promise<{ trip: Trip }> {
+    const canWriteCache = cacheWriteGuard(mayWriteCache)
     return onlineThenCache(
       async () => {
         const result = await tripsApi.get(tripId)
-        upsertTrip(result.trip)
+        assertCacheWriteAllowed(canWriteCache)
+        await upsertTrip(result.trip).catch(() => {})
+        assertCacheWriteAllowed(canWriteCache)
         return result
       },
       async () => {

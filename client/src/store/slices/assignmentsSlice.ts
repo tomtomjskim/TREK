@@ -3,6 +3,7 @@ import type { StoreApi } from 'zustand'
 import type { TripStoreState } from '../tripStore'
 import type { Assignment, AssignmentsMap } from '../../types'
 import { getApiErrorMessage } from '../../types'
+import { assertStoreSessionLeaseValid, captureStoreSessionLease, isStoreSessionLeaseValid } from '../sessionGate'
 
 type SetState = StoreApi<TripStoreState>['setState']
 type GetState = StoreApi<TripStoreState>['getState']
@@ -17,6 +18,7 @@ export interface AssignmentsSlice {
 
 export const createAssignmentsSlice = (set: SetState, get: GetState): AssignmentsSlice => ({
   assignPlaceToDay: async (tripId, dayId, placeId, position) => {
+    const sessionLease = captureStoreSessionLease()
     const state = get()
     const place = state.places.find(p => p.id === Number.parseInt(String(placeId)))
     if (!place) return
@@ -43,6 +45,7 @@ export const createAssignmentsSlice = (set: SetState, get: GetState): Assignment
 
     try {
       const data = await assignmentsApi.create(tripId, dayId, { place_id: placeId })
+      assertStoreSessionLeaseValid(sessionLease)
       const newAssignment: Assignment = {
         ...data.assignment,
         place: data.assignment.place || place,
@@ -62,6 +65,7 @@ export const createAssignmentsSlice = (set: SetState, get: GetState): Assignment
         if (orderedIds.length > 0) {
           try {
             await assignmentsApi.reorder(tripId, dayId, orderedIds)
+            assertStoreSessionLeaseValid(sessionLease)
             set(state => {
               const items = state.assignments[String(dayId)] || []
               const reordered = orderedIds.map((id, idx) => {
@@ -78,8 +82,10 @@ export const createAssignmentsSlice = (set: SetState, get: GetState): Assignment
           } catch {}
         }
       }
+      assertStoreSessionLeaseValid(sessionLease)
       return data.assignment
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({
         assignments: {
           ...state.assignments,
@@ -91,6 +97,7 @@ export const createAssignmentsSlice = (set: SetState, get: GetState): Assignment
   },
 
   removeAssignment: async (tripId, dayId, assignmentId) => {
+    const sessionLease = captureStoreSessionLease()
     const prevAssignments = get().assignments
 
     set(state => ({
@@ -102,13 +109,16 @@ export const createAssignmentsSlice = (set: SetState, get: GetState): Assignment
 
     try {
       await assignmentsApi.delete(tripId, dayId, assignmentId)
+      assertStoreSessionLeaseValid(sessionLease)
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       set({ assignments: prevAssignments })
       throw new Error(getApiErrorMessage(err, 'Error removing assignment'))
     }
   },
 
   reorderAssignments: async (tripId, dayId, orderedIds) => {
+    const sessionLease = captureStoreSessionLease()
     const prevAssignments = get().assignments
     const dayItems = get().assignments[String(dayId)] || []
     const reordered = orderedIds.map((id, idx) => {
@@ -125,13 +135,16 @@ export const createAssignmentsSlice = (set: SetState, get: GetState): Assignment
 
     try {
       await assignmentsApi.reorder(tripId, dayId, orderedIds)
+      assertStoreSessionLeaseValid(sessionLease)
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       set({ assignments: prevAssignments })
       throw new Error(getApiErrorMessage(err, 'Error reordering'))
     }
   },
 
   moveAssignment: async (tripId, assignmentId, fromDayId, toDayId, toOrderIndex = null) => {
+    const sessionLease = captureStoreSessionLease()
     const state = get()
     const prevAssignments = state.assignments
     const assignment = (state.assignments[String(fromDayId)] || []).find(a => a.id === assignmentId)
@@ -154,10 +167,13 @@ export const createAssignmentsSlice = (set: SetState, get: GetState): Assignment
 
     try {
       await assignmentsApi.move(tripId, assignmentId, toDayId, insertAt)
+      assertStoreSessionLeaseValid(sessionLease)
       if (newToItems.length > 1) {
         await assignmentsApi.reorder(tripId, toDayId, newToItems.map(a => a.id))
+        assertStoreSessionLeaseValid(sessionLease)
       }
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       set({ assignments: prevAssignments })
       throw new Error(getApiErrorMessage(err, 'Error moving assignment'))
     }

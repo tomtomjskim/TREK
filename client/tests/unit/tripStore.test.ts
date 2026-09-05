@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { useTripStore } from '../../src/store/tripStore';
 import { placesApi } from '../../src/api/client';
+import { useAddonStore } from '../../src/store/addonStore';
 import { resetAllStores } from '../helpers/store';
 import { buildTrip, buildDay, buildPlace, buildPackingItem, buildTodoItem, buildTag, buildCategory, buildAssignment, buildDayNote, buildBudgetItem, buildReservation, buildTripFile } from '../helpers/factories';
 import { server } from '../helpers/msw/server';
@@ -20,6 +21,11 @@ vi.mock('../../src/api/websocket', () => ({
 
 beforeEach(() => {
   resetAllStores();
+  useAddonStore.setState({
+    addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+    bagTracking: false,
+    loaded: true,
+  });
 });
 
 /** Full set of MSW handlers for one trip's loadTrip fan-out. */

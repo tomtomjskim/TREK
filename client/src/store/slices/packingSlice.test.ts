@@ -5,6 +5,8 @@ import { server } from '../../../tests/helpers/msw/server';
 import { resetAllStores, seedStore } from '../../../tests/helpers/store';
 import { buildPackingItem } from '../../../tests/helpers/factories';
 import { useTripStore } from '../tripStore';
+import { setAuthed } from '../../sync/authGate';
+import { activateTripSession } from '../tripSessionGate';
 
 let addToast: ReturnType<typeof vi.fn>;
 
@@ -311,5 +313,51 @@ describe('packingSlice', () => {
 
     expect(useTripStore.getState().packingItems[0].checked).toBe(0);
     expect(addToast).toHaveBeenCalledWith('Write failed', 'error', undefined);
+  });
+
+  it('FE-STORE-PACKING-018: logout prevents a late optimistic rollback from restoring the old account items', async () => {
+    const item = buildPackingItem({ id: 1, trip_id: 1, name: 'Private bag' });
+    seedStore(useTripStore, { packingItems: [item] });
+    let releaseResponse!: () => void;
+    const responseGate = new Promise<void>(resolve => { releaseResponse = resolve; });
+    server.use(
+      http.delete('/api/trips/1/packing/1', async () => {
+        await responseGate;
+        return HttpResponse.json({ error: 'late failure' }, { status: 500 });
+      }),
+    );
+
+    const pendingDelete = useTripStore.getState().deletePackingItem(1, 1);
+    expect(useTripStore.getState().packingItems).toEqual([]);
+
+    useTripStore.getState().resetTrip();
+    setAuthed(false);
+    releaseResponse();
+    await expect(pendingDelete).resolves.toBeUndefined();
+
+    expect(useTripStore.getState().packingItems).toEqual([]);
+    expect(addToast).not.toHaveBeenCalled();
+  });
+
+  it('FE-STORE-PACKING-019: a late mutation from another trip cannot append into the newly active trip', async () => {
+    activateTripSession(1);
+    const oldTripItem = buildPackingItem({ id: 41, trip_id: 1, name: 'Old trip item' });
+    let releaseResponse!: () => void;
+    const responseGate = new Promise<void>(resolve => { releaseResponse = resolve; });
+    server.use(
+      http.post('/api/trips/1/packing', async () => {
+        await responseGate;
+        return HttpResponse.json({ item: oldTripItem });
+      }),
+    );
+
+    const pendingAdd = useTripStore.getState().addPackingItem(1, { name: 'Old trip item' });
+    activateTripSession(2);
+    const newTripItem = buildPackingItem({ id: 52, trip_id: 2, name: 'New trip item' });
+    seedStore(useTripStore, { packingItems: [newTripItem] });
+    releaseResponse();
+
+    await expect(pendingAdd).rejects.toThrow('active trip changed');
+    expect(useTripStore.getState().packingItems).toEqual([newTripItem]);
   });
 });

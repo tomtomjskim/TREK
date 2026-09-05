@@ -6,6 +6,7 @@ import { buildAssignment, buildPlace } from '../../../tests/helpers/factories';
 import { placesApi } from '../../api/client';
 import { useTripStore } from '../tripStore';
 import type { Place } from '../../types';
+import { setAuthed } from '../../sync/authGate';
 
 beforeEach(() => {
   resetAllStores();
@@ -78,6 +79,27 @@ describe('placesSlice', () => {
         useTripStore.getState().uploadPlaceImage(1, 10, new File(['x'], 'pic.jpg')),
       ).rejects.toThrow('Image too large');
       expect(useTripStore.getState().places[0].image_url).toBeNull();
+    });
+
+    it('FE-TSLICE-PLACE-016: an upload response from before logout cannot repopulate the cleared trip', async () => {
+      const place = buildPlace({ id: 10, trip_id: 1, image_url: null });
+      seedStore(useTripStore, { places: [place] });
+      let resolveUpload!: (value: { place: Place }) => void;
+      const upload = new Promise<{ place: Place }>(resolve => { resolveUpload = resolve; });
+      vi.spyOn(placesApi, 'uploadImage').mockReturnValue(upload);
+
+      const pendingUpload = useTripStore.getState().uploadPlaceImage(
+        1,
+        10,
+        new File(['x'], 'pic.jpg', { type: 'image/jpeg' }),
+      );
+      useTripStore.getState().resetTrip();
+      setAuthed(false);
+      resolveUpload({ place: { ...place, image_url: '/uploads/places/old-account.jpg' } });
+
+      await expect(pendingUpload).rejects.toThrow('authentication session changed');
+      expect(useTripStore.getState().places).toEqual([]);
+      expect(useTripStore.getState().assignments).toEqual({});
     });
   });
 

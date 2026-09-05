@@ -5,9 +5,9 @@
  *   offline create/update/delete → enqueue() → optimistic Dexie write (in repo)
  *   online trigger → flush() → replay REST with X-Idempotency-Key header → update Dexie
  */
-import { offlineDb } from '../db/offlineDb'
+import { offlineDb, captureOfflineDbLease, isOfflineDbLeaseValid } from '../db/offlineDb'
 import { apiClient } from '../api/client'
-import { isAuthed } from './authGate'
+import { captureAuthGenerationLease, isAuthGenerationLeaseValid, isAuthed } from './authGate'
 import { isEffectivelyOffline } from './networkMode'
 import { getOfflinePrefs } from './offlinePrefs'
 import { randomId } from '../utils/randomId'
@@ -15,8 +15,10 @@ import type { QueuedMutation } from '../db/offlineDb'
 import type { Table } from 'dexie'
 
 // Map Dexie table names used in `resource` field → actual Dexie tables.
-function getTable(resource: string): Table | undefined {
-  const map: Record<string, Table> = {
+type EntityTables = Readonly<Record<string, Table>>
+
+function currentEntityTables(): EntityTables {
+  return {
     places:       offlineDb.places,
     packingItems: offlineDb.packingItems,
     todoItems:    offlineDb.todoItems,
@@ -24,7 +26,10 @@ function getTable(resource: string): Table | undefined {
     reservations: offlineDb.reservations,
     tripFiles:    offlineDb.tripFiles,
   }
-  return map[resource]
+}
+
+function getTable(resource: string, tables: EntityTables = currentEntityTables()): Table | undefined {
+  return tables[resource]
 }
 
 /**
@@ -81,10 +86,49 @@ function extractConflictServer(err: unknown): unknown {
 }
 
 /** Write a server entity into its Dexie table (used when "theirs" wins a conflict). */
-async function applyServerEntity(mutation: QueuedMutation, server: unknown): Promise<void> {
+async function applyServerEntity(mutation: QueuedMutation, server: unknown, tables?: EntityTables): Promise<void> {
   if (!mutation.resource || !server || typeof server !== 'object' || !('id' in server)) return
-  const table = getTable(mutation.resource)
+  const table = getTable(mutation.resource, tables)
   if (table) await table.put(server)
+}
+
+class StaleFlushError extends Error {
+  constructor() {
+    super('The authentication session or offline database changed while the queue was flushing')
+    this.name = 'StaleFlushError'
+  }
+}
+
+type FlushContext = {
+  authLease: ReturnType<typeof captureAuthGenerationLease>
+  dbLease: ReturnType<typeof captureOfflineDbLease>
+  queue: Table
+  tables: EntityTables
+}
+
+type QueueContext = FlushContext
+
+function captureQueueContext(): QueueContext {
+  return {
+    authLease: captureAuthGenerationLease(),
+    dbLease: captureOfflineDbLease(),
+    queue: offlineDb.mutationQueue,
+    tables: currentEntityTables(),
+  }
+}
+
+function isQueueLeaseValid(context: QueueContext): boolean {
+  return isAuthGenerationLeaseValid(context.authLease) && isOfflineDbLeaseValid(context.dbLease)
+}
+
+function assertFlushLease(context: FlushContext): void {
+  if (!isFlushLeaseValid(context)) {
+    throw new StaleFlushError()
+  }
+}
+
+function isFlushLeaseValid(context: FlushContext): boolean {
+  return isAuthed() && isAuthGenerationLeaseValid(context.authLease) && isOfflineDbLeaseValid(context.dbLease)
 }
 
 export const mutationQueue = {
@@ -95,6 +139,7 @@ export const mutationQueue = {
   async enqueue(
     mutation: Omit<QueuedMutation, 'status' | 'attempts' | 'createdAt' | 'lastError'>,
   ): Promise<string> {
+    const context = captureQueueContext()
     const now = Date.now()
     _lastTs = now > _lastTs ? now : _lastTs + 1
     const item: QueuedMutation = {
@@ -104,7 +149,11 @@ export const mutationQueue = {
       createdAt: _lastTs,
       lastError: null,
     }
-    await offlineDb.mutationQueue.put(item)
+    if (!isQueueLeaseValid(context)) return item.id
+    await context.queue.put(item)
+    // A late enqueue is isolated to the captured DB handle. Do not let its
+    // result leak into a newer account's in-memory/UI state.
+    if (!isQueueLeaseValid(context)) return item.id
     return item.id
   },
 
@@ -115,6 +164,8 @@ export const mutationQueue = {
    */
   async flush(): Promise<void> {
     if (_flushing || isEffectivelyOffline() || !isAuthed()) return
+    const context = captureQueueContext()
+    assertFlushLease(context)
     _flushing = true
     // tempId → realId learned during this flush, so a dependent edit/delete
     // queued against an offline-created entity (still holding the negative id)
@@ -132,27 +183,33 @@ export const mutationQueue = {
       // Replaying is safe: the mutation id doubles as the X-Idempotency-Key, so
       // a write the server already applied is answered from its replay cache.
       const stuckBefore = Date.now() - STUCK_SYNCING_MS
-      await offlineDb.mutationQueue
+      assertFlushLease(context)
+      await context.queue
         .where('status')
         .equals('syncing')
         .filter(m => (m.syncingSince ?? 0) < stuckBefore)
         .modify(m => { m.status = 'pending'; m.syncingSince = undefined })
+      assertFlushLease(context)
 
-      const pending = await offlineDb.mutationQueue
+      assertFlushLease(context)
+      const pending = await context.queue
         .where('status')
         .equals('pending')
         .sortBy('createdAt')
+      assertFlushLease(context)
 
       for (const mutation of pending) {
         // Re-checked every pass, not just on entry: this loop writes server
         // responses straight into Dexie, and after a logout the proxy points at
         // the shared anonymous database. A flush that started before logout
         // would otherwise seed it with the previous account's rows.
-        if (!isAuthed()) break
+        assertFlushLease(context)
 
         // Mark as syncing so UI can show progress. The stamp is what lets the
         // next flush tell an in-flight row from one a killed tab abandoned.
-        await offlineDb.mutationQueue.update(mutation.id, { status: 'syncing', syncingSince: Date.now() })
+        assertFlushLease(context)
+        await context.queue.update(mutation.id, { status: 'syncing', syncingSince: Date.now() })
+        assertFlushLease(context)
 
         // Resolve a temp-id reference now that earlier CREATEs in this flush
         // may have completed (FIFO order guarantees the CREATE ran first).
@@ -168,11 +225,13 @@ export const mutationQueue = {
         // Placeholder still unresolved → the create it depended on is gone
         // (failed or missing). Surface it as failed rather than firing a 404.
         if (reqUrl.includes('{id}')) {
-          await offlineDb.mutationQueue.update(mutation.id, {
+          assertFlushLease(context)
+          await context.queue.update(mutation.id, {
             status: 'failed',
             attempts: mutation.attempts + 1,
             lastError: 'unresolved temp id (dependent create did not sync)',
           })
+          assertFlushLease(context)
           continue
         }
 
@@ -186,16 +245,18 @@ export const mutationQueue = {
           const tokenKey = mutation.resource !== undefined && reqEntityId !== undefined ? `${mutation.resource}:${reqEntityId}` : undefined
           const baseToken = (tokenKey && tokenMap.get(tokenKey)) || mutation.baseUpdatedAt
           if (baseToken) headers['X-Base-Updated-At'] = baseToken
+          assertFlushLease(context)
           const response = await apiClient.request({
             method: mutation.method,
             url: reqUrl,
             data: mutation.body,
             headers,
           })
+          assertFlushLease(context)
 
           // Apply canonical server response to Dexie
           if (mutation.method !== 'DELETE' && mutation.resource) {
-            const table = getTable(mutation.resource)
+            const table = getTable(mutation.resource, context.tables)
             if (table && response.data && typeof response.data === 'object') {
               // Server returns { place: {...} } or { item: {...} } — grab first value
               const values = Object.values(response.data as Record<string, unknown>)
@@ -205,10 +266,13 @@ export const mutationQueue = {
                 // Remove temp optimistic entry if id changed (CREATE case) and
                 // remap any queued mutations that still target the negative id.
                 if (mutation.tempId !== undefined && mutation.tempId !== realId) {
+                  assertFlushLease(context)
                   await table.delete(mutation.tempId)
+                  assertFlushLease(context)
                   idMap.set(mutation.tempId, realId)
                   // Durable rewrite so dependents survive a flush boundary / reload.
-                  await offlineDb.mutationQueue
+                  assertFlushLease(context)
+                  await context.queue
                     .where('tripId')
                     .equals(mutation.tripId)
                     .filter(m => m.tempEntityId === mutation.tempId)
@@ -217,8 +281,11 @@ export const mutationQueue = {
                       m.entityId = realId
                       m.tempEntityId = undefined
                     })
+                  assertFlushLease(context)
                 }
+                assertFlushLease(context)
                 await table.put(entity)
+                assertFlushLease(context)
                 // Advance the base-version token of any other queued edits to the
                 // same entity to the value we just wrote. Without this, a second
                 // offline edit of the same place/item still carries the pre-flush
@@ -231,7 +298,8 @@ export const mutationQueue = {
                   if (mutation.resource) tokenMap.set(`${mutation.resource}:${realId}`, newToken)
                   // Durable: survives a flush boundary / reload if the sibling is
                   // not reached this pass.
-                  await offlineDb.mutationQueue
+                  assertFlushLease(context)
+                  await context.queue
                     .where('tripId')
                     .equals(mutation.tripId)
                     .filter(m =>
@@ -241,17 +309,25 @@ export const mutationQueue = {
                       (m.status === 'pending' || m.status === 'syncing'),
                     )
                     .modify(m => { m.baseUpdatedAt = newToken })
+                  assertFlushLease(context)
                 }
               }
             }
           } else if (mutation.method === 'DELETE' && mutation.resource && reqEntityId !== undefined) {
             // DELETE was already applied optimistically; ensure it's gone
-            const table = getTable(mutation.resource)
-            if (table) await table.delete(reqEntityId)
+            const table = getTable(mutation.resource, context.tables)
+            if (table) {
+              assertFlushLease(context)
+              await table.delete(reqEntityId)
+              assertFlushLease(context)
+            }
           }
 
-          await offlineDb.mutationQueue.delete(mutation.id)
+          assertFlushLease(context)
+          await context.queue.delete(mutation.id)
+          assertFlushLease(context)
         } catch (err: unknown) {
+          if (err instanceof StaleFlushError || !isFlushLeaseValid(context)) throw new StaleFlushError()
           const httpStatus = (err as { response?: { status: number } })?.response?.status
 
           // 409 = the entity changed on the server since this offline edit was
@@ -264,22 +340,29 @@ export const mutationQueue = {
             const strategy = getOfflinePrefs().conflictStrategy
             if (strategy === 'server') {
               // Theirs wins: adopt the server's version locally, drop our write.
-              await applyServerEntity(mutation, server)
-              await offlineDb.mutationQueue.delete(mutation.id)
+              assertFlushLease(context)
+              await applyServerEntity(mutation, server, context.tables)
+              assertFlushLease(context)
+              await context.queue.delete(mutation.id)
+              assertFlushLease(context)
             } else if (strategy === 'mine') {
               // Mine wins: re-queue without the base token so the next pass
               // overwrites unconditionally.
-              await offlineDb.mutationQueue.update(mutation.id, {
+              assertFlushLease(context)
+              await context.queue.update(mutation.id, {
                 status: 'pending', baseUpdatedAt: null, conflictServer: undefined,
                 attempts: mutation.attempts + 1, lastError: null,
               })
+              assertFlushLease(context)
               needsRetry = true
             } else {
               // Ask: park it as a conflict for the user to resolve.
-              await offlineDb.mutationQueue.update(mutation.id, {
+              assertFlushLease(context)
+              await context.queue.update(mutation.id, {
                 status: 'conflict', conflictServer: server ?? null, conflictAt: Date.now(),
                 attempts: mutation.attempts + 1, lastError: 'conflict',
               })
+              assertFlushLease(context)
             }
             continue
           }
@@ -290,32 +373,42 @@ export const mutationQueue = {
             // Permanent client error — roll back the phantom optimistic CREATE so
             // it can't masquerade as synced, then mark failed and continue.
             if (mutation.method !== 'DELETE' && mutation.tempId !== undefined && mutation.resource) {
-              const table = getTable(mutation.resource)
-              if (table) await table.delete(mutation.tempId)
+              const table = getTable(mutation.resource, context.tables)
+              if (table) {
+                assertFlushLease(context)
+                await table.delete(mutation.tempId)
+                assertFlushLease(context)
+              }
             }
-            await offlineDb.mutationQueue.update(mutation.id, {
+            assertFlushLease(context)
+            await context.queue.update(mutation.id, {
               status: 'failed',
               attempts: mutation.attempts + 1,
               lastError: String(err),
             })
+            assertFlushLease(context)
           } else {
             // Network / transient error — reset to pending, abort flush (retry next trigger)
-            await offlineDb.mutationQueue.update(mutation.id, {
+            assertFlushLease(context)
+            await context.queue.update(mutation.id, {
               status: 'pending',
               attempts: mutation.attempts + 1,
               lastError: String(err),
             })
+            assertFlushLease(context)
             break
           }
         }
       }
+    } catch (err: unknown) {
+      if (!(err instanceof StaleFlushError)) throw err
     } finally {
       _flushing = false
     }
     // A "mine wins" auto-resolution dropped its base token; one more pass now
     // overwrites the server unconditionally. Bounded: the retried write carries
     // no token, so it cannot 409 for the same reason.
-    if (needsRetry && !isEffectivelyOffline()) {
+    if (needsRetry && !isEffectivelyOffline() && isFlushLeaseValid(context)) {
       await this.flush()
     }
   },
@@ -325,47 +418,62 @@ export const mutationQueue = {
    * Used by the UI to show per-item pending indicators.
    */
   async pending(tripId?: number): Promise<QueuedMutation[]> {
-    if (tripId !== undefined) {
-      return offlineDb.mutationQueue
+    const context = captureQueueContext()
+    if (!isQueueLeaseValid(context)) return []
+    const result = tripId !== undefined
+      ? await context.queue
         .where('tripId')
         .equals(tripId)
         .filter(m => m.status === 'pending' || m.status === 'syncing')
         .toArray()
-    }
-    return offlineDb.mutationQueue
-      .where('status')
-      .anyOf(['pending', 'syncing'])
-      .toArray()
+      : await context.queue
+        .where('status')
+        .anyOf(['pending', 'syncing'])
+        .toArray()
+    if (!isQueueLeaseValid(context)) return []
+    return result
   },
 
   /** Count pending mutations (for banner badge). */
   async pendingCount(): Promise<number> {
-    return offlineDb.mutationQueue
+    const context = captureQueueContext()
+    if (!isQueueLeaseValid(context)) return 0
+    const count = await context.queue
       .where('status')
       .anyOf(['pending', 'syncing'])
       .count()
+    return isQueueLeaseValid(context) ? count : 0
   },
 
   /** Count permanently-failed mutations (surfaced separately so the user knows
    *  changes were dropped — they are NOT folded into pendingCount). */
   async failedCount(): Promise<number> {
-    return offlineDb.mutationQueue
+    const context = captureQueueContext()
+    if (!isQueueLeaseValid(context)) return 0
+    const count = await context.queue
       .where('status')
       .equals('failed')
       .count()
+    return isQueueLeaseValid(context) ? count : 0
   },
 
   /** Count unresolved sync conflicts (offline edits the server rejected as stale). */
   async conflictCount(): Promise<number> {
-    return offlineDb.mutationQueue
+    const context = captureQueueContext()
+    if (!isQueueLeaseValid(context)) return 0
+    const count = await context.queue
       .where('status')
       .equals('conflict')
       .count()
+    return isQueueLeaseValid(context) ? count : 0
   },
 
   /** All unresolved conflicts, newest first, optionally scoped to one trip. */
   async conflicts(tripId?: number): Promise<QueuedMutation[]> {
-    const all = await offlineDb.mutationQueue.where('status').equals('conflict').toArray()
+    const context = captureQueueContext()
+    if (!isQueueLeaseValid(context)) return []
+    const all = await context.queue.where('status').equals('conflict').toArray()
+    if (!isQueueLeaseValid(context)) return []
     const scoped = tripId === undefined ? all : all.filter(m => m.tripId === tripId)
     return scoped.sort((a, b) => (b.conflictAt ?? 0) - (a.conflictAt ?? 0))
   },
@@ -375,12 +483,17 @@ export const mutationQueue = {
    * the base token so the next flush overwrites the server unconditionally.
    */
   async resolveKeepMine(id: string): Promise<void> {
-    const m = await offlineDb.mutationQueue.get(id)
+    const context = captureQueueContext()
+    if (!isQueueLeaseValid(context)) return
+    const m = await context.queue.get(id)
+    if (!isQueueLeaseValid(context)) return
     if (!m || m.status !== 'conflict') return
-    await offlineDb.mutationQueue.update(id, {
+    await context.queue.update(id, {
       status: 'pending', baseUpdatedAt: null, conflictServer: undefined, conflictAt: undefined, lastError: null,
     })
+    if (!isQueueLeaseValid(context)) return
     await this.flush()
+    if (!isQueueLeaseValid(context)) return
   },
 
   /**
@@ -388,10 +501,15 @@ export const mutationQueue = {
    * cache and drop the queued write.
    */
   async resolveKeepServer(id: string): Promise<void> {
-    const m = await offlineDb.mutationQueue.get(id)
+    const context = captureQueueContext()
+    if (!isQueueLeaseValid(context)) return
+    const m = await context.queue.get(id)
+    if (!isQueueLeaseValid(context)) return
     if (!m || m.status !== 'conflict') return
-    await applyServerEntity(m, m.conflictServer)
-    await offlineDb.mutationQueue.delete(id)
+    await applyServerEntity(m, m.conflictServer, context.tables)
+    if (!isQueueLeaseValid(context)) return
+    await context.queue.delete(id)
+    if (!isQueueLeaseValid(context)) return
   },
 
   /** Reset internal flushing flag and timestamp counters — useful in tests. */

@@ -3,8 +3,9 @@ import { render, screen, fireEvent, waitFor } from '../../../tests/helpers/rende
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../tests/helpers/msw/server';
 import { readMultipart } from '../../../tests/helpers/multipart';
+import { seedStore, resetAllStores } from '../../../tests/helpers/store';
 import { useTripStore } from '../../store/tripStore';
-import { resetAllStores, seedStore } from '../../../tests/helpers/store';
+import { useAddonStore } from '../../store/addonStore';
 import { buildTrip } from '../../../tests/helpers/factories';
 import FileImportModal from './FileImportModal';
 
@@ -37,6 +38,7 @@ beforeEach(() => {
   toastCalls.length = 0;
   resetAllStores();
   seedStore(useTripStore, { trip: buildTrip({ id: 3 }) });
+  seedStore(useAddonStore, { addons: [], bagTracking: false, loaded: true });
   server.use(
     http.get('/api/trips/3', () => HttpResponse.json({ trip: buildTrip({ id: 3 }), days: [], places: [], assignments: {} })),
   );

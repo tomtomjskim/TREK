@@ -1,48 +1,75 @@
 import { create } from 'zustand'
-import type { StoreApi } from 'zustand'
-import { tripsApi, tagsApi, categoriesApi } from '../api/client'
+import { categoriesApi, tagsApi, tripsApi } from '../api/client'
 import { offlineDb } from '../db/offlineDb'
-import { useAddonStore } from './addonStore'
-import { tripRepo } from '../repo/tripRepo'
-import { dayRepo } from '../repo/dayRepo'
-import { placeRepo } from '../repo/placeRepo'
-import { packingRepo } from '../repo/packingRepo'
-import { todoRepo } from '../repo/todoRepo'
 import { budgetRepo } from '../repo/budgetRepo'
-import { reservationRepo } from '../repo/reservationRepo'
+import { dayRepo } from '../repo/dayRepo'
 import { fileRepo } from '../repo/fileRepo'
+import { packingRepo } from '../repo/packingRepo'
+import { placeRepo } from '../repo/placeRepo'
+import { reservationRepo } from '../repo/reservationRepo'
+import { todoRepo } from '../repo/todoRepo'
+import { tripRepo } from '../repo/tripRepo'
+import {
+  assertAuthGenerationLeaseValid,
+  captureAuthGenerationLease,
+  isAuthGenerationLeaseValid,
+  StaleAuthSessionError,
+  type AuthLease,
+} from '../sync/authGate'
 import { isEffectivelyOnline } from '../sync/networkMode'
-import { createPlacesSlice } from './slices/placesSlice'
-import { createAssignmentsSlice } from './slices/assignmentsSlice'
-import { createDaysSlice } from './slices/daysSlice'
-import { createDayNotesSlice } from './slices/dayNotesSlice'
-import { createPackingSlice } from './slices/packingSlice'
-import { createTodoSlice } from './slices/todoSlice'
-import { createBudgetSlice } from './slices/budgetSlice'
-import { createReservationsSlice } from './slices/reservationsSlice'
-import { createFilesSlice } from './slices/filesSlice'
-import { handleRemoteEvent } from './slices/remoteEventHandler'
 import type {
-  Trip, Day, Place, Assignment, DayNote, PackingItem, TodoItem,
-  Tag, Category, BudgetItem, TripFile, Reservation,
-  AssignmentsMap, DayNotesMap, WebSocketEvent,
+  AssignmentsMap,
+  BudgetItem,
+  Category,
+  Day,
+  DayNotesMap,
+  PackingItem,
+  Place,
+  Reservation,
+  Tag,
+  TodoItem,
+  Trip,
+  TripFile,
+  WebSocketEvent,
 } from '../types'
 import { getApiErrorMessage } from '../types'
-import type { PlacesSlice } from './slices/placesSlice'
+import { useAddonStore } from './addonStore'
+import { assertStoreSessionLeaseValid, captureStoreSessionLease, isStoreSessionLeaseValid } from './sessionGate'
 import type { AssignmentsSlice } from './slices/assignmentsSlice'
-import type { DaysSlice } from './slices/daysSlice'
-import type { DayNotesSlice } from './slices/dayNotesSlice'
-import type { PackingSlice } from './slices/packingSlice'
-import type { TodoSlice } from './slices/todoSlice'
+import { createAssignmentsSlice } from './slices/assignmentsSlice'
 import type { BudgetSlice } from './slices/budgetSlice'
-import type { ReservationsSlice } from './slices/reservationsSlice'
+import { createBudgetSlice } from './slices/budgetSlice'
+import type { DayNotesSlice } from './slices/dayNotesSlice'
+import { createDayNotesSlice } from './slices/dayNotesSlice'
+import type { DaysSlice } from './slices/daysSlice'
+import { createDaysSlice } from './slices/daysSlice'
 import type { FilesSlice } from './slices/filesSlice'
+import { createFilesSlice } from './slices/filesSlice'
+import type { PackingSlice } from './slices/packingSlice'
+import { createPackingSlice } from './slices/packingSlice'
+import type { PlacesSlice } from './slices/placesSlice'
+import { createPlacesSlice } from './slices/placesSlice'
+import { handleRemoteEvent } from './slices/remoteEventHandler'
+import type { ReservationsSlice } from './slices/reservationsSlice'
+import { createReservationsSlice } from './slices/reservationsSlice'
+import type { TodoSlice } from './slices/todoSlice'
+import { createTodoSlice } from './slices/todoSlice'
+import {
+  activateTripSession,
+  captureTripSessionLease,
+  invalidateTripSession,
+  isActiveTripSession,
+  isTripSessionLeaseValid,
+  type TripSessionLease,
+} from './tripSessionGate'
 
 function isNotFoundError(err: unknown): boolean {
   return (err as { response?: { status?: number } }).response?.status === 404
 }
 
-let tripRequestGeneration = 0
+let fullLoadGeneration = 0
+let hydrationGeneration = 0
+let activeFullLoadGeneration: number | null = null
 const pendingAddonFeedWaiters = new Set<() => void>()
 
 function cancelPendingAddonFeedWaiters(): void {
@@ -51,19 +78,65 @@ function cancelPendingAddonFeedWaiters(): void {
   }
 }
 
-function startTripRequest(): number {
+interface TripRequestLease {
+  requestGeneration: number
+  trip: TripSessionLease
+}
+
+function startFullTripLoad(tripId: number | string): TripRequestLease {
   cancelPendingAddonFeedWaiters()
-  tripRequestGeneration += 1
-  return tripRequestGeneration
+  fullLoadGeneration += 1
+  hydrationGeneration += 1
+  activeFullLoadGeneration = fullLoadGeneration
+  return {
+    requestGeneration: fullLoadGeneration,
+    trip: activateTripSession(tripId),
+  }
+}
+
+function finishFullTripLoad(requestGeneration: number): void {
+  if (activeFullLoadGeneration === requestGeneration) activeFullLoadGeneration = null
+}
+
+function startTripHydration(
+  tripId: number | string,
+  currentTripId: number | null | undefined,
+): TripRequestLease | null {
+  // A reconnect refresh cannot establish or replace the active trip, and it
+  // must not cancel the full load that owns trip/isLoading state.
+  if (activeFullLoadGeneration !== null || currentTripId == null || String(currentTripId) !== String(tripId))
+    return null
+  if (!isActiveTripSession(tripId)) activateTripSession(tripId)
+  cancelPendingAddonFeedWaiters()
+  hydrationGeneration += 1
+  return {
+    requestGeneration: hydrationGeneration,
+    trip: captureTripSessionLease(),
+  }
 }
 
 function invalidateTripRequests(): void {
   cancelPendingAddonFeedWaiters()
-  tripRequestGeneration += 1
+  fullLoadGeneration += 1
+  hydrationGeneration += 1
+  activeFullLoadGeneration = null
+  invalidateTripSession()
 }
 
-function isCurrentTripRequest(requestGeneration: number): boolean {
-  return requestGeneration === tripRequestGeneration
+function mayApplyFullLoad(request: TripRequestLease, authLease: AuthLease): boolean {
+  return (
+    request.requestGeneration === fullLoadGeneration &&
+    isTripSessionLeaseValid(request.trip) &&
+    isAuthGenerationLeaseValid(authLease)
+  )
+}
+
+function mayApplyHydration(request: TripRequestLease, authLease: AuthLease): boolean {
+  return (
+    request.requestGeneration === hydrationGeneration &&
+    isTripSessionLeaseValid(request.trip) &&
+    isAuthGenerationLeaseValid(authLease)
+  )
 }
 
 function waitForAddonFeedSettled(): Promise<boolean> {
@@ -92,20 +165,20 @@ function waitForAddonFeedSettled(): Promise<boolean> {
 
 async function loadPackingAndTodoIfEnabled(
   tripId: number | string,
-  requestGeneration: number,
+  isCurrent: () => boolean,
 ): Promise<{ packingItems?: PackingItem[]; todoItems?: TodoItem[] } | null> {
   const settled = await waitForAddonFeedSettled()
-  if (!settled || !isCurrentTripRequest(requestGeneration)) return null
+  if (!settled || !isCurrent()) return null
   const addonStore = useAddonStore.getState()
   if (!addonStore.isEnabled('packing')) {
     return { packingItems: [], todoItems: [] }
   }
 
   const [packingResult, todoResult] = await Promise.allSettled([
-    packingRepo.list(tripId),
-    todoRepo.list(tripId),
+    packingRepo.list(tripId, isCurrent),
+    todoRepo.list(tripId, isCurrent),
   ])
-  if (!isCurrentTripRequest(requestGeneration)) return null
+  if (!isCurrent()) return null
 
   if (packingResult.status === 'rejected' && isNotFoundError(packingResult.reason)) throw packingResult.reason
   if (todoResult.status === 'rejected' && isNotFoundError(todoResult.reason)) throw todoResult.reason
@@ -121,7 +194,8 @@ async function loadPackingAndTodoIfEnabled(
 }
 
 export interface TripStoreState
-  extends PlacesSlice,
+  extends
+    PlacesSlice,
     AssignmentsSlice,
     DaysSlice,
     DayNotesSlice,
@@ -155,11 +229,14 @@ export interface TripStoreState
   setPlacesFilter: (filter: string) => void
   setPlacesCategoryFilter: (categoryIds: Set<string>) => void
   handleRemoteEvent: (event: WebSocketEvent) => void
-  resetTrip: () => void
+  resetTrip: (options?: { clearUserData?: boolean }) => void
   loadTrip: (tripId: number | string) => Promise<void>
   hydrateActiveTrip: (tripId: number | string) => Promise<void>
   refreshDays: (tripId: number | string) => Promise<void>
-  updateTrip: (tripId: number | string, data: Partial<Trip> & { date_shift_mode?: 'keep_bookings' | 'shift_all' }) => Promise<Trip>
+  updateTrip: (
+    tripId: number | string,
+    data: Partial<Trip> & { date_shift_mode?: 'keep_bookings' | 'shift_all' },
+  ) => Promise<Trip>
   addTag: (data: Partial<Tag> & { name: string }) => Promise<Tag>
   addCategory: (data: Partial<Category> & { name: string }) => Promise<Category>
 }
@@ -193,7 +270,7 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
   // can never leave a previous trip's data visible. Global tags/categories are
   // left intact. Also invalidates any pending trip request so late writes from
   // a stale load/hydration cannot land after a logout or route reset.
-  resetTrip: () => {
+  resetTrip: options => {
     invalidateTripRequests()
     set({
       trip: null,
@@ -203,6 +280,7 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
       dayNotes: {},
       packingItems: [],
       todoItems: [],
+      ...(options?.clearUserData ? { tags: [], categories: [] } : {}),
       budgetItems: [],
       files: [],
       reservations: [],
@@ -215,7 +293,9 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
   },
 
   loadTrip: async (tripId: number | string) => {
-    const requestGeneration = startTripRequest()
+    const request = startFullTripLoad(tripId)
+    const authLease = captureAuthGenerationLease()
+    const mayWriteCache = () => mayApplyFullLoad(request, authLease)
     set({
       trip: null,
       days: [],
@@ -224,6 +304,7 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
       dayNotes: {},
       packingItems: [],
       todoItems: [],
+      tags: [],
       budgetItems: [],
       files: [],
       reservations: [],
@@ -234,16 +315,17 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
     })
     set({ isLoading: true, error: null })
     try {
-      const [tripData, daysData, placesData, budgetData, reservationsData, filesData, tagsData, categoriesData] = await Promise.all([
-        tripRepo.get(tripId),
-        dayRepo.list(tripId),
-        placeRepo.list(tripId),
+      const [tripData, daysData, placesData, budgetData, reservationsData, filesData, tagsData, categoriesData] =
+        await Promise.all([
+          tripRepo.get(tripId, mayWriteCache),
+          dayRepo.list(tripId, mayWriteCache),
+          placeRepo.list(tripId, undefined, mayWriteCache),
         // Budget / reservations / files are hydrated here too so the offline
         // path is uniform (no separate tab-gated effects). Non-fatal: a failure
         // in any of these must not blank the whole trip.
-        budgetRepo.list(tripId).catch(() => ({ items: [] as BudgetItem[] })),
-        reservationRepo.list(tripId).catch(() => ({ reservations: [] as Reservation[] })),
-        fileRepo.list(tripId).catch(() => ({ files: [] as TripFile[] })),
+          budgetRepo.list(tripId, mayWriteCache).catch(() => ({ items: [] as BudgetItem[] })),
+          reservationRepo.list(tripId, mayWriteCache).catch(() => ({ reservations: [] as Reservation[] })),
+          fileRepo.list(tripId, mayWriteCache).catch(() => ({ files: [] as TripFile[] })),
         isEffectivelyOnline()
           ? tagsApi.list().catch(() => offlineDb.tags.toArray().then(tags => ({ tags })))
           : offlineDb.tags.toArray().then(tags => ({ tags })),
@@ -259,7 +341,7 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
         dayNotesMap[String(day.id)] = day.notes_items || []
       }
 
-      if (!isCurrentTripRequest(requestGeneration)) return
+      if (!mayWriteCache()) return
       set({
         trip: tripData.trip,
         days: daysData.days,
@@ -276,18 +358,20 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
         isLoading: false,
       })
 
-      const addonItems = await loadPackingAndTodoIfEnabled(tripId, requestGeneration)
-      if (addonItems && isCurrentTripRequest(requestGeneration)) {
+      const addonItems = await loadPackingAndTodoIfEnabled(tripId, mayWriteCache)
+      if (addonItems && mayWriteCache()) {
         set({
           packingItems: addonItems.packingItems ?? [],
           todoItems: addonItems.todoItems ?? [],
         })
       }
     } catch (err: unknown) {
-      if (!isCurrentTripRequest(requestGeneration)) return
+      if (!mayWriteCache()) return
       const message = err instanceof Error ? err.message : 'Unknown error'
       set({ isLoading: false, error: message })
       throw err
+    } finally {
+      finishFullTripLoad(request.requestGeneration)
     }
   },
 
@@ -296,27 +380,24 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
   // offline appear in place — no splash, no resetTrip. Each resource is
   // best-effort; a failure on one must not wipe the others.
   hydrateActiveTrip: async (tripId: number | string) => {
-    const requestGeneration = startTripRequest()
+    const request = startTripHydration(tripId, get().trip?.id)
+    if (!request) return
+    const authLease = captureAuthGenerationLease()
+    const mayWriteCache = () => mayApplyHydration(request, authLease)
     const [daysResult, placesResult, budgetResult, reservationsResult, filesResult] = await Promise.allSettled([
-      dayRepo.list(tripId),
-      placeRepo.list(tripId),
-      budgetRepo.list(tripId),
-      reservationRepo.list(tripId),
-      fileRepo.list(tripId),
+      dayRepo.list(tripId, mayWriteCache),
+      placeRepo.list(tripId, undefined, mayWriteCache),
+      budgetRepo.list(tripId, mayWriteCache),
+      reservationRepo.list(tripId, mayWriteCache),
+      fileRepo.list(tripId, mayWriteCache),
     ])
-    if (!isCurrentTripRequest(requestGeneration)) return
-    const currentState = get()
+    if (!mayWriteCache()) return
     const daysData = daysResult.status === 'fulfilled' ? daysResult.value : null
     const placesData = placesResult.status === 'fulfilled' ? placesResult.value : null
     const budgetData = budgetResult.status === 'fulfilled' ? budgetResult.value : null
     const reservationsData = reservationsResult.status === 'fulfilled' ? reservationsResult.value : null
     const filesData = filesResult.status === 'fulfilled' ? filesResult.value : null
-    const nextState: Partial<TripStoreState> = {
-      places: placesData?.places ?? currentState.places,
-      budgetItems: budgetData?.items ?? currentState.budgetItems,
-      reservations: reservationsData?.reservations ?? currentState.reservations,
-      files: filesData?.files ?? currentState.files,
-    }
+    const nextState: Partial<TripStoreState> = {}
     if (daysData) {
       const assignmentsMap: AssignmentsMap = {}
       const dayNotesMap: DayNotesMap = {}
@@ -328,23 +409,31 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
       nextState.assignments = assignmentsMap
       nextState.dayNotes = dayNotesMap
     }
-    set(nextState)
-    const addonItems = await loadPackingAndTodoIfEnabled(tripId, requestGeneration)
-    if (addonItems && isCurrentTripRequest(requestGeneration)) {
-      const nextAddonState: Partial<Pick<TripStoreState, 'packingItems' | 'todoItems'>> = {}
-      if ('packingItems' in addonItems) nextAddonState.packingItems = addonItems.packingItems ?? currentState.packingItems
-      if ('todoItems' in addonItems) nextAddonState.todoItems = addonItems.todoItems ?? currentState.todoItems
-      set(nextAddonState)
+    set(state => ({
+      ...nextState,
+      places: placesData?.places ?? state.places,
+      budgetItems: budgetData?.items ?? state.budgetItems,
+      reservations: reservationsData?.reservations ?? state.reservations,
+      files: filesData?.files ?? state.files,
+    }))
+    const addonItems = await loadPackingAndTodoIfEnabled(tripId, mayWriteCache)
+    if (addonItems && mayWriteCache()) {
+      set(state => ({
+        ...('packingItems' in addonItems ? { packingItems: addonItems.packingItems ?? state.packingItems } : {}),
+        ...('todoItems' in addonItems ? { todoItems: addonItems.todoItems ?? state.todoItems } : {}),
+      }))
     }
-    if (!isCurrentTripRequest(requestGeneration)) return
+    if (!mayWriteCache()) return
     // Accommodations live in planner-local state, not this store — nudge the
     // planner to reload them too (e.g. a trip date change made while offline).
     window.dispatchEvent(new CustomEvent('accommodations:refresh'))
   },
 
   refreshDays: async (tripId: number | string) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const daysData = await dayRepo.list(tripId)
+      assertStoreSessionLeaseValid(sessionLease)
       const assignmentsMap: AssignmentsMap = {}
       const dayNotesMap: DayNotesMap = {}
       for (const day of daysData.days) {
@@ -353,15 +442,22 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
       }
       set({ days: daysData.days, assignments: assignmentsMap, dayNotes: dayNotesMap })
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       console.error('Failed to refresh days:', err)
     }
   },
 
-  updateTrip: async (tripId: number | string, data: Partial<Trip> & { date_shift_mode?: 'keep_bookings' | 'shift_all' }) => {
+  updateTrip: async (
+    tripId: number | string,
+    data: Partial<Trip> & { date_shift_mode?: 'keep_bookings' | 'shift_all' },
+  ) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const result = await tripsApi.update(tripId, data)
+      assertStoreSessionLeaseValid(sessionLease)
       set({ trip: result.trip })
       const daysData = await dayRepo.list(tripId)
+      assertStoreSessionLeaseValid(sessionLease)
       const assignmentsMap: AssignmentsMap = {}
       const dayNotesMap: DayNotesMap = {}
       for (const day of daysData.days) {
@@ -372,28 +468,36 @@ export const useTripStore = create<TripStoreState>((set, get) => ({
       // A date change re-anchors bookings server-side (#1288); the socket echo is
       // suppressed for this client, so pull the fresh reservations here.
       await get().loadReservations(tripId)
+      assertStoreSessionLeaseValid(sessionLease)
       return result.trip
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error updating trip'))
     }
   },
 
   addTag: async (data: Partial<Tag> & { name: string }) => {
+    const authLease = captureAuthGenerationLease()
     try {
       const result = await tagsApi.create(data)
-      set((state) => ({ tags: [...state.tags, result.tag] }))
+      assertAuthGenerationLeaseValid(authLease)
+      set(state => ({ tags: [...state.tags, result.tag] }))
       return result.tag
     } catch (err: unknown) {
+      if (!isAuthGenerationLeaseValid(authLease)) throw new StaleAuthSessionError()
       throw new Error(getApiErrorMessage(err, 'Error creating tag'))
     }
   },
 
   addCategory: async (data: Partial<Category> & { name: string }) => {
+    const authLease = captureAuthGenerationLease()
     try {
       const result = await categoriesApi.create(data)
-      set((state) => ({ categories: [...state.categories, result.category] }))
+      assertAuthGenerationLeaseValid(authLease)
+      set(state => ({ categories: [...state.categories, result.category] }))
       return result.category
     } catch (err: unknown) {
+      if (!isAuthGenerationLeaseValid(authLease)) throw new StaleAuthSessionError()
       throw new Error(getApiErrorMessage(err, 'Error creating category'))
     }
   },

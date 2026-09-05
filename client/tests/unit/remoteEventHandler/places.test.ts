@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useTripStore } from '../../../src/store/tripStore';
+import { setAuthed } from '../../../src/sync/authGate';
 import { resetAllStores } from '../../helpers/store';
-import { buildPlace, buildAssignment } from '../../helpers/factories';
+import { buildPlace, buildAssignment, buildTrip } from '../../helpers/factories';
 
 beforeEach(() => {
   resetAllStores();
+  setAuthed(true, 7);
 });
 
 describe('remoteEventHandler > places', () => {
@@ -149,5 +151,46 @@ describe('remoteEventHandler > places', () => {
     const { places, assignments } = useTripStore.getState();
     expect(places.map(p => p.id)).toEqual([2]);
     expect(assignments['10'].map(a => a.id)).toEqual([200]);
+  });
+
+  it('FE-WSEVT-PLACE-009: explicit tripId mismatch is dropped', () => {
+    const place = buildPlace({ id: 1, name: 'Original' });
+    useTripStore.setState({ trip: buildTrip({ id: 1 }), places: [place] });
+
+    useTripStore.getState().handleRemoteEvent({
+      type: 'place:updated',
+      tripId: 2,
+      place: { ...place, name: 'wrong trip' },
+    });
+
+    expect(useTripStore.getState().places[0].name).toBe('Original');
+  });
+
+  it('FE-WSEVT-PLACE-010: explicit tripId is dropped while the active trip is not loaded', () => {
+    const place = buildPlace({ id: 1, name: 'Original' });
+    useTripStore.setState({ trip: null, places: [place] });
+
+    useTripStore.getState().handleRemoteEvent({
+      type: 'place:updated',
+      tripId: 1,
+      place: { ...place, name: 'must not land during load' },
+    });
+
+    expect(useTripStore.getState().places[0].name).toBe('Original');
+  });
+
+  it('FE-WSEVT-PLACE-011: explicit trip event is dropped after logout even before trip reset', () => {
+    const place = buildPlace({ id: 1, name: 'Original' });
+    useTripStore.setState({ trip: buildTrip({ id: 1 }), places: [place] });
+    setAuthed(true, 7);
+    setAuthed(false);
+
+    useTripStore.getState().handleRemoteEvent({
+      type: 'place:updated',
+      tripId: 1,
+      place: { ...place, name: 'must not land after logout' },
+    });
+
+    expect(useTripStore.getState().places[0].name).toBe('Original');
   });
 });

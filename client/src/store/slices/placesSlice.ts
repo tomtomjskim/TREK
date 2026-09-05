@@ -4,6 +4,11 @@ import type { StoreApi } from 'zustand'
 import type { TripStoreState } from '../tripStore'
 import type { Place, Assignment } from '../../types'
 import { getApiErrorMessage } from '../../types'
+import {
+  assertStoreSessionLeaseValid,
+  captureStoreSessionLease,
+  isStoreSessionLeaseValid,
+} from '../sessionGate'
 
 type SetState = StoreApi<TripStoreState>['setState']
 type GetState = StoreApi<TripStoreState>['getState']
@@ -68,61 +73,78 @@ function applyUpdatedPlace(set: SetState, placeId: number, place: Place): void {
 
 export const createPlacesSlice = (set: SetState, get: GetState): PlacesSlice => ({
   refreshPlaces: async (tripId) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const data = await placeRepo.list(tripId)
+      assertStoreSessionLeaseValid(sessionLease)
       set({ places: data.places })
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       console.error('Failed to refresh places:', err)
     }
   },
 
   addPlace: async (tripId, placeData) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const data = await placeRepo.create(tripId, placeData as Record<string, unknown> & { name: string })
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({ places: [data.place, ...state.places] }))
       return data.place
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error adding place'))
     }
   },
 
   updatePlace: async (tripId, placeId, placeData) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const data = await placeRepo.update(tripId, placeId, placeData as Record<string, unknown>)
+      assertStoreSessionLeaseValid(sessionLease)
       applyUpdatedPlace(set, placeId, data.place)
       return data.place
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error updating place'))
     }
   },
 
   uploadPlaceImage: async (tripId, placeId, file) => {
+    const sessionLease = captureStoreSessionLease()
     // Uploads are online-only (binary multipart), so they bypass the offline repo.
     // The server broadcast is echo-suppressed for us, so apply the returned place.
     try {
       const data = await placesApi.uploadImage(tripId, placeId, file)
+      assertStoreSessionLeaseValid(sessionLease)
       applyUpdatedPlace(set, placeId, data.place)
       return data.place
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error uploading image'))
     }
   },
 
   ratePlace: async (tripId, placeId, rating) => {
+    const sessionLease = captureStoreSessionLease()
     // Casts (or clears, rating null) the current user's own star vote (#1435)
     // and applies the returned place with the fresh average.
     try {
       const data = await placesApi.rate(tripId, placeId, rating)
+      assertStoreSessionLeaseValid(sessionLease)
       applyUpdatedPlace(set, placeId, data.place)
       return data.place
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error rating place'))
     }
   },
 
   deletePlace: async (tripId, placeId) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       await placeRepo.delete(tripId, placeId)
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => {
         const updatedAssignments = { ...state.assignments }
         let changed = false
@@ -138,14 +160,17 @@ export const createPlacesSlice = (set: SetState, get: GetState): PlacesSlice => 
         }
       })
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error deleting place'))
     }
   },
 
   deletePlacesMany: async (tripId, placeIds) => {
     if (placeIds.length === 0) return
+    const sessionLease = captureStoreSessionLease()
     try {
       await placeRepo.deleteMany(tripId, placeIds)
+      assertStoreSessionLeaseValid(sessionLease)
       const idSet = new Set(placeIds)
       set(state => {
         const updatedAssignments = { ...state.assignments }
@@ -162,14 +187,17 @@ export const createPlacesSlice = (set: SetState, get: GetState): PlacesSlice => 
         }
       })
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error deleting places'))
     }
   },
 
   updatePlacesMany: async (tripId, placeIds, patch) => {
     if (placeIds.length === 0) return
+    const sessionLease = captureStoreSessionLease()
     try {
       await placeRepo.updateMany(tripId, placeIds, patch as Record<string, unknown>)
+      assertStoreSessionLeaseValid(sessionLease)
       const idSet = new Set(placeIds)
       set(state => {
         // Patch both the place pool and the embedded place on each day assignment
@@ -191,6 +219,7 @@ export const createPlacesSlice = (set: SetState, get: GetState): PlacesSlice => 
         }
       })
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error updating places'))
     }
   },

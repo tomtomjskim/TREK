@@ -8,10 +8,18 @@
  *   - online and the request succeeds → return it, skip cache
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { onlineThenCache } from '../../../src/repo/withOfflineFallback';
+import { onlineThenCache, StaleCacheResponseError } from '../../../src/repo/withOfflineFallback';
+import { setAuthed } from '../../../src/sync/authGate';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(r => { resolve = r; });
+  return { promise, resolve };
+}
 
 beforeEach(() => {
   Object.defineProperty(navigator, 'onLine', { value: true, writable: true, configurable: true });
+  setAuthed(false);
 });
 
 afterEach(() => {
@@ -72,5 +80,31 @@ describe('onlineThenCache', () => {
     const cache = vi.fn().mockRejectedValue(new Error('No cached data'));
 
     await expect(onlineThenCache(online, cache)).rejects.toThrow('No cached data');
+  });
+
+  it('does not return an online response after the auth session changes', async () => {
+    setAuthed(true, 101);
+    const response = deferred<string>();
+    const request = onlineThenCache(() => response.promise, vi.fn());
+
+    setAuthed(false);
+    response.resolve('old-account');
+
+    await expect(request).rejects.toBeInstanceOf(StaleCacheResponseError);
+  });
+
+  it('does not return a delayed cache response after the DB/auth session changes', async () => {
+    setAuthed(true, 101);
+    const response = deferred<string>();
+    const request = onlineThenCache(
+      vi.fn().mockRejectedValue(Object.assign(new Error('Network Error'), { isAxiosError: true })),
+      () => response.promise,
+    );
+
+    await Promise.resolve();
+    setAuthed(false);
+    response.resolve('old-cache');
+
+    await expect(request).rejects.toBeInstanceOf(StaleCacheResponseError);
   });
 });

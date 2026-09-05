@@ -10,7 +10,7 @@ import { server } from '../../helpers/msw/server';
 import { http, HttpResponse } from 'msw';
 import { setAuthed } from '../../../src/sync/authGate';
 import { mutationQueue, generateUUID, nextTempId } from '../../../src/sync/mutationQueue';
-import { offlineDb, clearAll } from '../../../src/db/offlineDb';
+import { offlineDb, clearAll, reopenForUser } from '../../../src/db/offlineDb';
 import { placeRepo } from '../../../src/repo/placeRepo';
 import { buildPlace, buildPackingItem } from '../../helpers/factories';
 
@@ -501,5 +501,87 @@ describe('mutationQueue.flush — failure handling (B3)', () => {
 
     const m = await offlineDb.mutationQueue.get(id);
     expect(m!.status).toBe('pending');
+  });
+});
+
+describe('mutationQueue.flush — auth and database lease boundary', () => {
+  it('does not touch the new account database after an in-flight response and can flush again', async () => {
+    await reopenForUser(501);
+    setAuthed(true, 501);
+    await clearAll();
+
+    const oldMutationId = generateUUID();
+    await mutationQueue.enqueue(makeMutation({ id: oldMutationId }));
+
+    let requestCount = 0;
+    let releaseOldResponse!: () => void;
+    const oldResponse = new Promise<void>(resolve => { releaseOldResponse = resolve; });
+    server.use(
+      http.post('/api/trips/1/places', async () => {
+        requestCount += 1;
+        if (requestCount === 1) await oldResponse;
+        return HttpResponse.json({ place: buildPlace({ trip_id: 1, id: requestCount === 1 ? 501 : 502 }) });
+      }),
+    );
+
+    const oldFlush = mutationQueue.flush();
+    await vi.waitFor(() => expect(requestCount).toBe(1));
+
+    setAuthed(false);
+    await reopenForUser(502);
+    setAuthed(true, 502);
+    await clearAll();
+
+    const newMutationId = generateUUID();
+    await mutationQueue.enqueue(makeMutation({ id: newMutationId }));
+    releaseOldResponse();
+
+    await oldFlush;
+    expect(await offlineDb.places.get(501)).toBeUndefined();
+    expect((await offlineDb.mutationQueue.get(newMutationId))?.status).toBe('pending');
+
+    await mutationQueue.flush();
+    expect(requestCount).toBe(2);
+    expect(await offlineDb.mutationQueue.get(newMutationId)).toBeUndefined();
+    expect(await offlineDb.places.get(502)).toBeDefined();
+  });
+
+  it('does not apply a delayed conflict lookup to the switched account database', async () => {
+    await reopenForUser(601);
+    setAuthed(true, 601);
+    await clearAll();
+
+    const id = generateUUID();
+    const oldQueue = offlineDb.mutationQueue;
+    await oldQueue.put({
+      ...makeMutation({ id, method: 'PUT', url: '/trips/1/places/42', entityId: 42 }),
+      status: 'conflict', attempts: 1, createdAt: Date.now(), lastError: 'conflict',
+      conflictServer: buildPlace({ trip_id: 1, id: 42, name: 'Old account' }),
+      conflictAt: Date.now(),
+    });
+
+    let releaseLookup!: () => void;
+    const lookupPaused = new Promise<void>(resolve => { releaseLookup = resolve; });
+    const conflict = await oldQueue.get(id);
+    expect(conflict).toBeDefined();
+    const getSpy = vi.spyOn(oldQueue as any, 'get').mockImplementation(async (key: string) => {
+      await lookupPaused;
+      return key === id ? conflict : undefined;
+    });
+
+    const oldResolution = mutationQueue.resolveKeepServer(id);
+    await vi.waitFor(() => expect(getSpy).toHaveBeenCalled());
+
+    setAuthed(false);
+    await reopenForUser(602);
+    setAuthed(true, 602);
+    await clearAll();
+    await offlineDb.places.put(buildPlace({ trip_id: 1, id: 42, name: 'New account' }));
+
+    releaseLookup();
+    await oldResolution;
+
+    expect((await offlineDb.places.get(42))?.name).toBe('New account');
+    expect(await offlineDb.mutationQueue.get(id)).toBeUndefined();
   });
 });

@@ -19,6 +19,8 @@ import {
 } from '../../tests/helpers/factories';
 import { offlineDb } from '../db/offlineDb';
 import { setForcedOffline } from '../sync/networkMode';
+import { setAuthed } from '../sync/authGate';
+import { activateTripSession } from './tripSessionGate';
 import { useAddonStore } from './addonStore';
 import { useTripStore } from './tripStore';
 
@@ -476,6 +478,58 @@ describe('tripStore', () => {
       expect(todoCalls).toBe(0)
     });
 
+    it('FE-TSTORE-005h: an auth transition invalidates a pending load without requiring a route reset', async () => {
+      const tripCore = deferred<Response>();
+      server.use(
+        http.get('/api/trips/1', () => tripCore.promise),
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: [] })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [] })),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/tags', () => HttpResponse.json({ tags: [] })),
+        http.get('/api/categories', () => HttpResponse.json({ categories: [] })),
+      );
+
+      const pendingLoad = useTripStore.getState().loadTrip(1);
+      setAuthed(false);
+      seedStore(useTripStore, { trip: buildTrip({ id: 2, title: 'New account trip' }) });
+      tripCore.resolve(HttpResponse.json({ trip: buildTrip({ id: 1, title: 'Old account trip' }) }));
+      await expect(pendingLoad).resolves.toBeUndefined();
+
+      expect(useTripStore.getState().trip?.id).toBe(2);
+      expect(useTripStore.getState().trip?.title).toBe('New account trip');
+    });
+
+    it('FE-TSTORE-005i: same-trip hydration does not supersede an in-flight full load', async () => {
+      const tripCore = deferred<Response>();
+      let dayCalls = 0;
+      server.use(
+        http.get('/api/trips/1', () => tripCore.promise),
+        http.get('/api/trips/1/days', () => {
+          dayCalls += 1;
+          return HttpResponse.json({ days: [] });
+        }),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [] })),
+        http.get('/api/trips/1/packing', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/todo', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/tags', () => HttpResponse.json({ tags: [] })),
+        http.get('/api/categories', () => HttpResponse.json({ categories: [] })),
+      );
+
+      const pendingLoad = useTripStore.getState().loadTrip(1);
+      await expect(useTripStore.getState().hydrateActiveTrip(1)).resolves.toBeUndefined();
+      tripCore.resolve(HttpResponse.json({ trip: buildTrip({ id: 1, title: 'Loaded once' }) }));
+      await pendingLoad;
+
+      expect(useTripStore.getState().trip?.title).toBe('Loaded once');
+      expect(useTripStore.getState().isLoading).toBe(false);
+      expect(dayCalls).toBe(1);
+    });
+
     it('FE-TSTORE-006: falls back to the cached tags and categories when their endpoints fail', async () => {
       await offlineDb.tags.put(buildTag({ id: 31, name: 'Cached tag' }));
       await offlineDb.categories.put(buildCategory({ id: 32, name: 'Cached category' }));
@@ -735,6 +789,8 @@ describe('tripStore', () => {
       const hydrate1 = useTripStore.getState().hydrateActiveTrip(1)
       await waitFor(() => expect(useTripStore.getState().days[0]?.trip_id).toBe(1))
 
+      activateTripSession(2)
+      seedStore(useTripStore, { trip: buildTrip({ id: 2 }), days: [], places: [] })
       const hydrate2 = useTripStore.getState().hydrateActiveTrip(2)
       useAddonStore.setState({
         addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
@@ -787,7 +843,7 @@ describe('tripStore', () => {
 
     it('FE-TSTORE-009: one failing resource does not wipe the others', async () => {
       const stalePlace = buildPlace({ id: 111, trip_id: 1, name: 'Kept' });
-      seedStore(useTripStore, { places: [stalePlace], packingItems: [], todoItems: [] });
+      seedStore(useTripStore, { trip: buildTrip({ id: 1 }), places: [stalePlace], packingItems: [], todoItems: [] });
       vi.spyOn(console, 'error').mockImplementation(() => {});
 
       server.use(
@@ -825,6 +881,47 @@ describe('tripStore', () => {
 
       expect(useTripStore.getState().packingItems.map(i => i.id)).toEqual([88]);
       expect(useTripStore.getState().todoItems.map(i => i.id)).toEqual([72]);
+    });
+
+    it('FE-TSTORE-009d: an undefined addon payload preserves state updated while hydration was in flight', async () => {
+      const initiallyVisible = buildPackingItem({ id: 88, trip_id: 1 });
+      const updatedWhileWaiting = buildPackingItem({ id: 99, trip_id: 1 });
+      seedStore(useTripStore, {
+        trip: buildTrip({ id: 1 }),
+        packingItems: [initiallyVisible],
+        todoItems: [],
+      });
+      useAddonStore.setState({
+        addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+        bagTracking: false,
+        loaded: true,
+      });
+      let releasePacking!: () => void;
+      let packingRequested!: () => void;
+      const packingGate = new Promise<void>(resolve => { releasePacking = resolve; });
+      const packingStarted = new Promise<void>(resolve => { packingRequested = resolve; });
+
+      server.use(
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [] })),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/trips/1/packing', async () => {
+          packingRequested();
+          await packingGate;
+          return HttpResponse.json({});
+        }),
+        http.get('/api/trips/1/todo', () => HttpResponse.json({ items: [] })),
+      );
+
+      const hydration = useTripStore.getState().hydrateActiveTrip(1);
+      await packingStarted;
+      seedStore(useTripStore, { packingItems: [updatedWhileWaiting] });
+      releasePacking();
+      await hydration;
+
+      expect(useTripStore.getState().packingItems.map(item => item.id)).toEqual([99]);
     });
 
     it('FE-TSTORE-009c: a failing day resource preserves the existing day maps', async () => {

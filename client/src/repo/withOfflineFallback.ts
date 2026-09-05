@@ -1,4 +1,28 @@
 import { isEffectivelyOffline } from '../sync/networkMode'
+import { captureOfflineDbLease, isOfflineDbLeaseValid } from '../db/offlineDb'
+import { captureAuthGenerationLease, isAuthGenerationLeaseValid } from '../sync/authGate'
+
+/** Optional lease checked immediately before a read-through cache mutation. */
+export type CacheWriteGuard = () => boolean
+
+/** Bind cache writes to both the starting DB and an optional caller request. */
+export function cacheWriteGuard(extra: CacheWriteGuard = () => true): CacheWriteGuard {
+  const dbLease = captureOfflineDbLease()
+  const authLease = captureAuthGenerationLease()
+  return () => isOfflineDbLeaseValid(dbLease) && isAuthGenerationLeaseValid(authLease) && extra()
+}
+
+export class StaleCacheResponseError extends Error {
+  constructor() {
+    super('Cache response belongs to an expired auth or database session')
+    this.name = 'StaleCacheResponseError'
+  }
+}
+
+/** Stop callers from applying a response that belongs to another auth session. */
+export function assertCacheWriteAllowed(guard: CacheWriteGuard): void {
+  if (!guard()) throw new StaleCacheResponseError()
+}
 
 /**
  * True when an error means the request never reached the server — a network-level
@@ -40,11 +64,26 @@ export async function onlineThenCache<T>(
   onlineFn: () => Promise<T>,
   cacheFn: () => Promise<T>,
 ): Promise<T> {
-  if (isEffectivelyOffline()) return cacheFn()
+  // The returned value is also session-scoped. A request can finish after
+  // logout/account switch even when it never writes through to Dexie, so use
+  // the same DB/auth lease that protects read-through cache writes.
+  const sessionGuard = cacheWriteGuard()
+  if (isEffectivelyOffline()) {
+    const cached = await cacheFn()
+    assertCacheWriteAllowed(sessionGuard)
+    return cached
+  }
   try {
-    return await onlineFn()
+    const online = await onlineFn()
+    assertCacheWriteAllowed(sessionGuard)
+    return online
   } catch (err) {
-    if (isNetworkError(err)) return cacheFn()
+    if (isNetworkError(err)) {
+      assertCacheWriteAllowed(sessionGuard)
+      const cached = await cacheFn()
+      assertCacheWriteAllowed(sessionGuard)
+      return cached
+    }
     throw err
   }
 }

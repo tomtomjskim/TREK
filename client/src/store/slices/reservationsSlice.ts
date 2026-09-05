@@ -4,6 +4,7 @@ import type { StoreApi } from 'zustand'
 import type { TripStoreState } from '../tripStore'
 import type { Reservation } from '../../types'
 import { getApiErrorMessage } from '../../types'
+import { assertStoreSessionLeaseValid, captureStoreSessionLease, isStoreSessionLeaseValid } from '../sessionGate'
 
 type SetState = StoreApi<TripStoreState>['setState']
 type GetState = StoreApi<TripStoreState>['getState']
@@ -19,37 +20,47 @@ export interface ReservationsSlice {
 
 export const createReservationsSlice = (set: SetState, get: GetState): ReservationsSlice => ({
   loadReservations: async (tripId) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const data = await reservationRepo.list(tripId)
+      assertStoreSessionLeaseValid(sessionLease)
       set({ reservations: data.reservations })
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       console.error('Failed to load reservations:', err)
     }
   },
 
   addReservation: async (tripId, data) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const result = await reservationsApi.create(tripId, data)
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({ reservations: [result.reservation, ...state.reservations] }))
       return result.reservation
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error creating reservation'))
     }
   },
 
   updateReservation: async (tripId, id, data) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const result = await reservationsApi.update(tripId, id, data)
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({
         reservations: state.reservations.map(r => r.id === id ? result.reservation : r)
       }))
       return result.reservation
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error updating reservation'))
     }
   },
 
   toggleReservationStatus: async (tripId, id) => {
+    const sessionLease = captureStoreSessionLease()
     const prev = get().reservations
     const current = prev.find(r => r.id === id)
     if (!current) return
@@ -59,7 +70,9 @@ export const createReservationsSlice = (set: SetState, get: GetState): Reservati
     }))
     try {
       await reservationsApi.update(tripId, id, { status: newStatus })
+      assertStoreSessionLeaseValid(sessionLease)
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       // Roll back the optimistic toggle and surface the failure so the caller's
       // catch can notify the user — without it the status silently snaps back.
       set({ reservations: prev })
@@ -68,21 +81,27 @@ export const createReservationsSlice = (set: SetState, get: GetState): Reservati
   },
 
   deleteReservation: async (tripId, id) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       await reservationsApi.delete(tripId, id)
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({ reservations: state.reservations.filter(r => r.id !== id) }))
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error deleting reservation'))
     }
   },
 
   setReservationTravelers: async (tripId, id, userIds) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const result = await reservationsApi.setTravelers(tripId, id, userIds)
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({
         reservations: state.reservations.map(r => r.id === id ? { ...r, travelers: result.travelers } : r),
       }))
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error updating travelers'))
     }
   },

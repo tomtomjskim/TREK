@@ -9,6 +9,8 @@ import {
   reopenForUser,
   reopenAnonymous,
   deleteCurrentUserDb,
+  captureOfflineDbLease,
+  isOfflineDbLeaseValid,
   upsertTrip,
   upsertDays,
   upsertPlaces,
@@ -53,6 +55,12 @@ function queued(id: string, tripId: number, status: QueuedMutation['status']): Q
   return { id, tripId, method: 'PUT', url: `/trips/${tripId}/places/1`, body: {}, createdAt: 1, status, attempts: 0, lastError: null }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+
 beforeEach(async () => {
   await clearAll()
 })
@@ -63,6 +71,16 @@ afterEach(async () => {
 })
 
 describe('offlineDb — bulk upsert helpers', () => {
+  it('FE-DB-OFFLINE-000: a database lease expires when the account database changes', async () => {
+    const anonymousLease = captureOfflineDbLease()
+    expect(isOfflineDbLeaseValid(anonymousLease)).toBe(true)
+
+    await reopenForUser(7001)
+
+    expect(isOfflineDbLeaseValid(anonymousLease)).toBe(false)
+    expect(isOfflineDbLeaseValid(captureOfflineDbLease())).toBe(true)
+  })
+
   it('FE-DB-OFFLINE-001: every entity helper writes into its own table', async () => {
     await upsertTrip(buildTrip({ id: 1 }))
     await upsertDays([buildDay({ id: 1, trip_id: 1 })])
@@ -229,6 +247,28 @@ describe('offlineDb — blob cache budget', () => {
 
     expect(await offlineDb.blobCache.count()).toBe(2)
   })
+
+  it('FE-DB-OFFLINE-030: does not evict a new account after switching during budget enforcement', async () => {
+    await reopenForUser(301)
+    await offlineDb.blobCache.put(blobEntry('/shared-key', 1, 10))
+    const gate = deferred<void>()
+    const oldTable = offlineDb.blobCache
+    vi.spyOn(oldTable, 'orderBy').mockReturnValue({
+      toArray: async () => {
+        await gate.promise
+        return [blobEntry('/shared-key', 1, 10)]
+      },
+    } as never)
+
+    const pending = enforceBlobBudget(0, 1000)
+    await Promise.resolve()
+    await reopenForUser(302)
+    await offlineDb.blobCache.put(blobEntry('/shared-key', 1, 10))
+    gate.resolve()
+    await pending
+
+    expect(await offlineDb.blobCache.get('/shared-key')).toBeDefined()
+  })
 })
 
 describe('offlineDb — clearTripData', () => {
@@ -280,6 +320,41 @@ describe('offlineDb — clearTripData', () => {
 
     const left = (await offlineDb.mutationQueue.toArray()).map(m => m.id).sort()
     expect(left).toEqual(['m-conflict', 'm-other-trip', 'm-pending', 'm-syncing'])
+  })
+
+  it('FE-DB-OFFLINE-031: does not delete a new account trip after switching during cleanup', async () => {
+    await reopenForUser(303)
+    await upsertTrip(buildTrip({ id: 1, title: 'old account trip' }))
+    const gate = deferred<void>()
+    const transactionFinished = deferred<void>()
+    const originalTransaction = Dexie.prototype.transaction
+    vi.spyOn(Dexie.prototype, 'transaction').mockImplementation(function (this: Dexie, ...args: unknown[]) {
+      const result = Reflect.apply(originalTransaction, this, args)
+      return Promise.resolve(result).then(async value => {
+        transactionFinished.resolve()
+        await gate.promise
+        return value
+      }) as never
+    })
+
+    const pending = clearTripData(1)
+    await transactionFinished.promise
+    await reopenForUser(304)
+    await upsertTrip(buildTrip({ id: 1, title: 'new account trip' }))
+    gate.resolve()
+    await pending
+
+    expect((await offlineDb.trips.get(1))?.title).toBe('new account trip')
+  })
+})
+
+describe('offlineDb — clearAll generation', () => {
+  it('FE-DB-OFFLINE-032: invalidates leases before an asynchronous clear can finish', async () => {
+    const lease = captureOfflineDbLease()
+    const pending = clearAll()
+
+    expect(isOfflineDbLeaseValid(lease)).toBe(false)
+    await pending
   })
 })
 

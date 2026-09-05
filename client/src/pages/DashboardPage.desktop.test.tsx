@@ -63,7 +63,7 @@ function appearance(dashboard: Record<string, unknown>) {
 
 beforeEach(() => {
   // Pinned inside the fixture trip's window so the spotlight/grid split is stable.
-  vi.useFakeTimers({ shouldAdvanceTime: true });
+  vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-07-05T12:00:00Z'));
   installMatchMedia();
   resetAllStores();

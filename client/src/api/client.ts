@@ -378,7 +378,8 @@ export const authApi = {
   updateAppSettings: (data: Record<string, unknown>) => apiClient.put('/auth/app-settings', data).then((r) => r.data),
   validateKeys: () => apiClient.get('/auth/validate-keys').then((r) => r.data),
   travelStats: () => apiClient.get('/auth/travel-stats').then((r) => r.data),
-  changePassword: (data: ChangePasswordRequest) => apiClient.put('/auth/me/password', data).then((r) => r.data),
+  changePassword: (data: ChangePasswordRequest, signal?: AbortSignal) =>
+    apiClient.put('/auth/me/password', data, { signal }).then((r) => r.data),
   forgotPassword: (data: ForgotPasswordRequest) =>
     apiClient.post('/auth/forgot-password', data).then((r) => r.data as { ok: true }),
   resetPassword: (data: ResetPasswordRequest) =>
@@ -405,10 +406,10 @@ export const authApi = {
       apiClient.post('/auth/passkey/register/options', { password }).then((r) => r.data),
     registerVerify: (attestationResponse: unknown, name?: string) =>
       apiClient.post('/auth/passkey/register/verify', { attestationResponse, name }).then((r) => r.data),
-    loginOptions: () => apiClient.post('/auth/passkey/login/options', {}).then((r) => r.data),
-    loginVerify: (assertionResponse: unknown) =>
+    loginOptions: (signal?: AbortSignal) => apiClient.post('/auth/passkey/login/options', {}, { signal }).then((r) => r.data),
+    loginVerify: (assertionResponse: unknown, signal?: AbortSignal) =>
       apiClient
-        .post('/auth/passkey/login/verify', { assertionResponse })
+        .post('/auth/passkey/login/verify', { assertionResponse }, { signal })
         .then((r) => r.data as { token: string; user: Record<string, unknown> }),
     list: () => apiClient.get('/auth/passkey/credentials').then((r) => r.data as { credentials: PasskeyCredential[] }),
     rename: (id: number, name: string) =>

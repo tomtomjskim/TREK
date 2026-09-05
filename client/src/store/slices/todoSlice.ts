@@ -5,6 +5,7 @@ import type { TodoItem } from '../../types'
 import type { TodoCreateItemRequest, TodoUpdateItemRequest } from '@trek/shared'
 import { getApiErrorMessage } from '../../types'
 import { notify } from '../notify'
+import { assertStoreSessionLeaseValid, captureStoreSessionLease, isStoreSessionLeaseValid } from '../sessionGate'
 
 type SetState = StoreApi<TripStoreState>['setState']
 type GetState = StoreApi<TripStoreState>['getState']
@@ -19,39 +20,49 @@ export interface TodoSlice {
 
 export const createTodoSlice = (set: SetState, get: GetState): TodoSlice => ({
   addTodoItem: async (tripId, data) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const result = await todoApi.create(tripId, data)
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({ todoItems: [...state.todoItems, result.item] }))
       return result.item
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error adding todo'))
     }
   },
 
   updateTodoItem: async (tripId, id, data) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const result = await todoApi.update(tripId, id, data)
+      assertStoreSessionLeaseValid(sessionLease)
       set(state => ({
         todoItems: state.todoItems.map(item => item.id === id ? result.item : item)
       }))
       return result.item
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error updating todo'))
     }
   },
 
   deleteTodoItem: async (tripId, id) => {
+    const sessionLease = captureStoreSessionLease()
     const prev = get().todoItems
     set(state => ({ todoItems: state.todoItems.filter(item => item.id !== id) }))
     try {
       await todoApi.delete(tripId, id)
+      assertStoreSessionLeaseValid(sessionLease)
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       set({ todoItems: prev })
       throw new Error(getApiErrorMessage(err, 'Error deleting todo'))
     }
   },
 
   toggleTodoItem: async (tripId, id, checked) => {
+    const sessionLease = captureStoreSessionLease()
     set(state => ({
       todoItems: state.todoItems.map(item =>
         item.id === id ? { ...item, checked: checked ? 1 : 0 } : item
@@ -59,7 +70,9 @@ export const createTodoSlice = (set: SetState, get: GetState): TodoSlice => ({
     }))
     try {
       await todoApi.update(tripId, id, { checked })
+      assertStoreSessionLeaseValid(sessionLease)
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       // The caller fires this optimistically and doesn't await, so rolling back
       // silently would just flip the checkbox with no explanation. Surface it.
       set(state => ({
@@ -72,6 +85,7 @@ export const createTodoSlice = (set: SetState, get: GetState): TodoSlice => ({
   },
 
   reorderTodoItems: async (tripId, orderedIds) => {
+    const sessionLease = captureStoreSessionLease()
     const prev = get().todoItems
     // Unknown ids are dropped before reindexing so a stale id can't leave a gap
     // in the local sort_order sequence.
@@ -86,7 +100,9 @@ export const createTodoSlice = (set: SetState, get: GetState): TodoSlice => ({
     })
     try {
       await todoApi.reorder(tripId, orderedIds)
+      assertStoreSessionLeaseValid(sessionLease)
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       set({ todoItems: prev })
       notify(getApiErrorMessage(err, 'Error reordering todos'), 'error')
     }

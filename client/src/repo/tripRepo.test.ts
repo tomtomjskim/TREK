@@ -1,11 +1,21 @@
 // FE-REPO-TRIP-001 to FE-REPO-TRIP-011
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import 'fake-indexeddb/auto'
 import { http, HttpResponse } from 'msw'
-import { server } from '../../tests/helpers/msw/server'
-import { tripRepo } from './tripRepo'
-import { offlineDb, clearAll } from '../db/offlineDb'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildTrip } from '../../tests/helpers/factories'
+import { server } from '../../tests/helpers/msw/server'
+import { clearAll, offlineDb } from '../db/offlineDb'
+import { setAuthed } from '../sync/authGate'
+import { tripRepo } from './tripRepo'
+import { StaleCacheResponseError } from './withOfflineFallback'
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(res => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
 
 function setOnline(v: boolean): void {
   Object.defineProperty(navigator, 'onLine', { value: v, writable: true, configurable: true })
@@ -17,6 +27,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
+  setAuthed(false)
   vi.restoreAllMocks()
 })
 
@@ -41,14 +52,16 @@ describe('tripRepo.list', () => {
   })
 
   it('FE-REPO-TRIP-002: offline — splits the Dexie cache by is_archived', async () => {
-    await offlineDb.trips.bulkPut([
-      buildTrip({ id: 71, is_archived: 0 }),
-      buildTrip({ id: 72, is_archived: 1 }),
-    ])
+    await offlineDb.trips.bulkPut([buildTrip({ id: 71, is_archived: 0 }), buildTrip({ id: 72, is_archived: 1 })])
     setOnline(false)
 
     let restCalled = false
-    server.use(http.get('/api/trips', () => { restCalled = true; return HttpResponse.json({ trips: [] }) }))
+    server.use(
+      http.get('/api/trips', () => {
+        restCalled = true
+        return HttpResponse.json({ trips: [] })
+      }),
+    )
 
     const result = await tripRepo.list()
     expect(result.trips.map(t => t.id)).toEqual([71])
@@ -96,6 +109,36 @@ describe('tripRepo.get', () => {
     const result = await tripRepo.get(82)
     expect(result.trip.title).toBe('Fallback')
   })
+
+  it('FE-REPO-TRIP-012: waits for the cache write and rejects when auth changes before it commits', async () => {
+    const trip = buildTrip({ id: 83, title: 'Delayed cache' })
+    const write = deferred<void>()
+    const put = vi.spyOn(offlineDb.trips, 'put').mockImplementation(
+      (async () => {
+        await write.promise
+        return trip.id
+      }) as unknown as typeof offlineDb.trips.put,
+    )
+    server.use(http.get('/api/trips/83', () => HttpResponse.json({ trip })))
+    setAuthed(true, 1)
+
+    let settled = false
+    const request = tripRepo.get(83)
+    void request.then(
+      () => {
+        settled = true
+      },
+      () => {
+        settled = true
+      },
+    )
+    await vi.waitFor(() => expect(put).toHaveBeenCalledOnce())
+    expect(settled).toBe(false)
+
+    setAuthed(false)
+    write.resolve()
+    await expect(request).rejects.toBeInstanceOf(StaleCacheResponseError)
+  })
 })
 
 describe('tripRepo.active', () => {
@@ -107,9 +150,11 @@ describe('tripRepo.active', () => {
   }
 
   it('FE-REPO-TRIP-008: online — passes the server answer straight through', async () => {
-    server.use(http.get('/api/trips/active', () =>
+    server.use(
+      http.get('/api/trips/active', () =>
       HttpResponse.json({ trip: { id: 90, title: 'Server pick', start_date: null, end_date: null } }),
-    ))
+      ),
+    )
 
     const result = await tripRepo.active()
     expect(result.trip!.id).toBe(90)
@@ -131,7 +176,9 @@ describe('tripRepo.active', () => {
   })
 
   it('FE-REPO-TRIP-010: offline — skips archived trips and answers null when nothing is left', async () => {
-    await offlineDb.trips.put(buildTrip({ id: 94, is_archived: 1, start_date: dateOffset(-1), end_date: dateOffset(2) }))
+    await offlineDb.trips.put(
+      buildTrip({ id: 94, is_archived: 1, start_date: dateOffset(-1), end_date: dateOffset(2) }),
+    )
     setOnline(false)
 
     expect((await tripRepo.active()).trip).toBeNull()

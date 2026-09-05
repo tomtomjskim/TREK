@@ -86,11 +86,12 @@ export function useDashboard() {
     }
   }
 
-  // Re-run both the trip fetch and the auth check so a recovered backend clears
-  // the error banner (loadUser resets authCheckFailed on success). #1283
-  const retryLoad = () => {
-    loadUser({ silent: true })
-    loadTrips()
+  // Refresh auth first so a recovered backend reopens the user-scoped DB before
+  // the trip fetch captures its cache/auth lease. #1283
+  const retryLoad = async () => {
+    const authed = await loadUser({ silent: true })
+    if (!authed) return
+    await loadTrips()
   }
 
   const today = localIsoToday()

@@ -1647,7 +1647,22 @@ describe('AdminPage', () => {
 
   describe('FE-PAGE-ADMIN-057: Remaining tab panels', () => {
     it('renders the personalization, plugins and user-defaults panels', async () => {
+      server.use(
+        http.get('/api/addons', () =>
+          HttpResponse.json({
+            bagTracking: false,
+            addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+          }),
+        ),
+        http.get('/api/admin/places-enrich', () => HttpResponse.json({ enabled: true })),
+      );
+
       seedStore(useAuthStore, { isAuthenticated: true, user: buildAdmin() });
+      useAddonStore.setState({
+        addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+        bagTracking: false,
+        loaded: true,
+      });
       render(<AdminPage />);
 
       await waitFor(() => expect(screen.getByRole('button', { name: /^users$/i })).toBeInTheDocument());

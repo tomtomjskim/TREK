@@ -7,6 +7,7 @@ import { SUPPORTED_LANGUAGE_CODES } from '../i18n/supportedLanguages'
 import { normalizeTileUrl, stripTileApiKey } from '../utils/tileUrl'
 import { clearTileCache } from '../sync/tilePrefetcher'
 import { rememberStartDestination, DEFAULT_START_PAGE, DEFAULT_START_TRIP_TAB } from '../utils/startDestination'
+import { captureAuthGenerationLease, isAuthGenerationLeaseValid } from '../sync/authGate'
 
 interface SettingsState {
   settings: Settings
@@ -92,7 +93,21 @@ export const DEFAULT_SETTINGS: Settings = {
 
 // De-dupe concurrent loads: the reconnection triggers (online / visibility /
 // periodic) can all fire a retry at once — collapse them into one in-flight GET.
-let _loadInFlight: Promise<void> | null = null
+let _loadInFlight: { generation: number; promise: Promise<void> } | null = null
+
+function freshAccountSettings(): Settings {
+  let explicitLanguage = 'en'
+  try {
+    explicitLanguage = localStorage.getItem('app_language') || 'en'
+  } catch {
+    // Storage may be unavailable; the account-safe built-in default is English.
+  }
+  return {
+    ...DEFAULT_SETTINGS,
+    language: explicitLanguage,
+    appearance: { ...DEFAULT_APPEARANCE },
+  }
+}
 
 // Every tile consumer (planner map, journey map, tile prefetcher, the settings
 // preview) reads the template from this store, so the retired
@@ -116,17 +131,22 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   isLoaded: false,
 
   loadSettings: async () => {
-    if (_loadInFlight !== null) return _loadInFlight
-    _loadInFlight = (async () => {
+    const lease = captureAuthGenerationLease()
+    if (_loadInFlight?.generation === lease.generation) return _loadInFlight.promise
+    const promise = (async () => {
       try {
         const data = await settingsApi.get()
+        if (!isAuthGenerationLeaseValid(lease)) return
         // Rewritten here so the Map settings input already shows the host that
         // still resolves, and persists it on the next save.
         const incoming = withNormalizedTileUrl({ ...data.settings } as Partial<Settings>)
-        set((state) => ({
-          settings: { ...state.settings, ...incoming },
+        set(() => ({
+          // A missing key means this account never set it. Merge onto a fresh
+          // account base, never onto values left by the previous identity.
+          settings: { ...freshAccountSettings(), ...incoming },
           isLoaded: true,
         }))
+        if (!isAuthGenerationLeaseValid(lease)) return
         // The startup redirect runs before this ever resolves, so keep a mirror
         // it can read synchronously on the next launch.
         rememberStartDestination(incoming)
@@ -145,10 +165,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         // currency/units) for the whole session (#1618).
         console.error('Failed to load settings:', err)
       } finally {
-        _loadInFlight = null
+        if (_loadInFlight?.promise === promise) _loadInFlight = null
       }
     })()
-    return _loadInFlight
+    _loadInFlight = { generation: lease.generation, promise }
+    return promise
   },
 
   updateSetting: async (key: keyof Settings, value: Settings[keyof Settings]) => {
@@ -200,3 +221,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
   },
 }))
+
+/** Synchronous account-boundary reset used before logout/401 can yield. */
+export function resetSettingsForAccountTransition(): void {
+  _loadInFlight = null
+  useSettingsStore.setState({ settings: freshAccountSettings(), isLoaded: false })
+}

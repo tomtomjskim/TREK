@@ -3,7 +3,11 @@ import { persist } from 'zustand/middleware';
 import { authApi } from '../api/client';
 import { connect, disconnect } from '../api/websocket';
 import { deleteCurrentUserDb, reopenForUser } from '../db/offlineDb';
-import { setAuthed } from '../sync/authGate';
+import {
+  assertAuthGenerationLeaseValid,
+  captureAuthGenerationLease,
+  setAuthed,
+} from '../sync/authGate';
 import { registerSyncTriggers, unregisterSyncTriggers } from '../sync/syncTriggers';
 import { tripSyncManager } from '../sync/tripSyncManager';
 import { clearAppearanceSnapshot } from '../theme/applyAppearance';
@@ -11,7 +15,7 @@ import type { User } from '../types';
 import { getApiErrorMessage } from '../types';
 import { clearSignedOut, markSignedOut } from '../utils/signedOut';
 import { forgetStartDestination } from '../utils/startDestination';
-import { forgetServerLanguage } from './settingsStore';
+import { forgetServerLanguage, resetSettingsForAccountTransition } from './settingsStore';
 import { clearAllPluginSessions } from './pluginStore';
 import { useTripStore } from './tripStore';
 import { useSystemNoticeStore } from './systemNoticeStore.js';
@@ -96,6 +100,15 @@ interface AuthState {
 // logging out invalidates older responses before they can touch state.
 let authSequence = 0;
 let activeAuthRequest: AbortController | null = null;
+let activeLogoutBarrier: Promise<void> | null = null;
+const LOGOUT_REQUEST_TIMEOUT_MS = 10_000;
+const ACCOUNT_CACHE_NAMES = ['api-data', 'user-uploads', 'map-tiles', 'gl-map-styles', 'mapbox-tiles', 'gl-map-offline'] as const;
+const PENDING_SERVER_LOGOUT_KEY = 'trek_pending_server_logout';
+
+/** Wait until the current user's local data and session teardown has finished. */
+export async function awaitAuthTeardown(): Promise<void> {
+  while (activeLogoutBarrier) await activeLogoutBarrier;
+}
 
 export class AuthAttemptCancelledError extends Error {
   constructor() {
@@ -125,10 +138,141 @@ function beginAuthAttempt() {
   };
 }
 
+/**
+ * Join passkey/OIDC flows to the store's auth sequence. A flow started during
+ * logout waits for teardown; a later logout aborts and invalidates it.
+ */
+export function beginExternalAuthAttempt(): ReturnType<typeof beginAuthAttempt> | Promise<ReturnType<typeof beginAuthAttempt>> {
+  if (!activeLogoutBarrier && !hasPendingServerLogout()) return beginAuthAttempt();
+  return (async () => {
+    while (activeLogoutBarrier) await activeLogoutBarrier;
+    if (!(await settlePendingServerLogout())) {
+      throw new Error('The previous logout could not be confirmed. Reconnect and try again.');
+    }
+    return beginAuthAttempt();
+  })();
+}
+
 function cancelAuthAttempts(): void {
   authSequence++;
   activeAuthRequest?.abort();
   activeAuthRequest = null;
+}
+
+function bestEffortCleanup(label: string, cleanup: () => void): void {
+  try {
+    cleanup();
+  } catch (err) {
+    console.error(`[auth] ${label} cleanup failed`, err);
+  }
+}
+
+function clearAccountMirrors(): void {
+  bestEffortCleanup('appearance snapshot', clearAppearanceSnapshot);
+  bestEffortCleanup('plugin sessions', clearAllPluginSessions);
+  bestEffortCleanup('start destination', forgetStartDestination);
+  bestEffortCleanup('server language', forgetServerLanguage);
+}
+
+async function clearAccountCaches(): Promise<void> {
+  if (typeof caches === 'undefined') return;
+  await Promise.all(ACCOUNT_CACHE_NAMES.map(async (name) => {
+    try {
+      await caches.delete(name);
+    } catch (err) {
+      console.error(`[auth] ${name} cache cleanup failed`, err);
+    }
+  }));
+  await clearWorkboxExpirationMetadata(ACCOUNT_CACHE_NAMES);
+}
+
+async function clearWorkboxExpirationMetadata(cacheNames: readonly string[]): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let created = false;
+      const open = indexedDB.open('workbox-expiration');
+      open.onupgradeneeded = () => { created = true; };
+      open.onerror = () => reject(open.error ?? new Error('Could not open Workbox metadata'));
+      open.onsuccess = () => {
+        const database = open.result;
+        if (created || !database.objectStoreNames.contains('cache-entries')) {
+          database.close();
+          if (created) indexedDB.deleteDatabase('workbox-expiration');
+          resolve();
+          return;
+        }
+        const transaction = database.transaction('cache-entries', 'readwrite');
+        const index = transaction.objectStore('cache-entries').index('cacheName');
+        transaction.oncomplete = () => { database.close(); resolve(); };
+        transaction.onerror = () => { database.close(); reject(transaction.error ?? new Error('Could not clear Workbox metadata')); };
+        transaction.onabort = () => { database.close(); reject(transaction.error ?? new Error('Could not clear Workbox metadata')); };
+        for (const cacheName of cacheNames) {
+          const cursor = index.openCursor(IDBKeyRange.only(cacheName));
+          cursor.onsuccess = () => {
+            const row = cursor.result;
+            if (!row) return;
+            row.delete();
+            row.continue();
+          };
+        }
+      };
+    });
+  } catch (err) {
+    console.error('[auth] Workbox cache metadata cleanup failed', err);
+  }
+}
+
+function setPendingServerLogout(pending: boolean): void {
+  try {
+    if (pending) localStorage.setItem(PENDING_SERVER_LOGOUT_KEY, '1');
+    else localStorage.removeItem(PENDING_SERVER_LOGOUT_KEY);
+  } catch (err) {
+    // If persistence is unavailable, this tab still remains auth-closed through
+    // its in-memory barrier; report that a reload cannot retain the safeguard.
+    console.error('[auth] pending logout marker update failed', err);
+  }
+}
+
+function hasPendingServerLogout(): boolean {
+  try {
+    return localStorage.getItem(PENDING_SERVER_LOGOUT_KEY) === '1';
+  } catch {
+    return true;
+  }
+}
+
+async function requestServerLogout(): Promise<Response | null> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      console.error('[auth] server logout request timed out');
+      resolve(null);
+    }, LOGOUT_REQUEST_TIMEOUT_MS);
+  });
+  try {
+    const request = fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include',
+      signal: controller.signal,
+    }).catch((err) => {
+      console.error('[auth] server logout request failed', err);
+      return null;
+    });
+    return await Promise.race([request, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function settlePendingServerLogout(): Promise<boolean> {
+  if (!hasPendingServerLogout()) return true;
+  const response = await requestServerLogout();
+  const settled = !!response?.ok;
+  if (settled) setPendingServerLogout(false);
+  return settled;
 }
 
 /**
@@ -137,7 +281,7 @@ function cancelAuthAttempts(): void {
  */
 async function onAuthSuccess(userId: number, isCurrent: () => boolean = () => true): Promise<boolean> {
   if (!isCurrent()) return false;
-  setAuthed(true);
+  setAuthed(true, userId);
   // Whatever brought them back in - password, SSO, MFA, demo, a restored
   // session - the tab is no longer "just signed out", so the login page may
   // auto-SSO again next time.
@@ -152,6 +296,17 @@ async function onAuthSuccess(userId: number, isCurrent: () => boolean = () => tr
   // an SPA session, so a second login in the same tab would leave the mutation
   // queue without a flush trigger. Re-registering is a no-op while they are up.
   registerSyncTriggers();
+  // has_maps_key is user-scoped. Refresh it for every authenticated identity;
+  // App's mount-only anonymous config probe cannot safely carry it across SPA
+  // account switches.
+  useAuthStore.setState({ hasMapsKey: false });
+  try {
+    const config = await authApi.getAppConfig();
+    if (!isCurrent()) return false;
+    useAuthStore.setState({ hasMapsKey: !!config?.has_maps_key });
+  } catch (err) {
+    if (isCurrent()) console.error('[auth] failed to refresh user capabilities', err);
+  }
   return true;
 }
 
@@ -180,6 +335,13 @@ export const useAuthStore = create<AuthState>()(
       placesEnrichmentEnabled: true,
 
       login: async (email: string, password: string, rememberMe?: boolean) => {
+        // Keep the no-barrier path synchronous through beginAuthAttempt: an
+        // unconditional await here lets a same-tick logout invalidate the new
+        // attempt before its sequence is captured.
+        while (activeLogoutBarrier) await activeLogoutBarrier;
+        if (hasPendingServerLogout() && !(await settlePendingServerLogout())) {
+          throw new Error('The previous logout could not be confirmed. Reconnect and try again.');
+        }
         const attempt = beginAuthAttempt();
         set({ isLoading: true, error: null });
         try {
@@ -219,6 +381,10 @@ export const useAuthStore = create<AuthState>()(
       },
 
       completeMfaLogin: async (mfaToken: string, code: string, rememberMe?: boolean) => {
+        while (activeLogoutBarrier) await activeLogoutBarrier;
+        if (hasPendingServerLogout() && !(await settlePendingServerLogout())) {
+          throw new Error('The previous logout could not be confirmed. Reconnect and try again.');
+        }
         const attempt = beginAuthAttempt();
         set({ isLoading: true, error: null });
         try {
@@ -255,6 +421,10 @@ export const useAuthStore = create<AuthState>()(
       },
 
       register: async (username: string, email: string, password: string, invite_token?: string) => {
+        while (activeLogoutBarrier) await activeLogoutBarrier;
+        if (hasPendingServerLogout() && !(await settlePendingServerLogout())) {
+          throw new Error('The previous logout could not be confirmed. Reconnect and try again.');
+        }
         const attempt = beginAuthAttempt();
         set({ isLoading: true, error: null });
         try {
@@ -285,57 +455,61 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout: async () => {
-        // Invalidate every pending loadUser continuation before teardown starts.
-        // Without this, an older /auth/me response can revive a completed logout.
-        cancelAuthAttempts();
-        useTripStore.getState().resetTrip();
-        // 1. Gate first so any in-flight flush/syncAll bails before we wipe the DB.
-        setAuthed(false);
-        // Flagged in the same update that drops the session: clearing isAuthenticated
-        // re-renders ProtectedRoute for whatever page is still on screen, and without
-        // this it would stamp a ?redirect= back to it — which then beats the user's
-        // startup destination on the next login.
-        set({ isAuthenticated: false, loggingOut: true, isLoading: false });
-        // The same fact, in the one place that survives ProtectedRoute's stateless
-        // <Navigate replace> and a full document load — without it an OIDC-only
-        // install silently signs the user straight back in (#2123). Set here rather
-        // than at the call sites so all seven are covered at once.
-        markSignedOut();
-        // 2. Stop background sync triggers (30s interval, WS pre-reconnect hook, listeners).
-        unregisterSyncTriggers();
-        // 3. Tear down the live connection.
-        disconnect();
-        useSystemNoticeStore.getState().reset();
-        // Drop the per-device appearance snapshot so the next user on a shared
-        // browser doesn't get a pre-paint flash of this user's theme.
-        clearAppearanceSnapshot();
-        // Same reason for the brokered plugin session state: it is keyed by user id,
-        // but sessionStorage outlives a logout within the tab.
-        clearAllPluginSessions();
-        // And the startup-destination mirror, or the next account on this browser
-      // gets bounced into a trip it may not even be able to see.
-      forgetStartDestination();
-      // Clear the server-language mirror so the next account in this browser
-      // cannot inherit this user's locale.
-      forgetServerLanguage();
-        // 4. Tell server to clear the httpOnly cookie (best-effort).
-        await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' }).catch(() => {});
-        // 5. Clear service worker caches containing sensitive data.
-        if ('caches' in window) {
-          await Promise.all([caches.delete('api-data').catch(() => {}), caches.delete('user-uploads').catch(() => {})]);
+        if (activeLogoutBarrier) {
+          await activeLogoutBarrier;
+          return;
         }
-        // 6. Delete this user's scoped IndexedDB and return to the anonymous DB.
-        await deleteCurrentUserDb().catch(console.error);
-        // 7. Finish clearing auth state.
-        set({
-          user: null,
-          isAuthenticated: false,
-          authCheckFailed: false,
-          error: null,
+        let releaseLogoutBarrier!: () => void;
+        const logoutBarrier = new Promise<void>(resolve => {
+          releaseLogoutBarrier = resolve;
         });
+        activeLogoutBarrier = logoutBarrier;
+        try {
+          // Invalidate auth/sync leases before any teardown can yield or fail.
+          cancelAuthAttempts();
+          setAuthed(false);
+          setPendingServerLogout(true);
+          set({ isAuthenticated: false, loggingOut: true, isLoading: false, hasMapsKey: false });
+
+          bestEffortCleanup('trip state', () => useTripStore.getState().resetTrip({ clearUserData: true }));
+          bestEffortCleanup('signed-out marker', markSignedOut);
+          bestEffortCleanup('sync triggers', unregisterSyncTriggers);
+          bestEffortCleanup('websocket', disconnect);
+          bestEffortCleanup('system notices', () => useSystemNoticeStore.getState().reset());
+          clearAccountMirrors();
+          bestEffortCleanup('settings state', resetSettingsForAccountTransition);
+
+          // The server tombstones this session lineage before clearing the cookie.
+          const logoutResponse = await requestServerLogout();
+          if (logoutResponse?.ok) setPendingServerLogout(false);
+          if (logoutResponse && !logoutResponse.ok) {
+            // The local identity still has to be removed, but do not disguise a
+            // failed durable server-side tombstone as a normal logout.
+            console.error(`[auth] server logout failed with status ${logoutResponse.status}`);
+          }
+          await clearAccountCaches();
+          await deleteCurrentUserDb().catch(console.error);
+        } finally {
+          // No optional cleanup failure may leave the old identity persisted or
+          // release the barrier while auth still appears live.
+          set({
+            user: null,
+            isAuthenticated: false,
+            authCheckFailed: false,
+            error: null,
+          });
+          if (activeLogoutBarrier === logoutBarrier) activeLogoutBarrier = null;
+          releaseLogoutBarrier();
+        }
       },
 
       loadUser: async (opts?: { silent?: boolean }) => {
+        while (activeLogoutBarrier) await activeLogoutBarrier;
+        if (hasPendingServerLogout() && !(await settlePendingServerLogout())) {
+          setAuthed(false);
+          set({ user: null, isAuthenticated: false, isLoading: false, hasMapsKey: false });
+          return false;
+        }
         const seq = authSequence;
         const isCurrent = () => seq === authSequence;
         const silent = !!opts?.silent;
@@ -360,12 +534,25 @@ export const useAuthStore = create<AuthState>()(
               ? (err as { response?: { status?: number } }).response?.status
               : undefined;
           if (status === 401) {
-            // Invalid/expired token — clear auth so the guard redirects to login.
+            // Invalidate every auth/trip continuation before exposing the
+            // signed-out state. A late request that passed the server guard
+            // before this 401 must not repopulate the old account.
+            cancelAuthAttempts();
+            setAuthed(false);
+            bestEffortCleanup('trip state', () => useTripStore.getState().resetTrip({ clearUserData: true }));
+            bestEffortCleanup('sync triggers', unregisterSyncTriggers);
+            bestEffortCleanup('websocket', disconnect);
+            bestEffortCleanup('system notices', () => useSystemNoticeStore.getState().reset());
+            clearAccountMirrors();
+            bestEffortCleanup('settings state', resetSettingsForAccountTransition);
+            await clearAccountCaches();
             set({
               user: null,
               isAuthenticated: false,
+              loggingOut: false,
               isLoading: false,
               authCheckFailed: false,
+              hasMapsKey: false,
             });
           } else if (status === undefined && typeof navigator !== 'undefined' && !navigator.onLine) {
             // Genuinely offline — keep the persisted session so the PWA serves cached
@@ -383,48 +570,61 @@ export const useAuthStore = create<AuthState>()(
       },
 
       updateMapsKey: async (key: string | null) => {
+        const authLease = captureAuthGenerationLease();
         try {
           await authApi.updateMapsKey(key);
+          assertAuthGenerationLeaseValid(authLease);
           set((state) => ({
             user: state.user ? { ...state.user, maps_api_key: key || null } : null,
             hasMapsKey: !!key,
           }));
         } catch (err: unknown) {
+          assertAuthGenerationLeaseValid(authLease);
           throw new Error(getApiErrorMessage(err, 'Error saving API key'));
         }
       },
 
       updateApiKeys: async (keys: Record<string, string | null>) => {
+        const authLease = captureAuthGenerationLease();
         try {
           const data = await authApi.updateApiKeys(keys);
+          assertAuthGenerationLeaseValid(authLease);
           set({ user: data.user });
           if ('maps_api_key' in keys) {
             set({ hasMapsKey: !!keys.maps_api_key });
           }
         } catch (err: unknown) {
+          assertAuthGenerationLeaseValid(authLease);
           throw new Error(getApiErrorMessage(err, 'Error saving API keys'));
         }
       },
 
       updateProfile: async (profileData: Partial<User>) => {
+        const authLease = captureAuthGenerationLease();
         try {
           const data = await authApi.updateSettings(profileData);
+          assertAuthGenerationLeaseValid(authLease);
           set({ user: data.user });
         } catch (err: unknown) {
+          assertAuthGenerationLeaseValid(authLease);
           throw new Error(getApiErrorMessage(err, 'Error updating profile'));
         }
       },
 
       uploadAvatar: async (file: File) => {
+        const authLease = captureAuthGenerationLease();
         const formData = new FormData();
         formData.append('avatar', file);
         const data = await authApi.uploadAvatar(formData);
+        assertAuthGenerationLeaseValid(authLease);
         set((state) => ({ user: state.user ? { ...state.user, avatar_url: data.avatar_url } : null }));
         return data;
       },
 
       deleteAvatar: async () => {
+        const authLease = captureAuthGenerationLease();
         await authApi.deleteAvatar();
+        assertAuthGenerationLeaseValid(authLease);
         set((state) => ({ user: state.user ? { ...state.user, avatar_url: null } : null }));
       },
 
@@ -454,6 +654,10 @@ export const useAuthStore = create<AuthState>()(
       setPlacesEnrichmentEnabled: (val: boolean) => set({ placesEnrichEnabled: val, placesEnrichmentEnabled: val }),
 
       demoLogin: async () => {
+        while (activeLogoutBarrier) await activeLogoutBarrier;
+        if (hasPendingServerLogout() && !(await settlePendingServerLogout())) {
+          throw new Error('The previous logout could not be confirmed. Reconnect and try again.');
+        }
         const attempt = beginAuthAttempt();
         set({ isLoading: true, error: null });
         try {

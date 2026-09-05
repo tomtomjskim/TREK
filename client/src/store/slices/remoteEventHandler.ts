@@ -2,12 +2,34 @@ import type { StoreApi } from 'zustand'
 import type { TrekWsTripEventName } from '@trek/shared'
 import type { TripStoreState } from '../tripStore'
 import type { Assignment, Place, Day, DayNote, PackingItem, TodoItem, BudgetItem, BudgetItemMember, Reservation, Trip, TripFile, WebSocketEvent } from '../../types'
-import { offlineDb } from '../../db/offlineDb'
+import { offlineDb, captureOfflineDbLease, isOfflineDbLeaseValid, type OfflineDbLease } from '../../db/offlineDb'
+import { captureAuthGenerationLease, isAuthGenerationLeaseValid, isAuthed, type AuthLease } from '../../sync/authGate'
 import { useAuthStore } from '../authStore'
 import { mergeAssignmentPlace } from './placesSlice'
 
 type SetState = StoreApi<TripStoreState>['setState']
 type GetState = StoreApi<TripStoreState>['getState']
+
+interface RemoteEventLease {
+  db: OfflineDbLease
+  auth: AuthLease
+}
+
+function isRemoteEventLeaseValid(lease: RemoteEventLease): boolean {
+  return isOfflineDbLeaseValid(lease.db) && isAuthGenerationLeaseValid(lease.auth)
+}
+
+/**
+ * A trip-room event must belong to the trip currently mounted in this store.
+ * The legacy test/client boundary can omit tripId, so only an explicit
+ * envelope is gated here; production trip broadcasts always carry it.
+ */
+function isEventForCurrentTrip(state: TripStoreState, event: WebSocketEvent): boolean {
+  if (event.tripId == null) return true
+  if (!isAuthed()) return false
+  const currentTripId = state.trip?.id
+  return currentTripId != null && String(currentTripId) === String(event.tripId)
+}
 
 // ── Dexie write-through ───────────────────────────────────────────────────────
 
@@ -171,10 +193,20 @@ function writeToDexie(
   type: string,
   payload: Record<string, unknown>,
   state: TripStoreState,
+  lease: RemoteEventLease,
+  get: GetState,
+  event: WebSocketEvent,
 ): void {
   ;(async () => {
     try {
+      // The event may have been superseded between the synchronous Zustand
+      // update and this fire-and-forget task. Never start a write on behalf of
+      // a different auth session or active database.
+      if (!isRemoteEventLeaseValid(lease) || !isEventForCurrentTrip(get(), event)) return
       await DEXIE_WRITERS[type as TrekWsTripEventName]?.(payload, state)
+      // A writer can span an await (notably a multi-row day write). Do not
+      // treat it as successfully applied once the session has changed.
+      if (!isRemoteEventLeaseValid(lease) || !isEventForCurrentTrip(get(), event)) return
     } catch {
       // Dexie write failures are non-fatal — online state is source of truth
     }
@@ -518,16 +550,34 @@ export const STATE_APPLIERS: Partial<Record<TrekWsTripEventName, StateApplier>> 
 export function handleRemoteEvent(set: SetState, get: GetState, event: WebSocketEvent): void {
   const { type, ...payload } = event
 
+  // WebSocket callbacks can be queued around logout/account switching. The
+  // lease is captured before any state snapshot and checked again immediately
+  // before the synchronous Zustand mutation.
+  const lease: RemoteEventLease = {
+    db: captureOfflineDbLease(),
+    auth: captureAuthGenerationLease(),
+  }
+  if (!isRemoteEventLeaseValid(lease) || !isEventForCurrentTrip(get(), event)) return
+
+  // Never let an event from another joined room land in the active trip. A
+  // null trip during initial load is intentionally fail-closed when the
+  // envelope identifies a trip.
+  const currentState = get()
+  if (!isEventForCurrentTrip(currentState, event)) return
+
   // Snapshot before set(): the trip:updated case below replaces state.trip, so a
   // date-change check made after it would compare the new trip against itself.
-  const prevTrip = get().trip
+  const prevTrip = currentState.trip
   // Same reason, for the image check below — the applier overwrites the row.
   const prevPlaceImage =
     type === 'place:updated'
-      ? get().places.find(p => p.id === (payload.place as Place | undefined)?.id)?.image_url
+      ? currentState.places.find(p => p.id === (payload.place as Place | undefined)?.id)?.image_url
       : undefined
 
+  if (!isRemoteEventLeaseValid(lease)) return
   set(state => STATE_APPLIERS[type as TrekWsTripEventName]?.(payload, state) ?? {})
+
+  if (!isRemoteEventLeaseValid(lease)) return
 
   // Accommodation cards read their thumbnail from a page-local copy of the
   // place, not from this store, so a new hero image would only appear there
@@ -577,5 +627,5 @@ export function handleRemoteEvent(set: SetState, get: GetState, event: WebSocket
   }
 
   // Write the change through to IndexedDB using the post-update state
-  writeToDexie(type, payload as Record<string, unknown>, get())
+  writeToDexie(type, payload as Record<string, unknown>, get(), lease, get, event)
 }

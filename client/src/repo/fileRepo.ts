@@ -1,19 +1,21 @@
 import { filesApi } from '../api/client'
 import { offlineDb, upsertTripFiles } from '../db/offlineDb'
-import { onlineThenCache } from './withOfflineFallback'
 import type { TripFile } from '../types'
+import { assertCacheWriteAllowed, cacheWriteGuard, onlineThenCache, type CacheWriteGuard } from './withOfflineFallback'
 
 export const fileRepo = {
-  async list(tripId: number | string): Promise<{ files: TripFile[] }> {
+  async list(tripId: number | string, mayWriteCache: CacheWriteGuard = () => true): Promise<{ files: TripFile[] }> {
+    const canWriteCache = cacheWriteGuard(mayWriteCache)
     return onlineThenCache(
       async () => {
         const result = await filesApi.list(tripId)
-        upsertTripFiles(result.files)
+        assertCacheWriteAllowed(canWriteCache)
+        await upsertTripFiles(result.files).catch(() => {})
+        assertCacheWriteAllowed(canWriteCache)
         return result
       },
       async () => ({
-        files: await offlineDb.tripFiles
-          .where('trip_id').equals(Number(tripId)).toArray(),
+        files: await offlineDb.tripFiles.where('trip_id').equals(Number(tripId)).toArray(),
       }),
     )
   },

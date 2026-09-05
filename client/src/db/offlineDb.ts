@@ -196,6 +196,25 @@ class TrekOfflineDb extends Dexie {
 // A Proxy keeps the exported `offlineDb` binding stable for the ~19 modules that
 // import it directly, while every access forwards to the current connection.
 let _db = new TrekOfflineDb(initialDbName());
+let _dbGeneration = 0;
+
+export interface OfflineDbLease {
+  generation: number;
+}
+
+/** Capture the database connection generation at the start of async work. */
+export function captureOfflineDbLease(): OfflineDbLease {
+  return { generation: _dbGeneration };
+}
+
+/**
+ * True only while the proxy still targets the database that began the work.
+ * Call this immediately before a cache write so a late response cannot seed a
+ * different account's (or the anonymous) database after login/logout swaps it.
+ */
+export function isOfflineDbLeaseValid(lease: OfflineDbLease): boolean {
+  return lease.generation === _dbGeneration;
+}
 
 export const offlineDb = new Proxy({} as TrekOfflineDb, {
   get(_target, prop) {
@@ -213,6 +232,7 @@ async function switchTo(name: string): Promise<void> {
     if (!_db.isOpen()) await _db.open();
     return;
   }
+  _dbGeneration += 1;
   if (_db.isOpen()) _db.close();
   _db = new TrekOfflineDb(name);
   await _db.open();
@@ -239,6 +259,8 @@ export async function deleteCurrentUserDb(): Promise<void> {
     await switchTo(ANON_DB_NAME);
     return;
   }
+  // Invalidate pending cache writes before the first asynchronous delete step.
+  _dbGeneration += 1;
   try { await _db.delete(); } catch { /* ignore — fall through to anon */ }
   _db = new TrekOfflineDb(ANON_DB_NAME);
   await _db.open();
@@ -267,9 +289,13 @@ export async function replacePackingItemsForTrip(
   tripId: number,
   items: PackingItem[],
 ): Promise<void> {
-  await offlineDb.transaction('rw', offlineDb.packingItems, async () => {
-    await offlineDb.packingItems.where('trip_id').equals(tripId).delete();
-    if (items.length > 0) await offlineDb.packingItems.bulkPut(items);
+  // Bind one table before the transaction. The exported DB is a live Proxy, so
+  // resolving it again after the delete await could otherwise target a newly
+  // opened account database during a concurrent auth transition.
+  const table = offlineDb.packingItems;
+  await offlineDb.transaction('rw', table, async () => {
+    await table.where('trip_id').equals(tripId).delete();
+    if (items.length > 0) await table.bulkPut(items);
   });
 }
 
@@ -380,7 +406,10 @@ export async function enforceBlobBudget(
   maxCount = BLOB_CACHE_MAX_ENTRIES,
   maxBytes = BLOB_CACHE_MAX_BYTES,
 ): Promise<void> {
-  const entries = await offlineDb.blobCache.orderBy('cachedAt').toArray();
+  const lease = captureOfflineDbLease();
+  const table = offlineDb.blobCache;
+  const entries = await table.orderBy('cachedAt').toArray();
+  if (!isOfflineDbLeaseValid(lease)) return;
   let count = entries.length;
   let totalBytes = entries.reduce((sum, e) => sum + (e.bytes ?? 0), 0);
   if (count <= maxCount && totalBytes <= maxBytes) return;
@@ -392,7 +421,7 @@ export async function enforceBlobBudget(
     totalBytes -= e.bytes ?? 0;
     count -= 1;
   }
-  if (toDelete.length) await offlineDb.blobCache.bulkDelete(toDelete);
+  if (toDelete.length && isOfflineDbLeaseValid(lease)) await table.bulkDelete(toDelete);
 }
 
 // ── Eviction / cleanup ────────────────────────────────────────────────────────
@@ -408,45 +437,53 @@ export async function enforceBlobBudget(
  * through clearAll(), which intentionally drops everything.
  */
 export async function clearTripData(tripId: number): Promise<void> {
-  await offlineDb.transaction(
+  const lease = captureOfflineDbLease();
+  const db = _db;
+  const tables = [
+    db.days,
+    db.places,
+    db.packingItems,
+    db.todoItems,
+    db.budgetItems,
+    db.reservations,
+    db.tripFiles,
+    db.accommodations,
+    db.tripMembers,
+    db.mutationQueue,
+    db.syncMeta,
+    db.blobCache,
+  ];
+  await db.transaction(
     'rw',
-    [
-      offlineDb.days,
-      offlineDb.places,
-      offlineDb.packingItems,
-      offlineDb.todoItems,
-      offlineDb.budgetItems,
-      offlineDb.reservations,
-      offlineDb.tripFiles,
-      offlineDb.accommodations,
-      offlineDb.tripMembers,
-      offlineDb.mutationQueue,
-      offlineDb.syncMeta,
-      offlineDb.blobCache,
-    ],
+    tables,
     async () => {
-      await offlineDb.days.where('trip_id').equals(tripId).delete();
-      await offlineDb.places.where('trip_id').equals(tripId).delete();
-      await offlineDb.packingItems.where('trip_id').equals(tripId).delete();
-      await offlineDb.todoItems.where('trip_id').equals(tripId).delete();
-      await offlineDb.budgetItems.where('trip_id').equals(tripId).delete();
-      await offlineDb.reservations.where('trip_id').equals(tripId).delete();
-      await offlineDb.tripFiles.where('trip_id').equals(tripId).delete();
-      await offlineDb.accommodations.where('trip_id').equals(tripId).delete();
-      await offlineDb.tripMembers.where('tripId').equals(tripId).delete();
+      await db.days.where('trip_id').equals(tripId).delete();
+      await db.places.where('trip_id').equals(tripId).delete();
+      await db.packingItems.where('trip_id').equals(tripId).delete();
+      await db.todoItems.where('trip_id').equals(tripId).delete();
+      await db.budgetItems.where('trip_id').equals(tripId).delete();
+      await db.reservations.where('trip_id').equals(tripId).delete();
+      await db.tripFiles.where('trip_id').equals(tripId).delete();
+      await db.accommodations.where('trip_id').equals(tripId).delete();
+      await db.tripMembers.where('tripId').equals(tripId).delete();
       // Keep pending/syncing/conflict mutations — only purge dead 'failed' rows.
-      await offlineDb.mutationQueue.where('tripId').equals(tripId).and(m => m.status === 'failed').delete();
-      await offlineDb.syncMeta.where('tripId').equals(tripId).delete();
-      await offlineDb.blobCache.where('tripId').equals(tripId).delete();
+      await db.mutationQueue.where('tripId').equals(tripId).and(m => m.status === 'failed').delete();
+      await db.syncMeta.where('tripId').equals(tripId).delete();
+      await db.blobCache.where('tripId').equals(tripId).delete();
     },
   );
+  if (!isOfflineDbLeaseValid(lease)) return;
   // Remove the trip row itself outside the transaction since it's a separate table
-  await offlineDb.trips.delete(tripId);
+  await db.trips.delete(tripId);
 }
 
 /** Wipe the entire offline database (called on logout). */
 export async function clearAll(): Promise<void> {
-  await offlineDb.delete();
-  // Re-open so subsequent operations don't fail
-  await offlineDb.open();
+  _dbGeneration += 1;
+  const db = _db;
+  await db.delete();
+  // Re-open only if an account transition did not replace this connection
+  // while the delete was pending. Reopening a detached old-user DB would
+  // recreate data storage that the live proxy no longer owns.
+  if (_db === db) await db.open();
 }

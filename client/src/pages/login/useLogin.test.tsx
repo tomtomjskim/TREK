@@ -1,17 +1,17 @@
 // FE-LOGIN-HOOK-001 to FE-LOGIN-HOOK-040
-import React from 'react';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { renderHook, act, waitFor } from '../../../tests/helpers/render';
-import { MemoryRouter, type MemoryRouterProps } from 'react-router';
+import { startAuthentication } from '@simplewebauthn/browser';
 import { http, HttpResponse } from 'msw';
-import { server } from '../../../tests/helpers/msw/server';
-import { resetAllStores } from '../../../tests/helpers/store';
+import React from 'react';
+import { MemoryRouter, type MemoryRouterProps } from 'react-router';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildAppConfig } from '../../../tests/helpers/factories';
-import { markSignedOut, clearSignedOut, wasSignedOut } from '../../utils/signedOut';
+import { server } from '../../../tests/helpers/msw/server';
+import { act, renderHook, waitFor } from '../../../tests/helpers/render';
+import { resetAllStores } from '../../../tests/helpers/store';
 import { TranslationProvider } from '../../i18n/TranslationContext';
 import { useAuthStore, type LoginResult } from '../../store/authStore';
 import { useSettingsStore } from '../../store/settingsStore';
-import { startAuthentication } from '@simplewebauthn/browser';
+import { clearSignedOut, markSignedOut, wasSignedOut } from '../../utils/signedOut';
 import { START_DESTINATION_ROUTE } from '../../utils/startDestination';
 import { useLogin } from './useLogin';
 
@@ -39,6 +39,14 @@ function authCancelled(): Error {
   const error = new Error('Authentication attempt was cancelled');
   error.name = 'AuthAttemptCancelledError';
   return error;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 function makeAuthMocks() {
@@ -118,9 +126,7 @@ describe('useLogin — app config probe', () => {
   });
 
   it('FE-LOGIN-HOOK-002: switches to register on a fresh instance with no users', async () => {
-    server.use(
-      http.get('/api/auth/app-config', () => HttpResponse.json(buildAppConfig({ has_users: false }))),
-    );
+    server.use(http.get('/api/auth/app-config', () => HttpResponse.json(buildAppConfig({ has_users: false }))));
     const { result } = renderLogin();
     await ready(result);
 
@@ -178,8 +184,8 @@ describe('useLogin — app config probe', () => {
   it('FE-LOGIN-HOOK-007: sends the browser straight to the IdP when passwords are disabled', async () => {
     server.use(
       http.get('/api/auth/app-config', () =>
-        HttpResponse.json(buildAppConfig({ password_login: false, oidc_configured: true, oidc_login: true })),
-      ),
+        HttpResponse.json(buildAppConfig({ password_login: false, oidc_configured: true, oidc_login: true }))
+      )
     );
 
     const { result } = renderLogin();
@@ -192,8 +198,8 @@ describe('useLogin — app config probe', () => {
   it('FE-LOGIN-HOOK-008: does not bounce back to the IdP right after a logout', async () => {
     server.use(
       http.get('/api/auth/app-config', () =>
-        HttpResponse.json(buildAppConfig({ password_login: false, oidc_configured: true, oidc_login: true })),
-      ),
+        HttpResponse.json(buildAppConfig({ password_login: false, oidc_configured: true, oidc_login: true }))
+      )
     );
 
     const { result } = renderLogin([{ pathname: '/login', state: { noRedirect: true } }]);
@@ -206,7 +212,7 @@ describe('useLogin — app config probe', () => {
   it('FE-LOGIN-HOOK-009: never auto-redirects on a cached config', async () => {
     localStorage.setItem(
       CONFIG_CACHE_KEY,
-      JSON.stringify(buildAppConfig({ password_login: false, oidc_configured: true, oidc_login: true })),
+      JSON.stringify(buildAppConfig({ password_login: false, oidc_configured: true, oidc_login: true }))
     );
     server.use(http.get('/api/auth/app-config', () => HttpResponse.error()));
 
@@ -263,7 +269,9 @@ describe('useLogin — redirect target', () => {
     await act(async () => {
       await result.current.handleDemoLogin();
     });
-    act(() => { vi.advanceTimersByTime(2600); });
+    act(() => {
+      vi.advanceTimersByTime(2600);
+    });
     expect(mockNavigate).toHaveBeenCalledWith(START_DESTINATION_ROUTE);
   });
 
@@ -290,9 +298,7 @@ describe('useLogin — invite links', () => {
 
   it('FE-LOGIN-HOOK-015: reports an invite link the server rejects', async () => {
     setSearch('?invite=expired');
-    server.use(
-      http.get('/api/auth/invite/:token', () => HttpResponse.json({ error: 'gone' }, { status: 410 })),
-    );
+    server.use(http.get('/api/auth/invite/:token', () => HttpResponse.json({ error: 'gone' }, { status: 410 })));
 
     const { result } = renderLogin();
     await waitFor(() => expect(result.current.error).toBe('Invalid or expired invite link'));
@@ -300,6 +306,110 @@ describe('useLogin — invite links', () => {
 });
 
 describe('useLogin — OIDC callback', () => {
+  it('FE-LOGIN-HOOK-205: waits for an active logout before exchanging an OIDC code', async () => {
+    const logoutGate = deferred<void>();
+    let exchangeCalls = 0;
+    server.use(
+      http.post('/api/auth/logout', async () => {
+        await logoutGate.promise;
+        return new HttpResponse(null, { status: 204 });
+      }),
+      http.get('/api/auth/oidc/exchange', () => {
+        exchangeCalls += 1;
+        return HttpResponse.json({ token: 'tok' });
+      })
+    );
+    let logout!: Promise<void>;
+    act(() => {
+      logout = useAuthStore.getState().logout();
+    });
+    setSearch('?oidc_code=barrier-code');
+
+    renderLogin();
+    await Promise.resolve();
+    expect(exchangeCalls).toBe(0);
+
+    await act(async () => {
+      logoutGate.resolve();
+      await logout;
+    });
+    await waitFor(() => expect(exchangeCalls).toBe(1));
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalled());
+  });
+
+  it('FE-LOGIN-HOOK-207: a manual OIDC redirect waits for logout teardown', async () => {
+    const logoutGate = deferred<void>();
+    server.use(
+      http.post('/api/auth/logout', async () => {
+        await logoutGate.promise;
+        return new HttpResponse(null, { status: 204 });
+      })
+    );
+    const { result } = renderLogin();
+    await ready(result);
+    let logout!: Promise<void>;
+    act(() => {
+      logout = useAuthStore.getState().logout();
+    });
+    const event = {
+      preventDefault: vi.fn(),
+      currentTarget: { href: 'http://localhost/api/auth/oidc/login' },
+    } as unknown as React.MouseEvent<HTMLAnchorElement>;
+
+    let redirect!: Promise<void>;
+    act(() => {
+      redirect = result.current.handleOidcLogin(event);
+    });
+    await Promise.resolve();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(window.location.href).toBe('http://localhost/login');
+
+    await act(async () => {
+      logoutGate.resolve();
+      await logout;
+      await redirect;
+    });
+    expect(window.location.href).toBe('http://localhost/api/auth/oidc/login');
+  });
+
+  it('FE-LOGIN-HOOK-208: a pending server logout blocks manual OIDC redirect when retry fails', async () => {
+    localStorage.setItem('trek_pending_server_logout', '1');
+    server.use(http.post('/api/auth/logout', () => HttpResponse.json({}, { status: 503 })));
+    const { result } = renderLogin();
+    await ready(result);
+    const event = {
+      preventDefault: vi.fn(),
+      currentTarget: { href: 'http://localhost/api/auth/oidc/login' },
+    } as unknown as React.MouseEvent<HTMLAnchorElement>;
+
+    await act(async () => {
+      await result.current.handleOidcLogin(event);
+    });
+
+    expect(window.location.href).toBe('http://localhost/login');
+    expect(result.current.error).toMatch(/previous logout/i);
+    expect(result.current.isLoading).toBe(false);
+  });
+
+  it('FE-LOGIN-HOOK-209: a pending server logout failure is handled before OIDC code exchange', async () => {
+    localStorage.setItem('trek_pending_server_logout', '1');
+    setSearch('?oidc_code=pending-logout-code');
+    let exchangeCalls = 0;
+    server.use(
+      http.post('/api/auth/logout', () => HttpResponse.json({}, { status: 503 })),
+      http.get('/api/auth/oidc/exchange', () => {
+        exchangeCalls += 1;
+        return HttpResponse.json({ token: 'tok' });
+      })
+    );
+
+    const { result } = renderLogin();
+    await waitFor(() => expect(result.current.error).toMatch(/previous logout/i));
+
+    expect(exchangeCalls).toBe(0);
+    expect(result.current.isLoading).toBe(false);
+  });
+
   it('FE-LOGIN-HOOK-016: navigates to the stashed redirect after a successful code exchange', async () => {
     sessionStorage.setItem('oidc_redirect', '/oauth/consent?client_id=foo');
     setSearch('?oidc_code=code-1');
@@ -307,9 +417,7 @@ describe('useLogin — OIDC callback', () => {
 
     const { result } = renderLogin();
 
-    await waitFor(() =>
-      expect(mockNavigate).toHaveBeenCalledWith('/oauth/consent?client_id=foo', { replace: true }),
-    );
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalledWith('/oauth/consent?client_id=foo', { replace: true }));
     expect(auth.loadUser).toHaveBeenCalled();
     await waitFor(() => expect(result.current.isLoading).toBe(false));
   });
@@ -321,7 +429,7 @@ describe('useLogin — OIDC callback', () => {
       http.get('/api/auth/oidc/exchange', () => {
         exchanges += 1;
         return HttpResponse.json({ token: 'tok' });
-      }),
+      })
     );
 
     renderLogin();
@@ -381,9 +489,7 @@ describe('useLogin — OIDC callback', () => {
     setSearch('?oidc_error=registration_disabled');
 
     const { result } = renderLogin();
-    await waitFor(() =>
-      expect(result.current.error).toBe('Registration is disabled. Contact your administrator.'),
-    );
+    await waitFor(() => expect(result.current.error).toBe('Registration is disabled. Contact your administrator.'));
     expect(sessionStorage.getItem('oidc_redirect')).toBeNull();
   });
 
@@ -430,7 +536,7 @@ describe('useLogin — language detection', () => {
 
     const { result } = renderLogin();
     await waitFor(() =>
-      expect(warn).toHaveBeenCalledWith('Failed to fetch default language config:', expect.anything()),
+      expect(warn).toHaveBeenCalledWith('Failed to fetch default language config:', expect.anything())
     );
     await ready(result);
 
@@ -549,7 +655,7 @@ describe('useLogin — passkey login', () => {
   beforeEach(() => {
     server.use(
       http.post('/api/auth/passkey/login/options', () => HttpResponse.json({ challenge: 'chal' })),
-      http.post('/api/auth/passkey/login/verify', () => HttpResponse.json({ token: 'tok', user: {} })),
+      http.post('/api/auth/passkey/login/verify', () => HttpResponse.json({ token: 'tok', user: {} }))
     );
   });
 
@@ -590,7 +696,7 @@ describe('useLogin — passkey login', () => {
       expect(result.current.error).toBe('');
       expect(result.current.isLoading).toBe(false);
       expect(result.current.showTakeoff).toBe(false);
-    },
+    }
   );
 
   it('FE-LOGIN-HOOK-033: reports a real passkey failure', async () => {
@@ -634,6 +740,42 @@ describe('useLogin — passkey login', () => {
     expect(result.current.showTakeoff).toBe(false);
     expect(result.current.isLoading).toBe(false);
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('FE-LOGIN-HOOK-206: does not request passkey options until logout teardown finishes', async () => {
+    const logoutGate = deferred<void>();
+    let optionCalls = 0;
+    server.use(
+      http.post('/api/auth/logout', async () => {
+        await logoutGate.promise;
+        return new HttpResponse(null, { status: 204 });
+      }),
+      http.post('/api/auth/passkey/login/options', () => {
+        optionCalls += 1;
+        return HttpResponse.json({ challenge: 'chal' });
+      })
+    );
+    vi.mocked(startAuthentication).mockResolvedValue({ id: 'cred-1' } as never);
+    const { result } = renderLogin();
+    await ready(result);
+    let logout!: Promise<void>;
+    act(() => {
+      logout = useAuthStore.getState().logout();
+    });
+
+    let passkey!: Promise<void>;
+    act(() => {
+      passkey = result.current.handlePasskeyLogin();
+    });
+    await Promise.resolve();
+    expect(optionCalls).toBe(0);
+
+    logoutGate.resolve();
+    await act(async () => {
+      await logout;
+      await passkey;
+    });
+    expect(optionCalls).toBe(1);
   });
 });
 
@@ -960,7 +1102,10 @@ describe('useLogin — MFA step', () => {
 describe('useLogin — forced password change', () => {
   async function reachPasswordChange() {
     useAuthStore.setState({
-      login: vi.fn(async () => authOk({ must_change_password: true }) as LoginResult),
+      login: vi.fn(async () => {
+        useAuthStore.setState({ isAuthenticated: true });
+        return authOk({ must_change_password: true }) as LoginResult;
+      }),
     });
     const { result } = renderLogin();
     await ready(result);
@@ -1013,7 +1158,7 @@ describe('useLogin — forced password change', () => {
       http.put('/api/auth/me/password', async ({ request }) => {
         body = (await request.json()) as Record<string, unknown>;
         return HttpResponse.json({ success: true });
-      }),
+      })
     );
 
     const result = await reachPasswordChange();
@@ -1041,8 +1186,8 @@ describe('useLogin — forced password change', () => {
   it('FE-LOGIN-HOOK-052: surfaces a rejected password change', async () => {
     server.use(
       http.put('/api/auth/me/password', () =>
-        HttpResponse.json({ error: 'Current password is wrong' }, { status: 400 }),
-      ),
+        HttpResponse.json({ error: 'Current password is wrong' }, { status: 400 })
+      )
     );
 
     const result = await reachPasswordChange();
@@ -1060,9 +1205,7 @@ describe('useLogin — forced password change', () => {
   });
 
   it('does not take off when logout invalidates the post-password-change reload', async () => {
-    server.use(
-      http.put('/api/auth/me/password', () => HttpResponse.json({ success: true })),
-    );
+    server.use(http.put('/api/auth/me/password', () => HttpResponse.json({ success: true })));
     auth.loadUser.mockResolvedValueOnce(false);
     const result = await reachPasswordChange();
     act(() => {
@@ -1079,14 +1222,48 @@ describe('useLogin — forced password change', () => {
     expect(result.current.isLoading).toBe(false);
     expect(mockNavigate).not.toHaveBeenCalled();
   });
+
+  it('FE-LOGIN-HOOK-207: logout aborts an in-flight forced password change before it can restore auth', async () => {
+    const responseGate = deferred<void>();
+    const requestStarted = deferred<void>();
+    server.use(
+      http.put('/api/auth/me/password', async () => {
+        requestStarted.resolve();
+        await responseGate.promise;
+        return HttpResponse.json({ success: true });
+      })
+    );
+    const result = await reachPasswordChange();
+    act(() => {
+      result.current.setNewPassword('newpassword123');
+      result.current.setConfirmPassword('newpassword123');
+    });
+
+    let submit!: Promise<void>;
+    act(() => {
+      submit = result.current.handleSubmit(formEvent());
+    });
+    await requestStarted.promise;
+    await act(async () => {
+      await useAuthStore.getState().logout();
+    });
+    responseGate.resolve();
+    await act(async () => {
+      await submit;
+    });
+
+    expect(auth.loadUser).not.toHaveBeenCalled();
+    expect(result.current.showTakeoff).toBe(false);
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
 });
 
 describe('useLogin — register visibility rules', () => {
   it('FE-LOGIN-HOOK-053: hides registration once setup is complete and passwords are closed', async () => {
     server.use(
       http.get('/api/auth/app-config', () =>
-        HttpResponse.json({ ...buildAppConfig({ password_registration: false }), setup_complete: true }),
-      ),
+        HttpResponse.json({ ...buildAppConfig({ password_registration: false }), setup_complete: true })
+      )
     );
 
     const { result } = renderLogin();
@@ -1101,8 +1278,8 @@ describe('useLogin — register visibility rules', () => {
         HttpResponse.json({
           ...buildAppConfig({ has_users: false, password_registration: false }),
           setup_complete: false,
-        }),
-      ),
+        })
+      )
     );
 
     const { result } = renderLogin();
@@ -1121,7 +1298,10 @@ describe('OIDC-only auto-redirect suppression', () => {
   function oidcOnly() {
     server.use(
       http.get('/api/auth/app-config', () =>
-        HttpResponse.json(buildAppConfig({ password_login: false, oidc_login: true, oidc_configured: true, has_users: true }))),
+        HttpResponse.json(
+          buildAppConfig({ password_login: false, oidc_login: true, oidc_configured: true, has_users: true })
+        )
+      )
     );
   }
 
@@ -1133,9 +1313,11 @@ describe('OIDC-only auto-redirect suppression', () => {
     let release: (v: unknown) => void = () => {};
     server.use(
       http.get('/api/auth/oidc/exchange', async () => {
-        await new Promise(r => { release = r; });
+        await new Promise((r) => {
+          release = r;
+        });
         return HttpResponse.json({ token: 'tok' });
-      }),
+      })
     );
     setSearch('?oidc_code=CODE-1');
     renderLogin();
@@ -1148,7 +1330,7 @@ describe('OIDC-only auto-redirect suppression', () => {
     setSearch('');
     await act(async () => {
       useSettingsStore.getState().setLanguageTransient('fr');
-      await new Promise(r => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, 20));
     });
 
     expect(window.location.href).not.toContain('/api/auth/oidc/login');
@@ -1184,7 +1366,10 @@ describe('OIDC-only auto-redirect suppression', () => {
   it('FE-LOGIN-HOOK-204: password installs are untouched by the marker', async () => {
     server.use(
       http.get('/api/auth/app-config', () =>
-        HttpResponse.json(buildAppConfig({ password_login: true, oidc_login: true, oidc_configured: true, has_users: true }))),
+        HttpResponse.json(
+          buildAppConfig({ password_login: true, oidc_login: true, oidc_configured: true, has_users: true })
+        )
+      )
     );
     markSignedOut();
     const { result } = renderLogin();

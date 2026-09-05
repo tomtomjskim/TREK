@@ -18,6 +18,8 @@ const initialNotifState = useInAppNotificationStore.getState();
 const initialPermsState = usePermissionsStore.getState();
 export function resetAllStores(): void {
   useAuthStore.setState(initialAuthState, true);
+  // State replacement cannot reset module-scoped request/session generations.
+  useTripStore.getState().resetTrip();
   useTripStore.setState(initialTripState, true);
   useSettingsStore.setState(initialSettingsState, true);
   useVacayStore.setState(initialVacayState, true);

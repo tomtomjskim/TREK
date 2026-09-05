@@ -9,7 +9,8 @@ import 'fake-indexeddb/auto';
 import { server } from '../../helpers/msw/server';
 import { http, HttpResponse } from 'msw';
 import { packingRepo } from '../../../src/repo/packingRepo';
-import { offlineDb, clearAll } from '../../../src/db/offlineDb';
+import { StaleCacheResponseError } from '../../../src/repo/withOfflineFallback';
+import { offlineDb, clearAll, deleteCurrentUserDb, reopenAnonymous, reopenForUser } from '../../../src/db/offlineDb';
 import { buildPackingItem } from '../../helpers/factories';
 
 beforeEach(async () => {
@@ -17,9 +18,17 @@ beforeEach(async () => {
   Object.defineProperty(navigator, 'onLine', { value: true, writable: true, configurable: true });
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
+  await deleteCurrentUserDb();
+  await reopenAnonymous();
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(res => { resolve = res; });
+  return { promise, resolve };
+}
 
 describe('packingRepo.list', () => {
   it('online — fetches from REST and caches in Dexie', async () => {
@@ -92,6 +101,24 @@ describe('packingRepo.create', () => {
     const cached = await offlineDb.packingItems.get(item.id);
     expect(cached).toBeDefined();
     expect(cached!.name).toBe('Sunscreen');
+  });
+
+  it('does not cache an old account response into a newly opened account database', async () => {
+    await reopenForUser(8101);
+    await clearAll();
+    const responseGate = deferred<Response>();
+    const item = buildPackingItem({ id: 811, trip_id: 1, name: 'Old account item' });
+    server.use(
+      http.post('/api/trips/1/packing', () => responseGate.promise),
+    );
+
+    const request = packingRepo.create(1, { name: item.name });
+    await reopenForUser(8102);
+    await clearAll();
+    responseGate.resolve(HttpResponse.json({ item }));
+
+    await expect(request).rejects.toBeInstanceOf(StaleCacheResponseError);
+    expect(await offlineDb.packingItems.count()).toBe(0);
   });
 });
 

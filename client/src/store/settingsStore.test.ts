@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { DEFAULT_SETTINGS, forgetServerLanguage, useSettingsStore } from './settingsStore'
+import { DEFAULT_SETTINGS, forgetServerLanguage, resetSettingsForAccountTransition, useSettingsStore } from './settingsStore'
 import { settingsApi } from '../api/client'
 import { clearTileCache } from '../sync/tilePrefetcher'
+import { setAuthed } from '../sync/authGate'
 
 vi.mock('../api/client', () => ({
   settingsApi: {
@@ -14,6 +15,12 @@ vi.mock('../api/client', () => ({
 vi.mock('../sync/tilePrefetcher', () => ({
   clearTileCache: vi.fn().mockResolvedValue(undefined),
 }))
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
 
 // A fresh instance sends no value for a setting an admin hasn't defaulted, so DEFAULT_SETTINGS
 // is what a brand-new user actually sees. These guard against the two regressions in the
@@ -35,6 +42,61 @@ describe('settings defaults', () => {
 
   it('SETTINGS-DEFAULTS-003: no CARTO key is shipped, so the field starts empty instead of undefined', () => {
     expect(DEFAULT_SETTINGS.carto_api_key).toBe('')
+  })
+})
+
+describe('settings account boundary', () => {
+  beforeEach(() => {
+    setAuthed(false)
+    resetSettingsForAccountTransition()
+    vi.clearAllMocks()
+  })
+
+  it('SETTINGS-AUTH-001: a sparse next-account response replaces key-bearing values from the previous account', async () => {
+    useSettingsStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        carto_api_key: 'account-a-carto',
+        mapbox_access_token: 'account-a-mapbox',
+        map_provider: 'mapbox-gl',
+      },
+      isLoaded: true,
+    })
+    setAuthed(true, 2)
+    vi.mocked(settingsApi.get).mockResolvedValue({ settings: { default_currency: 'KRW' } } as never)
+
+    await useSettingsStore.getState().loadSettings()
+
+    expect(useSettingsStore.getState()).toMatchObject({
+      isLoaded: true,
+      settings: {
+        carto_api_key: '',
+        mapbox_access_token: '',
+        map_provider: 'leaflet',
+        default_currency: 'KRW',
+      },
+    })
+  })
+
+  it('SETTINGS-AUTH-002: a late account-A GET cannot commit or dedupe account-B load', async () => {
+    const accountA = deferred<{ settings: Partial<typeof DEFAULT_SETTINGS> }>()
+    vi.mocked(settingsApi.get)
+      .mockReturnValueOnce(accountA.promise as never)
+      .mockResolvedValueOnce({ settings: { default_currency: 'KRW' } } as never)
+    setAuthed(true, 1)
+    const loadA = useSettingsStore.getState().loadSettings()
+
+    setAuthed(false)
+    resetSettingsForAccountTransition()
+    setAuthed(true, 2)
+    const loadB = useSettingsStore.getState().loadSettings()
+    await loadB
+    accountA.resolve({ settings: { carto_api_key: 'late-account-a' } })
+    await loadA
+
+    expect(settingsApi.get).toHaveBeenCalledTimes(2)
+    expect(useSettingsStore.getState().settings.default_currency).toBe('KRW')
+    expect(useSettingsStore.getState().settings.carto_api_key).toBe('')
   })
 })
 

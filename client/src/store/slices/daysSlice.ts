@@ -3,6 +3,7 @@ import type { StoreApi } from 'zustand'
 import type { TripStoreState } from '../tripStore'
 import type { Day } from '../../types'
 import { getApiErrorMessage } from '../../types'
+import { assertStoreSessionLeaseValid, captureStoreSessionLease, isStoreSessionLeaseValid } from '../sessionGate'
 
 type SetState = StoreApi<TripStoreState>['setState']
 type GetState = StoreApi<TripStoreState>['getState']
@@ -18,6 +19,7 @@ export const createDaysSlice = (set: SetState, get: GetState): DaysSlice => ({
   // their slots while the content moves across them. Optimistically reorder the
   // list, then refresh to pull the server-side re-stamped dates + booking times.
   reorderDays: async (tripId, orderedIds) => {
+    const sessionLease = captureStoreSessionLease()
     const prevDays = get().days
     const byId = new Map(prevDays.map(d => [d.id, d]))
     const sortedDates = prevDays.map(d => d.date).filter((d): d is string => !!d).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
@@ -33,9 +35,13 @@ export const createDaysSlice = (set: SetState, get: GetState): DaysSlice => ({
 
     try {
       await daysApi.reorder(tripId, orderedIds)
+      assertStoreSessionLeaseValid(sessionLease)
       await get().refreshDays(tripId)
+      assertStoreSessionLeaseValid(sessionLease)
       await get().loadReservations(tripId)
+      assertStoreSessionLeaseValid(sessionLease)
     } catch (err: unknown) {
+      if (!isStoreSessionLeaseValid(sessionLease)) return
       set({ days: prevDays })
       throw new Error(getApiErrorMessage(err, 'Error reordering days'))
     }
@@ -44,12 +50,17 @@ export const createDaysSlice = (set: SetState, get: GetState): DaysSlice => ({
   // Insert a new empty day at a 1-based position (omit to append). On a dated
   // trip this extends the trip by one day and re-pins dates server-side.
   insertDay: async (tripId, position) => {
+    const sessionLease = captureStoreSessionLease()
     try {
       const result = await daysApi.create(tripId, { position })
+      assertStoreSessionLeaseValid(sessionLease)
       await get().refreshDays(tripId)
+      assertStoreSessionLeaseValid(sessionLease)
       await get().loadReservations(tripId)
+      assertStoreSessionLeaseValid(sessionLease)
       return result.day
     } catch (err: unknown) {
+      assertStoreSessionLeaseValid(sessionLease)
       throw new Error(getApiErrorMessage(err, 'Error adding day'))
     }
   },

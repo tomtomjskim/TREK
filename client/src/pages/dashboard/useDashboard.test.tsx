@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import { http, HttpResponse } from 'msw';
@@ -115,7 +115,7 @@ describe('useDashboard', () => {
     expect(result.current.loadError).toBe(true);
 
     tripsHandler([PARIS, TOKYO], [ROME]);
-    act(() => { result.current.retryLoad(); });
+    await act(async () => { await result.current.retryLoad(); });
 
     await waitFor(() => expect(result.current.loadError).toBe(false));
     expect(result.current.spotlight?.title).toBe('Tokyo Trip');

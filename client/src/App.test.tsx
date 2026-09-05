@@ -151,6 +151,7 @@ describe('RootRedirect — startup destination', () => {
     useSettingsStore.setState({
       isLoaded: true,
       settings: buildSettings({ start_page: 'active_trip' }),
+      loadSettings: vi.fn().mockResolvedValue(undefined),
     })
     const today = new Date()
     const iso = (d: Date) => d.toISOString().slice(0, 10)
