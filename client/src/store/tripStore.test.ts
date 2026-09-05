@@ -1,5 +1,6 @@
 // FE-TSTORE-001 to FE-TSTORE-021 (trip-scoped root store: load, hydrate, refresh, mutate)
 import { http, HttpResponse } from 'msw';
+import { waitFor } from '@testing-library/react';
 import { server } from '../../tests/helpers/msw/server';
 import { resetAllStores, seedStore } from '../../tests/helpers/store';
 import {
@@ -40,6 +41,11 @@ async function clearCache(): Promise<void> {
 beforeEach(async () => {
   resetAllStores();
   server.resetHandlers();
+  seedStore(useAddonStore, {
+    addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+    bagTracking: false,
+    loaded: true,
+  });
   await clearCache();
 });
 
@@ -236,6 +242,120 @@ describe('tripStore', () => {
       expect(todoCalls).toBe(0);
     });
 
+    it('FE-TSTORE-005c: a cold-start addon feed keeps packing and todo out of loadTrip until the feed settles disabled', async () => {
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: false });
+      let packingCalls = 0;
+      let todoCalls = 0;
+      server.use(
+        http.get('/api/trips/1', () => HttpResponse.json({ trip: buildTrip({ id: 1, title: 'Paris' }) })),
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 500, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => {
+          packingCalls += 1;
+          return HttpResponse.json({ error: 'packing disabled' }, { status: 404 });
+        }),
+        http.get('/api/trips/1/todo', () => {
+          todoCalls += 1;
+          return HttpResponse.json({ error: 'todo disabled' }, { status: 404 });
+        }),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/tags', () => HttpResponse.json({ tags: [] })),
+        http.get('/api/categories', () => HttpResponse.json({ categories: [] })),
+      );
+
+      const loadTripPromise = useTripStore.getState().loadTrip(1);
+
+      await waitFor(() => expect(useTripStore.getState().trip?.title).toBe('Paris'));
+      expect(useTripStore.getState().isLoading).toBe(false);
+      expect(packingCalls).toBe(0);
+      expect(todoCalls).toBe(0);
+
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: true });
+      await loadTripPromise;
+
+      const state = useTripStore.getState();
+      expect(state.trip?.title).toBe('Paris');
+      expect(state.packingItems).toEqual([]);
+      expect(state.todoItems).toEqual([]);
+      expect(state.error).toBeNull();
+      expect(packingCalls).toBe(0);
+      expect(todoCalls).toBe(0);
+    });
+
+    it('FE-TSTORE-005d: a cold-start addon feed loads packing and todo after the feed settles enabled', async () => {
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: false });
+      let packingCalls = 0;
+      let todoCalls = 0;
+      server.use(
+        http.get('/api/trips/1', () => HttpResponse.json({ trip: buildTrip({ id: 1, title: 'Paris' }) })),
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 500, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => {
+          packingCalls += 1;
+          return HttpResponse.json({ items: [buildPackingItem({ id: 60, trip_id: 1 })] });
+        }),
+        http.get('/api/trips/1/todo', () => {
+          todoCalls += 1;
+          return HttpResponse.json({ items: [buildTodoItem({ id: 70, trip_id: 1 })] });
+        }),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/tags', () => HttpResponse.json({ tags: [] })),
+        http.get('/api/categories', () => HttpResponse.json({ categories: [] })),
+      );
+
+      const loadTripPromise = useTripStore.getState().loadTrip(1);
+
+      await waitFor(() => expect(useTripStore.getState().trip?.title).toBe('Paris'));
+      expect(useTripStore.getState().isLoading).toBe(false);
+      expect(packingCalls).toBe(0);
+      expect(todoCalls).toBe(0);
+
+      useAddonStore.setState({
+        addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+        bagTracking: false,
+        loaded: true,
+      });
+      await loadTripPromise;
+
+      const state = useTripStore.getState();
+      expect(state.trip?.title).toBe('Paris');
+      expect(state.packingItems.map(i => i.id)).toEqual([60]);
+      expect(state.todoItems.map(i => i.id)).toEqual([70]);
+      expect(state.error).toBeNull();
+      expect(packingCalls).toBe(1);
+      expect(todoCalls).toBe(1);
+    });
+
+    it('FE-TSTORE-005e: a cold-start addon feed still throws on a genuine enabled 404', async () => {
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: false });
+      server.use(
+        http.get('/api/trips/1', () => HttpResponse.json({ trip: buildTrip({ id: 1, title: 'Paris' }) })),
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 500, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => HttpResponse.json({ error: 'missing' }, { status: 404 })),
+        http.get('/api/trips/1/todo', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+        http.get('/api/tags', () => HttpResponse.json({ tags: [] })),
+        http.get('/api/categories', () => HttpResponse.json({ categories: [] })),
+      );
+
+      const loadTripPromise = useTripStore.getState().loadTrip(1);
+      await waitFor(() => expect(useTripStore.getState().trip?.title).toBe('Paris'));
+      useAddonStore.setState({
+        addons: [{ id: 'packing', name: 'Packing', type: 'packing', icon: 'package', enabled: true }],
+        bagTracking: false,
+        loaded: true,
+      });
+
+      await expect(loadTripPromise).rejects.toThrow();
+    });
+
     it('FE-TSTORE-006: falls back to the cached tags and categories when their endpoints fail', async () => {
       await offlineDb.tags.put(buildTag({ id: 31, name: 'Cached tag' }));
       await offlineDb.categories.put(buildCategory({ id: 32, name: 'Cached category' }));
@@ -344,6 +464,43 @@ describe('tripStore', () => {
       // The trip itself is not re-fetched — no splash, no resetTrip.
       expect(state.isLoading).toBe(false);
       expect(nudged).toHaveBeenCalledTimes(1);
+    });
+
+    it('FE-TSTORE-008b: a cold-start addon feed keeps packing and todo out of hydrateActiveTrip until the feed settles disabled', async () => {
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: false });
+      seedStore(useTripStore, { trip: buildTrip({ id: 1 }), places: [], days: [] });
+      let packingCalls = 0;
+      let todoCalls = 0;
+
+      server.use(
+        http.get('/api/trips/1/days', () => HttpResponse.json({ days: serverDays() })),
+        http.get('/api/trips/1/places', () => HttpResponse.json({ places: [buildPlace({ id: 501, trip_id: 1 })] })),
+        http.get('/api/trips/1/packing', () => {
+          packingCalls += 1;
+          return HttpResponse.json({ error: 'packing disabled' }, { status: 404 });
+        }),
+        http.get('/api/trips/1/todo', () => {
+          todoCalls += 1;
+          return HttpResponse.json({ error: 'todo disabled' }, { status: 404 });
+        }),
+        http.get('/api/trips/1/budget', () => HttpResponse.json({ items: [] })),
+        http.get('/api/trips/1/reservations', () => HttpResponse.json({ reservations: [] })),
+        http.get('/api/trips/1/files', () => HttpResponse.json({ files: [] })),
+      );
+
+      const hydratePromise = useTripStore.getState().hydrateActiveTrip(1);
+
+      await waitFor(() => expect(useTripStore.getState().places.map(p => p.id)).toEqual([501]));
+      expect(packingCalls).toBe(0);
+      expect(todoCalls).toBe(0);
+
+      useAddonStore.setState({ addons: [], bagTracking: false, loaded: true });
+      await hydratePromise;
+
+      expect(useTripStore.getState().packingItems).toEqual([]);
+      expect(useTripStore.getState().todoItems).toEqual([]);
+      expect(packingCalls).toBe(0);
+      expect(todoCalls).toBe(0);
     });
 
     it('FE-TSTORE-009: one failing resource does not wipe the others', async () => {
