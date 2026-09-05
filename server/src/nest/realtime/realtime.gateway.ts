@@ -1,18 +1,8 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import {
-  ConnectedSocket,
-  MessageBody,
-  OnGatewayConnection,
-  OnGatewayDisconnect,
-  OnGatewayInit,
-  SubscribeMessage,
-  WebSocketGateway,
-} from '@nestjs/websockets';
-import type { IncomingMessage } from 'node:http';
-import type { WebSocketServer } from 'ws';
-import { DatabaseService } from '../database/database.service';
-import { EphemeralTokenService } from '../auth/ephemeral-token.service';
 import { User } from '../../types';
+import { EphemeralTokenService } from '../auth/ephemeral-token.service';
+import { isSessionIdRevoked } from '../auth/session-revocation';
+import { DatabaseService } from '../database/database.service';
+import { JourneyDomainService } from '../journey/journey-domain.service';
 import {
   bookPeers,
   broadcastToBook,
@@ -23,11 +13,24 @@ import {
   leaveBook,
   leaveRoom,
   registerSocket,
+  sessionBindingOf,
   socketIdOf,
   userOf,
   type TrekWebSocket,
 } from './ws-state';
-import { JourneyDomainService } from '../journey/journey-domain.service';
+import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import {
+  ConnectedSocket,
+  MessageBody,
+  OnGatewayConnection,
+  OnGatewayDisconnect,
+  OnGatewayInit,
+  SubscribeMessage,
+  WebSocketGateway,
+} from '@nestjs/websockets';
+
+import type { IncomingMessage } from 'node:http';
+import type { WebSocketServer } from 'ws';
 
 const HEARTBEAT_INTERVAL = 30_000;
 
@@ -51,9 +54,7 @@ const HEARTBEAT_INTERVAL = 30_000;
  */
 @Injectable()
 @WebSocketGateway({ path: '/ws' })
-export class RealtimeGateway
-  implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy
-{
+export class RealtimeGateway implements OnGatewayInit, OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   private heartbeat: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -71,6 +72,7 @@ export class RealtimeGateway
     this.heartbeat = setInterval(() => {
       server.clients.forEach((ws) => {
         const tws = ws as TrekWebSocket;
+        if ((userOf(tws) || sessionBindingOf(tws)) && !this.sessionIsCurrent(tws)) return;
         if (tws.isAlive === false) return tws.terminate();
         tws.isAlive = false;
         tws.ping();
@@ -102,6 +104,10 @@ export class RealtimeGateway
 
     const consumed = this.tokens.consumeWithMeta(token, 'ws');
     if (!consumed) {
+      socket.close(4001, 'Invalid or expired token');
+      return;
+    }
+    if (consumed.sid && isSessionIdRevoked(this.db.connection, consumed.sid)) {
       socket.close(4001, 'Invalid or expired token');
       return;
     }
@@ -137,9 +143,14 @@ export class RealtimeGateway
     }
 
     socket.isAlive = true;
-    const sid = registerSocket(socket, user as User);
+    const sid = registerSocket(socket, user as User, {
+      pv: tokenPv,
+      sid: consumed.sid ?? `ephemeral:${token}`,
+    });
     socket.send(JSON.stringify({ type: 'welcome', socketId: sid }));
-    socket.on('pong', () => { socket.isAlive = true; });
+    socket.on('pong', () => {
+      socket.isAlive = true;
+    });
   }
 
   handleDisconnect(socket: TrekWebSocket): void {
@@ -149,11 +160,29 @@ export class RealtimeGateway
     for (const journeyId of leaveAllBooks(socket)) this.announcePeers(journeyId);
   }
 
+  /** Recheck the durable session binding on every inbound action/heartbeat. */
+  private sessionIsCurrent(socket: TrekWebSocket): boolean {
+    const user = userOf(socket);
+    const binding = sessionBindingOf(socket);
+    if (!user || !binding || isSessionIdRevoked(this.db.connection, binding.sid)) {
+      socket.close(4001, 'Invalid or expired token');
+      return false;
+    }
+    const row = this.db.get<{ password_version?: number }>('SELECT password_version FROM users WHERE id = ?', user.id);
+    const currentPv = typeof row?.password_version === 'number' ? row.password_version : 0;
+    if (!row || binding.pv !== currentPv) {
+      socket.close(4001, 'Invalid or expired token');
+      return false;
+    }
+    return true;
+  }
+
   @SubscribeMessage('join')
   handleJoin(
     @MessageBody() message: { tripId?: number | string },
     @ConnectedSocket() socket: TrekWebSocket,
   ): { type: string; tripId?: number; message?: string } | undefined {
+    if (!this.sessionIsCurrent(socket)) return undefined;
     const user = userOf(socket);
     if (!user || !message?.tripId) return undefined;
 
@@ -178,6 +207,7 @@ export class RealtimeGateway
     @MessageBody() message: { journeyId?: number | string },
     @ConnectedSocket() socket: TrekWebSocket,
   ): { type: string; journeyId?: number; message?: string } | undefined {
+    if (!this.sessionIsCurrent(socket)) return undefined;
     const user = userOf(socket);
     if (!user || !message?.journeyId) return undefined;
 
@@ -196,6 +226,7 @@ export class RealtimeGateway
     @MessageBody() message: { journeyId?: number | string },
     @ConnectedSocket() socket: TrekWebSocket,
   ): { type: string; journeyId?: number } | undefined {
+    if (!this.sessionIsCurrent(socket)) return undefined;
     if (!message?.journeyId) return undefined;
     const journeyId = Number(message.journeyId);
     leaveBook(socket, journeyId);
@@ -218,7 +249,8 @@ export class RealtimeGateway
    */
   @SubscribeMessage('book:cursor')
   handleBookCursor(
-    @MessageBody() message: {
+    @MessageBody()
+    message: {
       journeyId?: number | string;
       spreadIndex?: number;
       x?: number | null;
@@ -226,6 +258,7 @@ export class RealtimeGateway
     },
     @ConnectedSocket() socket: TrekWebSocket,
   ): undefined {
+    if (!this.sessionIsCurrent(socket)) return undefined;
     const user = userOf(socket);
     const sid = socketIdOf(socket);
     if (!user || sid == null || !message?.journeyId) return undefined;
@@ -258,6 +291,7 @@ export class RealtimeGateway
     @MessageBody() message: { tripId?: number | string },
     @ConnectedSocket() socket: TrekWebSocket,
   ): { type: string; tripId?: number; message?: string } | undefined {
+    if (!this.sessionIsCurrent(socket)) return undefined;
     if (!message?.tripId) return undefined;
     const tripId = Number(message.tripId);
     leaveRoom(socket, tripId);

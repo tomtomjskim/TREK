@@ -1,4 +1,3 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import {
   createEphemeralToken,
   consumeEphemeralToken,
@@ -7,6 +6,7 @@ import {
   stopTokenCleanup,
   type EphemeralTokenMeta,
 } from './ephemeral-tokens';
+import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 
 /**
  * The injectable face of the ephemeral-token store, and the owner of its
@@ -56,7 +56,7 @@ export class EphemeralTokenService implements OnModuleInit, OnModuleDestroy {
    * handshake needs it, for the session gate that rejects a token minted before
    * a password change.
    */
-  consumeWithMeta(token: string, purpose: string): { userId: number; pv?: number } | null {
+  consumeWithMeta(token: string, purpose: string): { userId: number; pv?: number; sid?: string } | null {
     return consumeEphemeralTokenWithMeta(token, purpose);
   }
 }

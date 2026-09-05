@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { fork, type ChildProcess } from 'node:child_process';
 import { readEnv } from '../../../app-config';
+import { RestoreInProgressError, runTrackedApplicationWork } from '../../backup/restore-quiescence';
 import { resolveChildEntry, pluginRealCodeDir, pluginPermissionArgs, ensurePluginModuleType } from '../paths';
 import { HOOK_PERMISSION, USER_DATA_PERMISSION, EVENTS_PERMISSION, type Envelope, type RpcError, type RpcRequest } from '../protocol/envelope';
 import type { PluginRpcHost } from '../host/rpc-host';
@@ -65,6 +66,7 @@ interface Supervised {
   subscriptions: Array<{ plugin: string; event: string }>; // other-plugin events it listens to
   pending: Map<string, Pending>; // host→child invokes awaiting a response
   invocations: Map<string, number | undefined>; // reqId -> acting user of that invoke (undefined = no user, e.g. a job)
+  rpcTasks: Set<Promise<void>>; // child→host RPCs whose capability host must remain open until completion
   rpcLimiter: RpcRateLimiter; // caps this plugin's ctx.* call rate + concurrency (host-loop DoS guard)
   logLimiter: TokenBucket; // caps this plugin's log/stderr volume (host-loop DoS guard, separate from rpcLimiter)
   droppedLogs: number; // count of log lines dropped by logLimiter since the last one got through
@@ -153,6 +155,7 @@ export class PluginSupervisor {
       subscriptions: [],
       pending: new Map(),
       invocations: new Map(),
+      rpcTasks: new Set(),
       rpcLimiter: new RpcRateLimiter(DEFAULT_RPC_LIMIT, Date.now()),
       logLimiter: new TokenBucket(DEFAULT_LOG_LIMIT.burst, DEFAULT_LOG_LIMIT.perSec, Date.now()),
       droppedLogs: 0,
@@ -183,18 +186,29 @@ export class PluginSupervisor {
    * so a plugin that hangs on load after a crash can't run away. */
   private armActivationDeadline(sup: Supervised): void {
     this.clearActivationTimer(sup);
-    sup.activationTimer = setTimeout(async () => {
-      if (sup.status === 'active') return;
-      this.hooks.onLog?.(sup.id, 'error', 'activation timed out; killing');
-      this.setStatus(sup, 'error', 'activation timed out');
-      sup.activation?.reject(new Error('plugin did not finish loading in time'));
-      sup.activation = undefined;
-      this.running.delete(sup.id);
-      this.pendingEvents.delete(sup.id); // don't orphan the buffered-event queue
-      // await the kill (SIGTERM grace) before closing the plugin db, so a ctx.*
-      // RPC from the dying child can't hit an already-disposed handle.
-      await this.kill(sup);
-      sup.rpcHost.dispose();
+    sup.activationTimer = setTimeout(() => {
+      sup.activationTimer = undefined;
+      this.runLifecycleTimer(
+        sup.id,
+        async () => {
+          if (sup.status === 'active') return;
+          this.hooks.onLog?.(sup.id, 'error', 'activation timed out; killing');
+          this.setStatus(sup, 'error', 'activation timed out');
+          sup.activation?.reject(new Error('plugin did not finish loading in time'));
+          sup.activation = undefined;
+          this.running.delete(sup.id);
+          this.pendingEvents.delete(sup.id); // don't orphan the buffered-event queue
+          // await the kill (SIGTERM grace) before closing the plugin db, so a ctx.*
+          // RPC from the dying child can't hit an already-disposed handle.
+          await this.kill(sup);
+          sup.rpcHost.dispose();
+        },
+        () => {
+          if (this.running.get(sup.id) === sup && sup.status === 'starting') {
+            this.armActivationDeadline(sup);
+          }
+        },
+      );
     }, this.tuning.activationTimeoutMs);
     sup.activationTimer.unref?.();
   }
@@ -413,6 +427,21 @@ export class PluginSupervisor {
     params: Record<string, unknown>,
     opts: { timeoutMs?: number; actingUserId?: number } = {},
   ): Promise<unknown> {
+    try {
+      return runTrackedApplicationWork(() => this.invokeAdmitted(id, method, params, opts));
+    } catch (error) {
+      // runTrackedApplicationWork rejects admission synchronously. Preserve invoke's
+      // Promise-only error contract so fire-and-forget callers can keep using .catch().
+      return Promise.reject(error);
+    }
+  }
+
+  private invokeAdmitted(
+    id: string,
+    method: string,
+    params: Record<string, unknown>,
+    opts: { timeoutMs?: number; actingUserId?: number },
+  ): Promise<unknown> {
     const { timeoutMs = 30_000, actingUserId } = opts;
     const sup = this.running.get(id);
     if (!sup || sup.status !== 'active' || !sup.child) {
@@ -458,6 +487,10 @@ export class PluginSupervisor {
     // snapshots, and replaying them into the restored data on a re-activation would be wrong.
     this.pendingEvents.clear();
     await Promise.all(all.map((s) => this.kill(s)));
+    // A child can already have an admitted ctx.* request executing in the host
+    // when shutdown starts. Keep its plugin DB/capability host alive until that
+    // request settles, so DB handles cannot close underneath an active dispatch.
+    await Promise.allSettled(all.flatMap((s) => [...(s.rpcTasks ?? [])]));
     for (const s of all) s.rpcHost.dispose();
   }
 
@@ -560,22 +593,27 @@ export class PluginSupervisor {
       // (its `_inv` reqId → our invocation map), NOT from anything the plugin can
       // set in the call params.
       const req = msg as RpcRequest;
-      // Rate limit BEFORE dispatch: every ctx.* call runs synchronously on the host
-      // thread (better-sqlite3 + the router), so an unthrottled `while (true)` loop
-      // in a plugin freezes the whole instance — including this supervisor's reap
-      // sweep. A throttled call is refused with HOST_ERROR (retryable) rather than
-      // executed; a legitimate plugin never hits the generous burst.
-      if (!sup.rpcLimiter.tryAcquire(Date.now())) {
-        sup.child?.send({ k: 'res', id: req.id, ok: false, error: { code: 'HOST_ERROR', message: 'rate limit exceeded — slow down ctx.* calls' } } satisfies RpcError);
-        return;
-      }
-      const inv = req.params as { _inv?: unknown } | undefined;
-      const actingUserId = typeof inv?._inv === 'string' ? sup.invocations.get(inv._inv) : undefined;
+      let work: Promise<void>;
       try {
-        const res = await sup.rpcHost.dispatch(req, actingUserId);
-        sup.child?.send(res);
+        work = runTrackedApplicationWork(() => this.dispatchChildRequest(sup, req));
+      } catch (error) {
+        if (error instanceof RestoreInProgressError) {
+          sup.child?.send({
+            k: 'res',
+            id: req.id,
+            ok: false,
+            error: { code: 'HOST_ERROR', message: error.message },
+          } satisfies RpcError);
+          return;
+        }
+        throw error;
+      }
+      const rpcTasks = sup.rpcTasks ??= new Set<Promise<void>>();
+      rpcTasks.add(work);
+      try {
+        await work;
       } finally {
-        sup.rpcLimiter.release();
+        rpcTasks.delete(work);
       }
       return;
     }
@@ -676,6 +714,26 @@ export class PluginSupervisor {
     }
   }
 
+  private async dispatchChildRequest(sup: Supervised, req: RpcRequest): Promise<void> {
+    // Rate limit BEFORE dispatch: every ctx.* call runs synchronously on the host
+    // thread (better-sqlite3 + the router), so an unthrottled `while (true)` loop
+    // in a plugin freezes the whole instance — including this supervisor's reap
+    // sweep. A throttled call is refused with HOST_ERROR (retryable) rather than
+    // executed; a legitimate plugin never hits the generous burst.
+    if (!sup.rpcLimiter.tryAcquire(Date.now())) {
+      sup.child?.send({ k: 'res', id: req.id, ok: false, error: { code: 'HOST_ERROR', message: 'rate limit exceeded — slow down ctx.* calls' } } satisfies RpcError);
+      return;
+    }
+    const inv = req.params as { _inv?: unknown } | undefined;
+    const actingUserId = typeof inv?._inv === 'string' ? sup.invocations.get(inv._inv) : undefined;
+    try {
+      const res = await sup.rpcHost.dispatch(req, actingUserId);
+      sup.child?.send(res);
+    } finally {
+      sup.rpcLimiter.release();
+    }
+  }
+
   private rejectPending(sup: Supervised, reason: string): void {
     for (const p of sup.pending.values()) {
       clearTimeout(p.timer);
@@ -719,30 +777,87 @@ export class PluginSupervisor {
     // which we set immediately below.)
     this.clearActivationTimer(sup);
     this.setStatus(sup, 'starting');
+    this.armRespawn(sup, delay);
+  }
+
+  private armRespawn(sup: Supervised, delay: number): void {
     sup.respawnTimer = setTimeout(() => {
+      sup.respawnTimer = undefined;
       // Identity + status check, not just presence: a disable + re-enable in the backoff
       // window replaces `running[id]` with a NEW sup, so `running.has(id)` would still be
       // true and this stale timer would respawn a GHOST child from the old entry. Only
       // respawn when the entry is still THIS one and still awaiting its restart.
       if (this.running.get(sup.id) !== sup || sup.status !== 'starting') return;
-      try {
-        this.spawn(sup);
-      } catch (error) {
-        this.failSpawn(sup, error, false);
-        return;
-      }
-      // A respawn needs the SAME activation deadline as a first activation — otherwise a
-      // plugin that hangs in onLoad after a crash sits in 'starting' forever, pegging a
-      // core and buffering events that never flush (the reaper ignores non-active).
-      this.armActivationDeadline(sup);
+      this.runLifecycleTimer(
+        sup.id,
+        async () => {
+          if (this.running.get(sup.id) !== sup || sup.status !== 'starting') return;
+          try {
+            this.spawn(sup);
+          } catch (error) {
+            this.failSpawn(sup, error, false);
+            return;
+          }
+          // A respawn needs the SAME activation deadline as a first activation — otherwise a
+          // plugin that hangs in onLoad after a crash sits in 'starting' forever, pegging a
+          // core and buffering events that never flush (the reaper ignores non-active).
+          this.armActivationDeadline(sup);
+        },
+        () => {
+          if (this.running.get(sup.id) === sup && sup.status === 'starting') {
+            this.armRespawn(sup, delay);
+          }
+        },
+      );
     }, delay);
     sup.respawnTimer.unref?.();
   }
 
   private ensureSweep(): void {
     if (this.sweep) return;
-    this.sweep = setInterval(() => this.reapStale(), 5000);
+    this.sweep = setInterval(() => {
+      this.runLifecycleTimer('host', async () => this.reapStale());
+    }, 5000);
     this.sweep.unref?.();
+  }
+
+  /**
+   * Timer callbacks run outside request interceptors. Admit them explicitly so a
+   * restore drains a callback already in progress and refuses a callback that fires
+   * while state is blocked. One-shot lifecycle timers may re-arm themselves after a
+   * refused admission; periodic sweeps simply wait for their next natural tick.
+   */
+  private runLifecycleTimer(
+    pluginId: string,
+    operation: () => Promise<void>,
+    onRestoreBlocked?: () => void,
+  ): void {
+    let work: Promise<void>;
+    try {
+      work = runTrackedApplicationWork(operation);
+    } catch (error) {
+      if (error instanceof RestoreInProgressError) {
+        onRestoreBlocked?.();
+        return;
+      }
+      this.hooks.onLog?.(
+        pluginId,
+        'error',
+        `plugin lifecycle timer failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return;
+    }
+    void work.catch((error: unknown) => {
+      if (error instanceof RestoreInProgressError) {
+        onRestoreBlocked?.();
+        return;
+      }
+      this.hooks.onLog?.(
+        pluginId,
+        'error',
+        `plugin lifecycle timer failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
   }
 
   /**
@@ -803,10 +918,19 @@ export class PluginSupervisor {
     const child = sup.child;
     if (!child) return;
     sup.child = null;
-    child.send?.({ k: 'evt', topic: 'shutdown', data: {} } satisfies Envelope);
+    try {
+      child.send?.({ k: 'evt', topic: 'shutdown', data: {} } satisfies Envelope);
+    } catch {
+      // A closed IPC channel still needs the termination/wait path below. Letting
+      // this escape would strand an orphan child after `running` was cleared.
+    }
     await new Promise<void>((resolve) => {
       const t = setTimeout(() => {
-        child.kill('SIGKILL');
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // Already gone or otherwise unkillable; the supervisor must still settle.
+        }
         resolve();
       }, this.tuning.killGraceMs);
       t.unref?.();

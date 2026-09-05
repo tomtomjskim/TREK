@@ -1,3 +1,19 @@
+import type { AddonsService } from '../../../src/nest/addons/addons.service';
+import {
+  resetRestoreQuiescenceForTests,
+  RestoreInProgressError,
+  runInRestoreQuiescence,
+} from '../../../src/nest/backup/restore-quiescence';
+import type { DatabaseService } from '../../../src/nest/database/database.service';
+import { AirtrailLinkService } from '../../../src/nest/integrations/airtrail-link.service';
+import { AirtrailSyncService } from '../../../src/nest/integrations/airtrail-sync.service';
+import { AirtrailAuthError } from '../../../src/nest/integrations/airtrail.client';
+import type { AirtrailClient } from '../../../src/nest/integrations/airtrail.client';
+import type { AirtrailService } from '../../../src/nest/integrations/airtrail.service';
+import type { RealtimeService } from '../../../src/nest/realtime/realtime.service';
+import type { ReservationsReadRepository } from '../../../src/nest/reservations/reservations-read.repository';
+import type { ReservationsService } from '../../../src/nest/reservations/reservations.service';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
@@ -15,17 +31,6 @@ vi.mock('../../../src/nest/integrations/airtrail.mapper', () => ({
   mapFlightToReservation: vi.fn(() => ({})),
   entityCode: (e: any) => e?.icao || e?.iata || null,
 }));
-
-import { AirtrailLinkService } from '../../../src/nest/integrations/airtrail-link.service';
-import { AirtrailAuthError } from '../../../src/nest/integrations/airtrail.client';
-import type { DatabaseService } from '../../../src/nest/database/database.service';
-import type { RealtimeService } from '../../../src/nest/realtime/realtime.service';
-import type { AddonsService } from '../../../src/nest/addons/addons.service';
-import { AirtrailSyncService } from '../../../src/nest/integrations/airtrail-sync.service';
-import type { ReservationsService } from '../../../src/nest/reservations/reservations.service';
-import type { ReservationsReadRepository } from '../../../src/nest/reservations/reservations-read.repository';
-import type { AirtrailClient } from '../../../src/nest/integrations/airtrail.client';
-import type { AirtrailService } from '../../../src/nest/integrations/airtrail.service';
 
 const linkedRow = { id: 5, trip_id: 9, external_id: '42', external_owner_user_id: 7, sync_enabled: 1 };
 
@@ -79,6 +84,7 @@ let svc: { link: AirtrailLinkService; sync: AirtrailSyncService };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetRestoreQuiescenceForTests();
   // Global sync setting, the linked reservation row and the endpoint count the
   // multi-leg guard checks (#1535) — two = plain from/to.
   dbGet = (sql: string) => {
@@ -92,7 +98,13 @@ beforeEach(() => {
 
   getAirtrailCredentials.mockReturnValue({ baseUrl: 'https://at.example', apiKey: 'k', allowInsecureTls: false });
   // GET returns AirTrail-owned detail TREK doesn't model — must survive the writeback.
-  getFlight.mockResolvedValue({ id: 42, from: { iata: 'JFK' }, to: { iata: 'LHR' }, seats: [], departureTerminal: '7' });
+  getFlight.mockResolvedValue({
+    id: 42,
+    from: { iata: 'JFK' },
+    to: { iata: 'LHR' },
+    seats: [],
+    departureTerminal: '7',
+  });
   saveFlight.mockResolvedValue({ id: 42 });
   getReservationWithJoins.mockReturnValue({
     external_id: '42',
@@ -108,6 +120,34 @@ beforeEach(() => {
 });
 
 describe('pushReservationToAirtrail write gate (#1240)', () => {
+  it('keeps restore waiting through the provider round-trip and rejects a second push while blocked', async () => {
+    isAirtrailWriteEnabled.mockReturnValue(true);
+    let finishLookup!: (flight: Record<string, unknown>) => void;
+    const lookup = new Promise<Record<string, unknown>>((resolve) => {
+      finishLookup = resolve;
+    });
+    getFlight.mockReset();
+    getFlight.mockImplementationOnce(() => lookup);
+    getFlight.mockResolvedValue({ id: 42, from: { iata: 'JFK' }, to: { iata: 'LHR' }, seats: [] });
+
+    const push = svc.link.pushReservationToAirtrail(5, 9);
+    await vi.waitFor(() => expect(getFlight).toHaveBeenCalledOnce());
+
+    let restoreEntered = false;
+    const restore = runInRestoreQuiescence(async () => {
+      restoreEntered = true;
+    });
+    await Promise.resolve();
+    expect(restoreEntered).toBe(false);
+    await expect(svc.link.pushReservationToAirtrail(5, 9)).rejects.toBeInstanceOf(RestoreInProgressError);
+    expect(getFlight).toHaveBeenCalledOnce();
+
+    finishLookup({ id: 42, from: { iata: 'JFK' }, to: { iata: 'LHR' }, seats: [] });
+    await push;
+    await restore;
+    expect(restoreEntered).toBe(true);
+  });
+
   it('does nothing — and does not detach — when the owner has not opted in', async () => {
     isAirtrailWriteEnabled.mockReturnValue(false);
     await svc.link.pushReservationToAirtrail(5, 9);
@@ -144,7 +184,12 @@ describe('pushReservationToAirtrail write gate (#1240)', () => {
     getReservationWithJoins.mockReturnValue({
       external_id: '42',
       reservation_time: '2021-09-01T19:00',
-      metadata: JSON.stringify({ legs: [{ from: 'BRU', to: 'HEL' }, { from: 'HEL', to: 'JFK' }] }),
+      metadata: JSON.stringify({
+        legs: [
+          { from: 'BRU', to: 'HEL' },
+          { from: 'HEL', to: 'JFK' },
+        ],
+      }),
       endpoints: [],
     });
     await svc.link.pushReservationToAirtrail(5, 9);

@@ -63,6 +63,37 @@ describe('plugin backup staging + boot reconcile', () => {
     expect(fs.existsSync(path.join(root, 'plugins-data.restore'))).toBe(false);
   });
 
+  it('treats one extracted plugin root as an authoritative pair and clears the missing live tree', () => {
+    write(path.join(root, 'plugins-data', 'installed', 'plugin.db'), 'OLD-DATA');
+    write(path.join(root, 'plugins', 'installed', 'index.js'), 'OLD-CODE');
+    const extract = path.join(root, 'restore-one-empty-root');
+    fs.mkdirSync(path.join(extract, 'plugins-data'), { recursive: true });
+
+    expect(stageExtractedPluginTrees(extract)).toBe(true);
+    expect(fs.existsSync(path.join(root, 'plugins-data.restore'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'plugins.restore'))).toBe(true);
+
+    expect(applyStagedPluginTrees().sort()).toEqual(['plugins-code', 'plugins-data']);
+    expect(fs.readdirSync(path.join(root, 'plugins-data'))).toEqual([]);
+    expect(fs.readdirSync(path.join(root, 'plugins'))).toEqual([]);
+  });
+
+  it('consumes archive root markers without copying them into the live plugin trees', () => {
+    write(path.join(root, 'plugins-data', 'installed', 'plugin.db'), 'OLD-DATA');
+    write(path.join(root, 'plugins', 'installed', 'index.js'), 'OLD-CODE');
+    const extract = path.join(root, 'restore-root-markers');
+    write(path.join(extract, 'plugins-data', '.trek-backup-root'), '');
+    write(path.join(extract, 'plugins-code', '.trek-backup-root'), '');
+
+    expect(stageExtractedPluginTrees(extract)).toBe(true);
+    expect(fs.readdirSync(path.join(root, 'plugins-data.restore'))).toEqual([]);
+    expect(fs.readdirSync(path.join(root, 'plugins.restore'))).toEqual([]);
+
+    expect(applyStagedPluginTrees().sort()).toEqual(['plugins-code', 'plugins-data']);
+    expect(fs.readdirSync(path.join(root, 'plugins-data'))).toEqual([]);
+    expect(fs.readdirSync(path.join(root, 'plugins'))).toEqual([]);
+  });
+
   it('boot reconcile is a no-op when nothing was staged', () => {
     write(path.join(root, 'plugins-data', 'notes', 'plugin.db'), 'LIVE');
     expect(applyStagedPluginTrees()).toEqual([]);
@@ -262,7 +293,7 @@ describe('plugin backup staging + boot reconcile', () => {
 
     const transaction = await applyStagedRestoreNowStrict();
 
-    expect(transaction?.labels).toEqual(['plugins-data']);
+    expect(transaction?.labels).toEqual(['plugins-data', 'plugins-code']);
     expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('NEW');
     transaction?.rollback();
     expect(read(path.join(root, 'plugins-data', 'notes', 'plugin.db'))).toBe('OLD');

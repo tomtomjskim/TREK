@@ -1,3 +1,30 @@
+import type { User } from '../../types';
+import { RuntimeEnvService } from '../app-config/runtime-env.service';
+import { AuditService } from '../audit/audit.service';
+import { getClientIp } from '../audit/client-ip';
+import { isDemoWriteBlocked, DEMO_WRITE_ERROR } from '../common/demo-write';
+import { ManagedForbidden } from '../common/managed';
+import { RateLimitService } from '../common/rate-limit.service';
+import { StorageService } from '../storage/storage.service';
+import { TokenService } from '../tokens/token.service';
+import {
+  ChangePasswordDto,
+  MapsKeyUpdateDto,
+  ApiKeysUpdateDto,
+  SettingsUpdateDto,
+  AppSettingsUpdateDto,
+  MfaEnableDto,
+  MfaDisableDto,
+  McpTokenCreateDto,
+  ResourceTokenDto,
+} from './auth.dto';
+import { AuthService } from './auth.service';
+import { CurrentUser } from './current-user.decorator';
+import { JwtAuthGuard } from './jwt-auth.guard';
+import { decodeSessionClaims, extractToken } from './jwt-verify';
+import { MfaExempt } from './mfa-policy.guard';
+import { sessionIdForToken, type SessionBinding } from './session-revocation';
+import { UserProfileService } from './user-profile.service';
 import {
   Body,
   Controller,
@@ -15,35 +42,10 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { isDemoWriteBlocked, DEMO_WRITE_ERROR } from '../common/demo-write';
-import { RuntimeEnvService } from '../app-config/runtime-env.service';
-import type { Options } from 'multer';
+
 import type { Request, Response } from 'express';
+import type { Options } from 'multer';
 import path from 'path';
-import { AuthService } from './auth.service';
-import { TokenService } from '../tokens/token.service';
-import { UserProfileService } from './user-profile.service';
-import { StorageService } from '../storage/storage.service';
-import {
-  ChangePasswordDto,
-  MapsKeyUpdateDto,
-  ApiKeysUpdateDto,
-  SettingsUpdateDto,
-  AppSettingsUpdateDto,
-  MfaEnableDto,
-  MfaDisableDto,
-  McpTokenCreateDto,
-  ResourceTokenDto,
-} from './auth.dto';
-import { RateLimitService } from '../common/rate-limit.service';
-import { JwtAuthGuard } from './jwt-auth.guard';
-import { CurrentUser } from './current-user.decorator';
-import { decodeSessionClaims } from './jwt-verify';
-import { getClientIp } from '../audit/client-ip';
-import { AuditService } from '../audit/audit.service';
-import type { User } from '../../types';
-import { MfaExempt } from './mfa-policy.guard';
-import { ManagedForbidden } from '../common/managed';
 
 const WINDOW = 15 * 60 * 1000;
 const ALLOWED_AVATAR_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
@@ -72,7 +74,15 @@ export const AVATAR_FILE_FILTER: Options['fileFilter'] = (_req, file, cb) => {
 @Controller('api/auth')
 @UseGuards(JwtAuthGuard)
 export class AuthController {
-  constructor(private readonly auth: AuthService, private readonly profile: UserProfileService, private readonly tokens: TokenService, private readonly rl: RateLimitService, private readonly audit: AuditService, private readonly env: RuntimeEnvService, private readonly storage: StorageService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly profile: UserProfileService,
+    private readonly tokens: TokenService,
+    private readonly rl: RateLimitService,
+    private readonly audit: AuditService,
+    private readonly env: RuntimeEnvService,
+    private readonly storage: StorageService,
+  ) {}
 
   private limit(bucket: string, req: Request, max: number): void {
     if (!this.rl.check(bucket, req.ip || 'unknown', max, WINDOW, Date.now())) {
@@ -95,6 +105,21 @@ export class AuthController {
     }
   }
 
+  /** Freeze the exact credential version the global guard just accepted. */
+  private sessionBinding(user: User, req: Request): SessionBinding {
+    const token = extractToken(req);
+    const claims = decodeSessionClaims(token ?? undefined);
+    if (!token || !claims || claims.purpose || claims.id !== user.id) {
+      // The guard guarantees this in normal routing. Fail closed if this
+      // controller is ever invoked through a different adapter.
+      throw new HttpException({ error: 'Invalid or expired token', code: 'AUTH_REQUIRED' }, 401);
+    }
+    return {
+      pv: typeof claims.pv === 'number' ? claims.pv : 0,
+      sid: sessionIdForToken(token, claims),
+    };
+  }
+
   @Get('me')
   @MfaExempt('the client needs to know who it is to render the setup screen')
   me(@CurrentUser() user: User) {
@@ -106,13 +131,26 @@ export class AuthController {
   }
 
   @Put('me/password')
-  changePassword(@CurrentUser() user: User, @Body() body: ChangePasswordDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
+  changePassword(
+    @CurrentUser() user: User,
+    @Body() body: ChangePasswordDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     this.limit('login', req, 5);
     // Carry the session's remember choice into the re-issued token/cookie so a
     // "remember me" login survives a password change (#1927). Bearer callers
     // have no cookie → undefined → the historical default duration.
-    const remember = decodeSessionClaims((req.cookies as Record<string, string> | undefined)?.trek_session)?.remember;
-    const result = this.auth.changePassword(user.id, user.email, body, remember);
+    const cookieToken = (req.cookies as Record<string, string> | undefined)?.trek_session;
+    const remember = decodeSessionClaims(cookieToken)?.remember;
+    const verifiedToken = extractToken(req);
+    const result = this.auth.changePassword(
+      user.id,
+      user.email,
+      body,
+      remember,
+      verifiedToken ? sessionIdForToken(verifiedToken, decodeSessionClaims(verifiedToken)) : undefined,
+    );
     if (result.error) {
       throw new HttpException({ error: result.error }, result.status!);
     }
@@ -243,7 +281,13 @@ export class AuthController {
     if (result.error) {
       throw new HttpException({ error: result.error }, result.status!);
     }
-    this.audit.writeAudit({ userId: user.id, action: 'settings.app_update', ip: getClientIp(req), details: result.auditSummary, debugDetails: result.auditDebugDetails });
+    this.audit.writeAudit({
+      userId: user.id,
+      action: 'settings.app_update',
+      ip: getClientIp(req),
+      details: result.auditSummary,
+      debugDetails: result.auditDebugDetails,
+    });
     // Named so the settings tab can say which fields the operator holds rather
     // than showing a saved value that silently did not save.
     return { success: true, ...(result.managedKeys?.length ? { managed_keys: result.managedKeys } : {}) };
@@ -360,14 +404,14 @@ export class AuthController {
 
   @Post('ws-token')
   @HttpCode(200)
-  wsToken(@CurrentUser() user: User) {
+  wsToken(@CurrentUser() user: User, @Req() req: Request) {
     // Own bucket, not 'login': a client that reconnects its socket in a loop
     // must not be able to lock itself out of signing in. The ceiling is far
     // above any real client, which mints one token per socket connect, but it
     // stops a single account from filling the process-wide ephemeral store and
     // 503-ing every other user's ws and download tokens.
     this.limitUser('ws_token', user.id, 120);
-    const result = this.tokens.createWsToken(user.id);
+    const result = this.tokens.createWsToken(user.id, this.sessionBinding(user, req));
     if (result.error) {
       throw new HttpException({ error: result.error }, result.status!);
     }
@@ -376,9 +420,9 @@ export class AuthController {
 
   @Post('resource-token')
   @HttpCode(200)
-  resourceToken(@CurrentUser() user: User, @Body() body: ResourceTokenDto) {
+  resourceToken(@CurrentUser() user: User, @Body() body: ResourceTokenDto, @Req() req: Request) {
     this.limitUser('resource_token', user.id, 120);
-    const token = this.tokens.createResourceToken(user.id, body.purpose);
+    const token = this.tokens.createResourceToken(user.id, body.purpose, this.sessionBinding(user, req));
     if (!token) {
       throw new HttpException({ error: 'Service unavailable' }, 503);
     }

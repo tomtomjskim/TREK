@@ -1,6 +1,7 @@
+import { JWT_SECRET } from '../../src/config';
+
 import Database from 'better-sqlite3';
 import jwt from 'jsonwebtoken';
-import { JWT_SECRET } from '../../src/config';
 
 /**
  * Shared e2e harness for migrated Nest modules.
@@ -41,6 +42,19 @@ export function createTempDb(): Database.Database {
 
 /** Insert a demo user and return its row. */
 export function seedUser(db: Database.Database, overrides: Partial<SeededUser> = {}): SeededUser {
+  // Hand-built module E2E schemas intentionally contain only the tables each
+  // route uses. The real JwtAuthGuard now also checks the fork-owned durable
+  // revocation ledger, so keep that shared auth prerequisite in one harness
+  // seam instead of duplicating its DDL across every slim fixture.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS jsnetworkcorp_auth_session_revocations (
+      session_key TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      revoked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_jsnetworkcorp_auth_session_revocations_user
+      ON jsnetworkcorp_auth_session_revocations(user_id);
+  `);
   const user: SeededUser = {
     id: overrides.id ?? 1,
     username: overrides.username ?? 'e2e-user',
@@ -48,9 +62,13 @@ export function seedUser(db: Database.Database, overrides: Partial<SeededUser> =
     role: overrides.role ?? 'user',
     password_version: overrides.password_version ?? 0,
   };
-  db.prepare(
-    'INSERT INTO users (id, username, email, role, password_version) VALUES (?, ?, ?, ?, ?)',
-  ).run(user.id, user.username, user.email, user.role, user.password_version);
+  db.prepare('INSERT INTO users (id, username, email, role, password_version) VALUES (?, ?, ?, ?, ?)').run(
+    user.id,
+    user.username,
+    user.email,
+    user.role,
+    user.password_version,
+  );
   return user;
 }
 

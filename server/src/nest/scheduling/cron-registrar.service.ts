@@ -1,8 +1,10 @@
-import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
-import { SchedulerRegistry } from '@nestjs/schedule';
-import { CronJob } from 'cron';
 import { readEnv } from '../../app-config';
 import { RuntimeEnvService } from '../app-config/runtime-env.service';
+import { RestoreInProgressError, runTrackedApplicationWork } from '../backup/restore-quiescence';
+import { Injectable, type OnApplicationShutdown } from '@nestjs/common';
+import { SchedulerRegistry } from '@nestjs/schedule';
+
+import { CronJob } from 'cron';
 
 /**
  * The one way TREK code schedules a cron. Job providers register here from
@@ -56,7 +58,20 @@ export class CronRegistrarService implements OnApplicationShutdown {
     this.unregister(name);
     if (!this.isEnabled()) return false;
     const timeZone = opts?.timezone === 'none' ? undefined : readEnv().app.tz || 'UTC';
-    const job = CronJob.from({ cronTime: expression, onTick, start: true, timeZone });
+    // Cron callbacks have no HTTP request for the global interceptor to admit.
+    // Track every scheduled task here, at the one shared scheduling seam, so a
+    // restore drains writers that already started and skips ticks that arrive
+    // while state is blocked. This also protects future cron providers by
+    // default instead of relying on each domain to remember the invariant.
+    const trackedTick = async (): Promise<void> => {
+      try {
+        await runTrackedApplicationWork(() => Promise.resolve(onTick()));
+      } catch (error) {
+        if (error instanceof RestoreInProgressError) return;
+        throw error;
+      }
+    };
+    const job = CronJob.from({ cronTime: expression, onTick: trackedTick, start: true, timeZone });
     this.registry.addCronJob(name, job);
     this.names.add(name);
     return true;

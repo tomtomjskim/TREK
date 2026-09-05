@@ -17,6 +17,7 @@ import { pluginsCodeRoot, pluginsDataRoot } from './paths';
  */
 
 const STAGE_SUFFIX = '.restore';
+export const PLUGIN_TREE_ARCHIVE_MARKER = '.trek-backup-root';
 
 function dataStaging(): string { return pluginsDataRoot() + STAGE_SUFFIX; }
 function codeStaging(): string { return pluginsCodeRoot() + STAGE_SUFFIX; }
@@ -57,8 +58,7 @@ export function stageExtractedPluginTrees(extractDir: string): boolean {
     [path.join(extractDir, 'plugins-data'), dataStaging()],
     [path.join(extractDir, 'plugins-code'), codeStaging()],
   ];
-  const present = pairs.filter(([from]) => fs.existsSync(from));
-  if (present.length === 0) return false;
+  if (!pairs.some(([from]) => fs.existsSync(from))) return false;
 
   try {
     // A plugin archive commonly contains both trees. Do not publish either
@@ -66,13 +66,19 @@ export function stageExtractedPluginTrees(extractDir: string): boolean {
     // failure while copying code must never leave data staged for a later boot
     // to apply as a seemingly successful restore.
     discardStagedPluginTrees();
-    for (const [from, to] of present) {
-      fs.cpSync(from, to + '.tmp', { recursive: true });
+    for (const [from, to] of pairs) {
+      if (fs.existsSync(from)) fs.cpSync(from, to + '.tmp', { recursive: true });
+      else fs.mkdirSync(to + '.tmp', { recursive: true });
+      // Empty directories have no portable file entry in the checksum manifest.
+      // Backups therefore carry a manifest-bound, zero-byte root marker. It is
+      // archive metadata, not plugin state, so consume it before publishing the
+      // authoritative staging tree.
+      fs.rmSync(path.join(to + '.tmp', PLUGIN_TREE_ARCHIVE_MARKER), { force: true });
     }
     // The individual same-directory renames are atomic. If publication of a
     // later tree fails, the catch below rolls every published sibling back so
     // no partial `.restore` can be applied on the next boot.
-    for (const [, to] of present) {
+    for (const [, to] of pairs) {
       fs.renameSync(to + '.tmp', to);
     }
     return true;
@@ -133,6 +139,12 @@ function snapshotLiveTree(live: string, snapshot: string): void {
 export interface PluginRestoreTransaction {
   /** The live plugin trees now carrying restored bytes. */
   readonly labels: readonly string[];
+  /**
+   * Optional live-runtime receipt. The restore coordinator calls it only after
+   * commit or complete rollback has left quiescence, so enabled plugins restart
+   * against the database and plugin trees that actually won the transaction.
+   */
+  resume?(): Promise<void>;
   /** Restore every live tree from the pre-restore snapshots and remove stale staging. */
   rollback(): void;
   /**
@@ -276,15 +288,37 @@ export function applyStagedPluginTrees(): string[] {
 // running plugins, there is nothing to diverge.
 type StagedRestoreApplier = () => PluginRestoreTransaction | Promise<PluginRestoreTransaction>;
 
+/**
+ * Runtime-owned lifecycle used by the restore admission boundary. It is kept
+ * separate from the staged-tree applier because even a core-only restore must
+ * stop plugin egress and close per-plugin database handles before mutation.
+ */
+export interface PluginRestoreRuntimeLifecycle {
+  shutdown(): Promise<void>;
+  resume(): Promise<void>;
+}
+
 let applier: StagedRestoreApplier | null = null;
+let runtimeLifecycle: PluginRestoreRuntimeLifecycle | null = null;
 export function setStagedRestoreApplier(fn: StagedRestoreApplier | null): void {
   applier = fn;
+}
+export function setPluginRestoreRuntimeLifecycle(lifecycle: PluginRestoreRuntimeLifecycle | null): void {
+  runtimeLifecycle = lifecycle;
+}
+export function getPluginRestoreRuntimeLifecycle(): PluginRestoreRuntimeLifecycle | null {
+  return runtimeLifecycle;
 }
 export async function applyStagedRestoreNow(): Promise<boolean> {
   if (!applier) return false;
   try {
     const transaction = await applier();
     transaction.commitCleanup();
+    try {
+      await transaction.resume?.();
+    } catch (err) {
+      console.error('[plugins] staged restore committed but runtime resume failed:', err);
+    }
     return true;
   } catch (err) {
     console.error('[plugins] immediate staged-restore apply failed; will retry on next boot:', err);

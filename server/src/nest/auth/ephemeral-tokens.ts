@@ -18,24 +18,24 @@ interface TokenEntry {
    * treat as version 0 — mirroring the JWT `pv` claim semantics.
    */
   pv?: number;
+  /** Browser-session lineage that minted this derived capability. */
+  sid?: string;
 }
 
 export interface EphemeralTokenMeta {
   /** Bind the token to the user's current password_version (session gate). */
   pv?: number;
+  /** Bind a ws/download capability to logout of its source browser session. */
+  sid?: string;
 }
 
 const store = new Map<string, TokenEntry>();
 
-export function createEphemeralToken(
-  userId: number,
-  purpose: string,
-  meta?: EphemeralTokenMeta,
-): string | null {
+export function createEphemeralToken(userId: number, purpose: string, meta?: EphemeralTokenMeta): string | null {
   if (store.size >= MAX_STORE_SIZE) return null;
   const token = crypto.randomBytes(32).toString('hex');
   const ttl = TTL[purpose] ?? 60_000;
-  store.set(token, { userId, purpose, expiresAt: Date.now() + ttl, pv: meta?.pv });
+  store.set(token, { userId, purpose, expiresAt: Date.now() + ttl, pv: meta?.pv, sid: meta?.sid });
   return token;
 }
 
@@ -55,12 +55,17 @@ export function consumeEphemeralToken(token: string, purpose: string): number | 
 export function consumeEphemeralTokenWithMeta(
   token: string,
   purpose: string,
-): { userId: number; pv?: number } | null {
+): { userId: number; pv?: number; sid?: string } | null {
   const entry = store.get(token);
   if (!entry) return null;
   store.delete(token);
   if (entry.purpose !== purpose || Date.now() > entry.expiresAt) return null;
-  return { userId: entry.userId, pv: entry.pv };
+  return { userId: entry.userId, pv: entry.pv, sid: entry.sid };
+}
+
+/** Invalidate every derived WS/download capability after global auth rotation. */
+export function clearEphemeralTokens(): void {
+  store.clear();
 }
 
 let cleanupInterval: ReturnType<typeof setInterval> | null = null;

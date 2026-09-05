@@ -1,8 +1,10 @@
+import { JWT_SECRET } from '../../config';
+import { db } from '../../db/database';
+import type { User } from '../../types';
+import { isSessionRevoked } from './session-revocation';
+
 import type { Request } from 'express';
 import jwt from 'jsonwebtoken';
-import { db } from '../../db/database';
-import { JWT_SECRET } from '../../config';
-import type { User } from '../../types';
 
 /**
  * The canonical JWT session check. Every auth surface goes through here — the
@@ -36,6 +38,7 @@ export interface SessionClaims {
   id?: number;
   pv?: number;
   remember?: boolean;
+  sid?: string;
   purpose?: string;
   iat?: number;
   exp?: number;
@@ -56,14 +59,15 @@ export function decodeSessionClaims(token: string | undefined): SessionClaims | 
 
 export function verifyJwtAndLoadUser(token: string): User | null {
   try {
-    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as { id: number; pv?: number; purpose?: string };
+    const decoded = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }) as SessionClaims & { id: number };
     // Purpose-scoped tokens (e.g. the short-lived mfa_login token) share this
     // secret but are not full session tokens — only their dedicated endpoint
     // may accept them, so reject any token carrying a purpose claim here.
     if (decoded.purpose) return null;
-    const row = db.prepare(
-      'SELECT id, username, email, role, password_version FROM users WHERE id = ?'
-    ).get(decoded.id) as (User & { password_version?: number }) | undefined;
+    if (isSessionRevoked(db, token, decoded)) return null;
+    const row = db
+      .prepare('SELECT id, username, email, role, password_version FROM users WHERE id = ?')
+      .get(decoded.id) as (User & { password_version?: number }) | undefined;
     if (!row) return null;
     // Session invalidation: any token whose embedded password_version
     // predates the user's current one is rejected. Tokens issued before

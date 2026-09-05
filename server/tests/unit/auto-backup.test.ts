@@ -8,8 +8,15 @@
  * on another install. The run now goes through backupService.createBackup(),
  * which snapshots the DB with VACUUM INTO and bundles the key.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { AutoBackupJob } from '../../src/nest/backup/auto-backup.job';
+import { createBackup } from '../../src/nest/backup/backup.impl';
+import type { BackupService } from '../../src/nest/backup/backup.service';
+import type { CronRegistrarService } from '../../src/nest/scheduling/cron-registrar.service';
+import type { StorageService } from '../../src/nest/storage/storage.service';
+
 import type { PathLike } from 'node:fs';
+import path from 'node:path';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const fsMock = vi.hoisted(() => ({
   // The parameter is declared so the double carries fs's real signature: the
@@ -49,6 +56,7 @@ const dbMock = vi.hoisted(() => ({
   db: { exec: vi.fn(), prepare: vi.fn() },
   closeDb: vi.fn(),
   reinitialize: vi.fn(),
+  getDatabaseFilePath: vi.fn(() => path.join(__dirname, '../../data', 'travel.db')),
 }));
 
 const logMock = vi.hoisted(() => ({ logInfo: vi.fn(), logError: vi.fn() }));
@@ -64,13 +72,6 @@ vi.mock('../../src/config', () => ({
   ENCRYPTION_KEY: 'a'.repeat(64),
   updateJwtSecret: () => {},
 }));
-
-import path from 'node:path';
-import { AutoBackupJob } from '../../src/nest/backup/auto-backup.job';
-import { createBackup } from '../../src/nest/backup/backup.impl';
-import type { BackupService } from '../../src/nest/backup/backup.service';
-import type { StorageService } from '../../src/nest/storage/storage.service';
-import type { CronRegistrarService } from '../../src/nest/scheduling/cron-registrar.service';
 
 const liveDb = path.join(__dirname, '../../data', 'travel.db');
 
@@ -113,7 +114,10 @@ function makeJob() {
     // The same wiring the container does, with the real service function behind
     // it — the run below is still the production code path. The forward mirrors
     // BackupService: inject the storage stub as the first argument.
-    { createBackup: (prefix?: 'backup' | 'auto-backup') => createBackup(storageStub as unknown as StorageService, prefix) } as unknown as BackupService,
+    {
+      createBackup: (prefix?: 'backup' | 'auto-backup') =>
+        createBackup(storageStub as unknown as StorageService, prefix),
+    } as unknown as BackupService,
     registrar as unknown as CronRegistrarService,
     storageStub as unknown as StorageService,
   );
@@ -125,10 +129,16 @@ function stubArchiver(): Record<string, (arg?: unknown) => void> {
   const outputEvents: Record<string, (arg?: unknown) => void> = {};
   const archiveEvents: Record<string, (arg?: unknown) => void> = {};
   fsMock.createWriteStream.mockReturnValue({
-    on: vi.fn((event: string, cb: () => void) => { outputEvents[event] = cb; }),
+    on: vi.fn((event: string, cb: () => void) => {
+      outputEvents[event] = cb;
+    }),
   } as never);
-  archiveMock.on.mockImplementation((event: string, cb: (arg?: unknown) => void) => { archiveEvents[event] = cb; });
-  archiveMock.finalize.mockImplementation(() => { outputEvents['close']?.(); });
+  archiveMock.on.mockImplementation((event: string, cb: (arg?: unknown) => void) => {
+    archiveEvents[event] = cb;
+  });
+  archiveMock.finalize.mockImplementation(() => {
+    outputEvents['close']?.();
+  });
   archiverMock.mockReturnValue(archiveMock);
   return archiveEvents;
 }
@@ -150,7 +160,11 @@ describe('auto-backup run', () => {
     // No ENCRYPTION_KEY in the env means the key file is the source of truth and
     // has to travel with the backup.
     delete process.env.ENCRYPTION_KEY;
-    fsMock.statSync.mockReturnValue({ size: 4096, birthtime: new Date('2026-04-27T02:00:00Z'), mtimeMs: Date.now() } as never);
+    fsMock.statSync.mockReturnValue({
+      size: 4096,
+      birthtime: new Date('2026-04-27T02:00:00Z'),
+      mtimeMs: Date.now(),
+    } as never);
   });
 
   afterEach(() => {
@@ -158,7 +172,9 @@ describe('auto-backup run', () => {
   });
 
   it('archives a VACUUM INTO snapshot, never the live travel.db', async () => {
-    fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-settings.json'));
+    fsMock.existsSync.mockImplementation(
+      (p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-settings.json'),
+    );
     stubArchiver();
 
     await scheduledRun()();
@@ -171,15 +187,16 @@ describe('auto-backup run', () => {
   });
 
   it('bundles the at-rest encryption key', async () => {
-    fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('.encryption_key') || String(p).endsWith('backup-settings.json'));
+    fsMock.existsSync.mockImplementation(
+      (p: string) => String(p).endsWith('.encryption_key') || String(p).endsWith('backup-settings.json'),
+    );
     stubArchiver();
 
     await scheduledRun()();
 
-    expect(archiveMock.file).toHaveBeenCalledWith(
-      expect.stringContaining('.encryption_key'),
-      { name: '.encryption_key' },
-    );
+    expect(archiveMock.file).toHaveBeenCalledWith(expect.stringContaining('.encryption_key'), {
+      name: '.encryption_key',
+    });
   });
 
   it('keeps the auto-backup-*.zip naming so retention still prunes it', async () => {
@@ -195,29 +212,40 @@ describe('auto-backup run', () => {
 
     await scheduledRun()();
 
-    expect(logMock.logInfo).toHaveBeenCalledWith(expect.stringMatching(/^Auto-Backup created: auto-backup-[\w-]+\.zip$/));
+    expect(logMock.logInfo).toHaveBeenCalledWith(
+      expect.stringMatching(/^Auto-Backup created: auto-backup-[\w-]+\.zip$/),
+    );
     // cleanupOldBackups(storage, keep_days) still runs after the archive and
     // only prunes objects it can match by prefix — through storage.delete
     expect(storageStub.delete).toHaveBeenCalledWith('backups', 'auto-backup-2020-01-01T02-00-00.zip');
   });
 
-  it('logs the failure, drops the partial zip and skips retention', async () => {
-    fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('.zip') || String(p).endsWith('backup-settings.json'));
+  it('logs the failure, drops the partial zip and still runs retention', async () => {
+    fsMock.existsSync.mockImplementation(
+      (p: string) => String(p).endsWith('.zip') || String(p).endsWith('backup-settings.json'),
+    );
+    storageStub.list = vi.fn((category: string) =>
+      (async function* () {
+        if (category === 'backups') yield { key: 'auto-backup-2020-01-01T02-00-00.zip', size: 0, mtimeMs: 0 };
+      })(),
+    );
     const archiveEvents = stubArchiver();
-    archiveMock.finalize.mockImplementation(() => { archiveEvents['error']?.(new Error('disk full')); });
+    archiveMock.finalize.mockImplementation(() => {
+      archiveEvents['error']?.(new Error('disk full'));
+    });
 
     await scheduledRun()();
 
     expect(logMock.logError).toHaveBeenCalledWith('Auto-Backup: disk full');
     expect(logMock.logInfo).not.toHaveBeenCalledWith(expect.stringContaining('Auto-Backup created'));
-    // nothing was committed (put commits by rename only on success); the
-    // half-built zip spool and snapshot scratch are cleaned up, and retention
-    // never runs
+    // Nothing was committed (put commits by rename only on success), while the
+    // half-built zip spool and snapshot scratch are cleaned up. Retention still
+    // runs so a disk-full failure can recover space on the next tick.
     expect(storageStub.put).not.toHaveBeenCalled();
     expect(fsMock.rmSync).toHaveBeenCalledWith(expect.stringContaining('zip-build-auto-backup-'), { force: true });
     expect(fsMock.rmSync).toHaveBeenCalledWith(expect.stringContaining('travel-snap-auto-backup-'), { force: true });
-    expect(storageStub.list).not.toHaveBeenCalledWith('backups');
-    expect(storageStub.delete).not.toHaveBeenCalled();
+    expect(storageStub.list).toHaveBeenCalledWith('backups');
+    expect(storageStub.delete).toHaveBeenCalledWith('backups', 'auto-backup-2020-01-01T02-00-00.zip');
   });
 });
 
@@ -293,7 +321,11 @@ describe('auto-backup scheduling (AutoBackupJob.start)', () => {
   it('a non-Error rejection from createBackup is stringified into the failure log', async () => {
     const broken = { createBackup: vi.fn().mockRejectedValue('plain string') } as unknown as BackupService;
     const registrar = { isEnabled: vi.fn(() => true), register: vi.fn(() => true), unregister: vi.fn() };
-    const job = new AutoBackupJob(broken, registrar as unknown as CronRegistrarService, storageStub as unknown as StorageService);
+    const job = new AutoBackupJob(
+      broken,
+      registrar as unknown as CronRegistrarService,
+      storageStub as unknown as StorageService,
+    );
     await job.runBackup();
     expect(logMock.logError).toHaveBeenCalledWith('Auto-Backup: plain string');
   });
@@ -357,11 +389,15 @@ describe('BACKUP-047 updateAutoSettings', () => {
 
   it('BACKUP-047b — re-arms the job only after saving', () => {
     const order: string[] = [];
-    fsMock.writeFileSync.mockImplementation(() => { order.push('save'); });
+    fsMock.writeFileSync.mockImplementation(() => {
+      order.push('save');
+    });
     const { job, registrar } = makeJob();
     // Saving {enabled:false} sends start() down the disabled path — unregister
     // is its scheduling action, so it stands in for the old scheduler.start().
-    registrar.unregister.mockImplementation(() => { order.push('start'); });
+    registrar.unregister.mockImplementation(() => {
+      order.push('start');
+    });
 
     job.updateAutoSettings({ enabled: false });
 

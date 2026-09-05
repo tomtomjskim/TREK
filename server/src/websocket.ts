@@ -11,4 +11,4 @@
  * `setupWebSocket` is gone: the server is created by the adapter now, when Nest
  * initialises the gateway, rather than by index.ts after listen().
  */
-export { broadcast, broadcastToUser, getOnlineUserIds } from './nest/realtime/ws-state';
+export { broadcast, broadcastToUser, getOnlineUserIds, revokeSessionSockets } from './nest/realtime/ws-state';

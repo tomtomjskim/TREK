@@ -1,3 +1,29 @@
+import { runMigrations } from '../../../../src/db/migrations';
+import { createTables } from '../../../../src/db/schema';
+import type { RuntimeEnvService } from '../../../../src/nest/app-config/runtime-env.service';
+import {
+  resetRestoreQuiescenceForTests,
+  RestoreInProgressError,
+  runInRestoreQuiescence,
+} from '../../../../src/nest/backup/restore-quiescence';
+import { DatabaseService } from '../../../../src/nest/database/database.service';
+import { MirrorDriver } from '../../../../src/nest/storage/drivers/mirror.driver';
+import { StorageEventsService } from '../../../../src/nest/storage/storage-events.service';
+import {
+  BackfillBusyError,
+  BackfillTargetError,
+  MigrationRequestError,
+  MigrationTargetError,
+  StorageJobsService,
+} from '../../../../src/nest/storage/storage-jobs.service';
+import { CATEGORIES_KEY, StorageRegistryService } from '../../../../src/nest/storage/storage-registry.service';
+import { StorageService } from '../../../../src/nest/storage/storage.service';
+import { Logger } from '@nestjs/common';
+
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { Readable } from 'node:stream';
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest';
 
 const { testDb, dbMock } = vi.hoisted(() => {
@@ -9,27 +35,6 @@ const { testDb, dbMock } = vi.hoisted(() => {
 });
 vi.mock('../../../../src/db/database', () => dbMock);
 vi.mock('../../../../src/config', () => ({ ENCRYPTION_KEY: 'storage-jobs-test-key' }));
-
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { Readable } from 'node:stream';
-import { Logger } from '@nestjs/common';
-import { createTables } from '../../../../src/db/schema';
-import { runMigrations } from '../../../../src/db/migrations';
-import { DatabaseService } from '../../../../src/nest/database/database.service';
-import type { RuntimeEnvService } from '../../../../src/nest/app-config/runtime-env.service';
-import { MirrorDriver } from '../../../../src/nest/storage/drivers/mirror.driver';
-import { StorageEventsService } from '../../../../src/nest/storage/storage-events.service';
-import { CATEGORIES_KEY, StorageRegistryService } from '../../../../src/nest/storage/storage-registry.service';
-import { StorageService } from '../../../../src/nest/storage/storage.service';
-import {
-  BackfillBusyError,
-  BackfillTargetError,
-  MigrationRequestError,
-  MigrationTargetError,
-  StorageJobsService,
-} from '../../../../src/nest/storage/storage-jobs.service';
 
 const db = new DatabaseService(testDb);
 
@@ -48,6 +53,7 @@ function setSetting(key: string, value: string): void {
   testDb.prepare('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)').run(key, value);
 }
 beforeEach(() => {
+  resetRestoreQuiescenceForTests();
   testDb.prepare("DELETE FROM app_settings WHERE key LIKE 'storage.%'").run();
 });
 afterEach(() => {
@@ -175,6 +181,44 @@ async function waitTerminal(jobs: StorageJobsService, category: string) {
 }
 
 describe('StorageJobsService', () => {
+  it('JOBS-000a leaves no running backfill record when restore rejects detached-work admission', async () => {
+    const { jobs } = makeWorld();
+    let releaseRestore!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseRestore = resolve;
+    });
+    const restore = runInRestoreQuiescence(() => gate);
+    await Promise.resolve();
+
+    expect(() => jobs.startBackfill('m')).toThrow(RestoreInProgressError);
+    expect(jobs.statuses()).toEqual([]);
+
+    releaseRestore();
+    await restore;
+  });
+
+  it('JOBS-000 keeps restore draining until a detached backfill finishes', async () => {
+    const { jobs } = makeWorld();
+    type BackfillResult = Awaited<ReturnType<MirrorDriver['backfill']>>;
+    let finishBackfill!: (value: BackfillResult) => void;
+    const backfill = new Promise<BackfillResult>((resolve) => {
+      finishBackfill = resolve;
+    });
+    vi.spyOn(MirrorDriver.prototype, 'backfill').mockReturnValueOnce(backfill);
+
+    jobs.startBackfill('m');
+    let restoreEntered = false;
+    const restore = runInRestoreQuiescence(async () => {
+      restoreEntered = true;
+    });
+    await Promise.resolve();
+    expect(restoreEntered).toBe(false);
+
+    finishBackfill({ total: 0, done: 0, copied: 0, skipped: 0, failed: 0, deleted: 0, cancelled: false });
+    await restore;
+    expect(restoreEntered).toBe(true);
+  });
+
   it('JOBS-001 backfills the categories routed through the mirror and lands on done', async () => {
     const { storage, jobs, nasRoot } = makeWorld();
     await storage.put('backups', 'old-backup.zip', Readable.from('zipzip'));
@@ -228,7 +272,9 @@ describe('StorageJobsService', () => {
 
   it('JOBS-006 an Error rejection from driver.backfill lands the job on "error" with its message, and is logged', async () => {
     const { jobs } = makeWorld();
-    const backfillSpy = vi.spyOn(MirrorDriver.prototype, 'backfill').mockRejectedValueOnce(new Error('replica offline'));
+    const backfillSpy = vi
+      .spyOn(MirrorDriver.prototype, 'backfill')
+      .mockRejectedValueOnce(new Error('replica offline'));
     const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     jobs.startBackfill('m');
     await waitFor(() => jobs.statuses().some((s) => s.backend === 'm' && s.status === 'error'));
@@ -269,6 +315,22 @@ describe('StorageJobsService', () => {
 });
 
 describe('StorageJobsService migrations', () => {
+  it('MIG-000 leaves no running migration record when restore rejects detached-work admission', async () => {
+    const { jobs } = makeMigrationWorld();
+    let releaseRestore!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseRestore = resolve;
+    });
+    const restore = runInRestoreQuiescence(() => gate);
+    await Promise.resolve();
+
+    expect(() => jobs.startMigration('files', 'dest-local')).toThrow(RestoreInProgressError);
+    expect(jobs.migrationStatuses()).toEqual([]);
+
+    releaseRestore();
+    await restore;
+  });
+
   it('MIG-001 happy path: copies, flips the category, sweeps a raced write, tallies reclaimable', async () => {
     const { storage, jobs, uploadsRoot, destRoot } = makeMigrationWorld();
     // Sized up (not slept) so the copy phase has real work left when we poll
@@ -280,11 +342,7 @@ describe('StorageJobsService migrations', () => {
     jobs.startMigration('files', 'dest-local');
     // Enumeration done — write the raced third object before the copy phase settles.
     // Tight poll interval: the window between "total > 0" and job completion is narrow.
-    await waitFor(
-      () => jobs.migrationStatuses().some((m) => m.category === 'files' && m.total > 0),
-      5000,
-      1,
-    );
+    await waitFor(() => jobs.migrationStatuses().some((m) => m.category === 'files' && m.total > 0), 5000, 1);
     fs.writeFileSync(path.join(uploadsRoot, 'files', 'c.txt'), 'ccc');
 
     const final = await waitTerminal(jobs, 'files');
@@ -451,17 +509,13 @@ describe('StorageJobsService migrations', () => {
     expect(registryCategoriesRow()['photos-google']).toBe('dest-local');
   });
 
-  it('MIG-010 the delta sweep rewrites a raced object\'s destination key too', async () => {
+  it("MIG-010 the delta sweep rewrites a raced object's destination key too", async () => {
     const { storage, jobs, placePhotoRoot, destRoot } = makePhotosGoogleMigrationWorld();
     const big = 'x'.repeat(2_000_000);
     await storage.put('photos-google', 'a.jpg', Readable.from(big));
 
     jobs.startMigration('photos-google', 'dest-local');
-    await waitFor(
-      () => jobs.migrationStatuses().some((m) => m.category === 'photos-google' && m.total > 0),
-      5000,
-      1,
-    );
+    await waitFor(() => jobs.migrationStatuses().some((m) => m.category === 'photos-google' && m.total > 0), 5000, 1);
     // Race a second bare-keyed object in after enumeration but before the copy
     // phase settles — the delta sweep must pick it up and rewrite its key too.
     fs.writeFileSync(path.join(placePhotoRoot, 'raced.jpg'), 'raced-bytes');

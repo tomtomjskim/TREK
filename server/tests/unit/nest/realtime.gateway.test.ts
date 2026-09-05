@@ -1,3 +1,25 @@
+import type { EphemeralTokenService } from '../../../src/nest/auth/ephemeral-token.service';
+import type { DatabaseService } from '../../../src/nest/database/database.service';
+import type { JourneyDomainService } from '../../../src/nest/journey/journey-domain.service';
+import { RealtimeGateway } from '../../../src/nest/realtime/realtime.gateway';
+import {
+  bookPeers,
+  broadcast,
+  broadcastToBook,
+  joinBook,
+  leaveBook,
+  broadcastToUser,
+  getOnlineUserIds,
+  joinRoom,
+  registerSocket,
+  revokeSessionSockets,
+  setServer,
+  userOf,
+  type TrekWebSocket,
+} from '../../../src/nest/realtime/ws-state';
+import { emitPluginEvent } from '../../../src/plugin-event-sink';
+import type { User } from '../../../src/types';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 /**
@@ -12,27 +34,6 @@ vi.mock('../../../src/plugin-event-sink', () => ({
   pluginEventMeta: vi.fn(() => ({})),
 }));
 
-import { RealtimeGateway } from '../../../src/nest/realtime/realtime.gateway';
-import {
-  bookPeers,
-  broadcast,
-  broadcastToBook,
-  joinBook,
-  leaveBook,
-  broadcastToUser,
-  getOnlineUserIds,
-  joinRoom,
-  registerSocket,
-  setServer,
-  userOf,
-  type TrekWebSocket,
-} from '../../../src/nest/realtime/ws-state';
-import { emitPluginEvent } from '../../../src/plugin-event-sink';
-import type { DatabaseService } from '../../../src/nest/database/database.service';
-import type { EphemeralTokenService } from '../../../src/nest/auth/ephemeral-token.service';
-import type { JourneyDomainService } from '../../../src/nest/journey/journey-domain.service';
-import type { User } from '../../../src/types';
-
 interface FakeSocket extends TrekWebSocket {
   sent: string[];
   closedWith: [number, string] | null;
@@ -45,8 +46,12 @@ function socket(): FakeSocket {
     isAlive: false,
     sent,
     closedWith: null as [number, string] | null,
-    send: (raw: string) => { sent.push(raw); },
-    close: (code: number, reason: string) => { s.closedWith = [code, reason]; },
+    send: (raw: string) => {
+      sent.push(raw);
+    },
+    close: (code: number, reason: string) => {
+      s.closedWith = [code, reason];
+    },
     on: vi.fn(),
     terminate: vi.fn(),
     ping: vi.fn(),
@@ -56,12 +61,21 @@ function socket(): FakeSocket {
 
 const rows = new Map<string, unknown>();
 const db = {
-  get: (sql: string) => (sql.includes('app_settings') ? rows.get('mfa') : rows.get('user')),
+  connection: {
+    prepare: () => ({ get: () => rows.get('revoked') }),
+  },
+  get: (sql: string) =>
+    sql.includes('jsnetworkcorp_auth_session_revocations')
+      ? rows.get('revoked')
+      : sql.includes('app_settings')
+        ? rows.get('mfa')
+        : rows.get('user'),
   canAccessTrip: (tripId: number) => tripId === 7,
 } as unknown as DatabaseService;
 
 const consumeWithMeta = vi.fn();
 const tokens = { consumeWithMeta } as unknown as EphemeralTokenService;
+const sessionBinding = { pv: 2, sid: 'browser-session' };
 
 /** Everything is reachable except journey 4, which stands in for no access. */
 const canAccessJourney = vi.fn((journeyId: number) => (journeyId === 4 ? null : { id: journeyId }));
@@ -78,7 +92,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   rows.clear();
   rows.set('user', { id: 3, username: 'm', email: 'm@x.test', role: 'user', mfa_enabled: 0, password_version: 2 });
-  consumeWithMeta.mockReturnValue({ userId: 3, pv: 2 });
+  consumeWithMeta.mockReturnValue({ userId: 3, pv: 2, sid: 'browser-session' });
 });
 
 describe('RealtimeGateway handshake', () => {
@@ -97,6 +111,11 @@ describe('RealtimeGateway handshake', () => {
     // The pv gate. Same close reason as an unknown token on purpose: a client
     // must not be able to tell a stale token from a forged one.
     consumeWithMeta.mockReturnValue({ userId: 3, pv: 1 });
+    expect(connect('/ws?token=x').ws.closedWith).toEqual([4001, 'Invalid or expired token']);
+  });
+
+  it('WSGW-003b: rejects a ws token derived from a logged-out session', () => {
+    rows.set('revoked', { found: 1 });
     expect(connect('/ws?token=x').ws.closedWith).toEqual([4001, 'Invalid or expired token']);
   });
 
@@ -220,8 +239,9 @@ describe('RealtimeGateway heartbeat', () => {
 
   it('WSGW-022: a pong marks the socket live again', () => {
     const { ws } = connect('/ws?token=x');
-    const pong = (ws.on as unknown as { mock: { calls: [string, () => void][] } }).mock.calls
-      .find(([event]) => event === 'pong');
+    const pong = (ws.on as unknown as { mock: { calls: [string, () => void][] } }).mock.calls.find(
+      ([event]) => event === 'pong',
+    );
     expect(pong).toBeDefined();
     ws.isAlive = false;
     pong![1]();
@@ -230,6 +250,20 @@ describe('RealtimeGateway heartbeat', () => {
 });
 
 describe('ws-state fan-out', () => {
+  it('WSST-000: logout closes only sockets derived from the revoked browser session', () => {
+    const revoked = socket();
+    const other = socket();
+    registerSocket(revoked, { id: 1 } as User, { pv: 0, sid: 'browser-session' });
+    registerSocket(other, { id: 1 } as User, { pv: 0, sid: 'other-session' });
+    setServer({ clients: new Set([revoked, other]) } as never);
+
+    revokeSessionSockets('browser-session');
+
+    expect(revoked.closedWith).toEqual([4001, 'Session logged out']);
+    expect(other.closedWith).toBeNull();
+    setServer(null);
+  });
+
   it('WSST-001: broadcast excludes the originating socket by its numeric id', () => {
     const a = socket();
     const b = socket();
@@ -316,7 +350,7 @@ describe('book rooms', () => {
   function joined(journeyId: number) {
     const gw = new RealtimeGateway(db, tokens, journeys);
     const ws = socket();
-    registerSocket(ws, { id: 3, username: 'm' } as User);
+    registerSocket(ws, { id: 3, username: 'm' } as User, sessionBinding);
     const reply = gw.handleBookJoin({ journeyId }, ws);
     return { gw, ws, reply };
   }
@@ -325,14 +359,14 @@ describe('book rooms', () => {
     const j = nextJourney++;
     const { reply } = joined(j);
     expect(reply).toEqual({ type: 'book:joined', journeyId: j });
-    expect(bookPeers(j).map(p => p.userId)).toEqual([3]);
+    expect(bookPeers(j).map((p) => p.userId)).toEqual([3]);
   });
 
   /* Same shape as the trip room's refusal, and for the same reason. */
   it('WSGW-BOOK-002: refuses a journey the user cannot see, and adds nobody', () => {
     const gw = new RealtimeGateway(db, tokens, journeys);
     const ws = socket();
-    registerSocket(ws, { id: 3, username: 'm' } as User);
+    registerSocket(ws, { id: 3, username: 'm' } as User, sessionBinding);
 
     expect(gw.handleBookJoin({ journeyId: 4 }, ws)).toEqual({ type: 'error', message: 'Access denied' });
     expect(bookPeers(4)).toEqual([]);
@@ -344,7 +378,7 @@ describe('book rooms', () => {
     first.sent.length = 0;
     joined(j);
 
-    const peers = first.sent.map(raw => JSON.parse(raw)).filter(m => m.type === 'journey:book:peers');
+    const peers = first.sent.map((raw) => JSON.parse(raw)).filter((m) => m.type === 'journey:book:peers');
     expect(peers).toHaveLength(1);
     expect(peers[0].peers).toHaveLength(2);
     expect(peers[0].journeyId).toBe(j);
@@ -371,7 +405,7 @@ describe('book rooms', () => {
     gw.handleDisconnect(ws);
 
     expect(bookPeers(j)).toHaveLength(1);
-    const peers = other.ws.sent.map(raw => JSON.parse(raw)).filter(m => m.type === 'journey:book:peers');
+    const peers = other.ws.sent.map((raw) => JSON.parse(raw)).filter((m) => m.type === 'journey:book:peers');
     expect(peers[peers.length - 1].peers).toHaveLength(1);
   });
 });
@@ -384,8 +418,8 @@ describe('book pointers', () => {
     const gw = new RealtimeGateway(db, tokens, journeys);
     const mine = socket();
     const theirs = socket();
-    registerSocket(mine, { id: 3, username: 'm' } as User);
-    registerSocket(theirs, { id: 4, username: 'other' } as User);
+    registerSocket(mine, { id: 3, username: 'm' } as User, sessionBinding);
+    registerSocket(theirs, { id: 4, username: 'other' } as User, sessionBinding);
     gw.handleBookJoin({ journeyId }, mine);
     gw.handleBookJoin({ journeyId }, theirs);
     mine.sent.length = 0;
@@ -394,7 +428,7 @@ describe('book pointers', () => {
   }
 
   const cursorsIn = (ws: FakeSocket) =>
-    ws.sent.map(raw => JSON.parse(raw)).filter(m => m.type === 'journey:book:cursor');
+    ws.sent.map((raw) => JSON.parse(raw)).filter((m) => m.type === 'journey:book:cursor');
 
   it('WSGW-CUR-001: forwards a pointer to the others, not back to the sender', () => {
     const { gw, mine, theirs, journeyId } = pair();
@@ -413,7 +447,7 @@ describe('book pointers', () => {
   it('WSGW-CUR-002: a socket that never joined reaches nobody', () => {
     const { gw, theirs, journeyId } = pair();
     const stranger = socket();
-    registerSocket(stranger, { id: 5, username: 'x' } as User);
+    registerSocket(stranger, { id: 5, username: 'x' } as User, sessionBinding);
 
     gw.handleBookCursor({ journeyId, spreadIndex: 0, x: 1, y: 1 }, stranger);
     expect(cursorsIn(theirs)).toEqual([]);
@@ -448,7 +482,7 @@ describe('book messages that are refused', () => {
   it('WSGW-BOOK-006: a join without a journey id is ignored', () => {
     const gw = new RealtimeGateway(db, tokens, journeys);
     const ws = socket();
-    registerSocket(ws, { id: 3, username: 'm' } as User);
+    registerSocket(ws, { id: 3, username: 'm' } as User, sessionBinding);
 
     expect(gw.handleBookJoin({}, ws)).toBeUndefined();
     expect(ws.sent).toEqual([]);
@@ -466,16 +500,15 @@ describe('book messages that are refused', () => {
   it('WSGW-BOOK-008: a journey id that is not a number is refused, not joined', () => {
     const gw = new RealtimeGateway(db, tokens, journeys);
     const ws = socket();
-    registerSocket(ws, { id: 3, username: 'm' } as User);
+    registerSocket(ws, { id: 3, username: 'm' } as User, sessionBinding);
 
-    expect(gw.handleBookJoin({ journeyId: 'not-a-journey' }, ws))
-      .toEqual({ type: 'error', message: 'Access denied' });
+    expect(gw.handleBookJoin({ journeyId: 'not-a-journey' }, ws)).toEqual({ type: 'error', message: 'Access denied' });
   });
 
   it('WSGW-BOOK-009: a leave without a journey id is ignored', () => {
     const gw = new RealtimeGateway(db, tokens, journeys);
     const ws = socket();
-    registerSocket(ws, { id: 3, username: 'm' } as User);
+    registerSocket(ws, { id: 3, username: 'm' } as User, sessionBinding);
 
     expect(gw.handleBookLeave({}, ws)).toBeUndefined();
   });
@@ -484,7 +517,7 @@ describe('book messages that are refused', () => {
   it('WSGW-BOOK-010: leaving a book that was never joined does nothing', () => {
     const gw = new RealtimeGateway(db, tokens, journeys);
     const ws = socket();
-    registerSocket(ws, { id: 3, username: 'm' } as User);
+    registerSocket(ws, { id: 3, username: 'm' } as User, sessionBinding);
     const j = nextJourney++;
 
     expect(gw.handleBookLeave({ journeyId: j }, ws)).toEqual({ type: 'book:left', journeyId: j });
@@ -495,8 +528,8 @@ describe('book messages that are refused', () => {
     const gw = new RealtimeGateway(db, tokens, journeys);
     const mine = socket();
     const theirs = socket();
-    registerSocket(mine, { id: 3, username: 'm' } as User);
-    registerSocket(theirs, { id: 4, username: 'o' } as User);
+    registerSocket(mine, { id: 3, username: 'm' } as User, sessionBinding);
+    registerSocket(theirs, { id: 4, username: 'o' } as User, sessionBinding);
     const j = nextJourney++;
     gw.handleBookJoin({ journeyId: j }, mine);
     gw.handleBookJoin({ journeyId: j }, theirs);
@@ -509,7 +542,7 @@ describe('book messages that are refused', () => {
   it('WSGW-CUR-006: a pointer from a socket with no user reaches nobody', () => {
     const gw = new RealtimeGateway(db, tokens, journeys);
     const theirs = socket();
-    registerSocket(theirs, { id: 4, username: 'o' } as User);
+    registerSocket(theirs, { id: 4, username: 'o' } as User, sessionBinding);
     const j = nextJourney++;
     gw.handleBookJoin({ journeyId: j }, theirs);
     theirs.sent.length = 0;
@@ -542,7 +575,7 @@ describe('book rooms with unusable sockets in them', () => {
     joinBook(dead, j);
     (dead as { readyState: number }).readyState = 3;
 
-    expect(bookPeers(j).map(p => p.userId)).toEqual([3]);
+    expect(bookPeers(j).map((p) => p.userId)).toEqual([3]);
   });
 
   it('WSST-BOOK-002: a socket that was never registered is not a peer', () => {
@@ -552,7 +585,7 @@ describe('book rooms with unusable sockets in them', () => {
     joinBook(known, j);
     joinBook(socket(), j);
 
-    expect(bookPeers(j).map(p => p.userId)).toEqual([3]);
+    expect(bookPeers(j).map((p) => p.userId)).toEqual([3]);
   });
 
   it('WSST-BOOK-003: a broadcast skips a closed socket instead of writing to it', () => {
@@ -591,7 +624,7 @@ describe('book rooms with unusable sockets in them', () => {
     leaveBook(ws, a);
 
     expect(bookPeers(a)).toEqual([]);
-    expect(bookPeers(b).map(p => p.userId)).toEqual([3]);
+    expect(bookPeers(b).map((p) => p.userId)).toEqual([3]);
   });
 
   it('WSST-BOOK-006: leaving a book that does not exist is not an error', () => {

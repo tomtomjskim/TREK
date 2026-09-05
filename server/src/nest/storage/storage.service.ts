@@ -1,10 +1,4 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { pipeline } from 'node:stream/promises';
-import type { Readable } from 'node:stream';
-import { Injectable } from '@nestjs/common';
-import type { Response } from 'express';
+import { assertRestoreAccessAllowed } from '../backup/restore-quiescence';
 import { contentTypeFor } from './content-type';
 import type { ReplicaFailure } from './drivers/mirror.driver';
 import { decideRange, isNotModified, validatorsFor, type ServingHeaders, type Validators } from './http-serving';
@@ -20,6 +14,14 @@ import {
   type ServedCategory,
   type StorageDriver,
 } from './storage.types';
+import { Injectable } from '@nestjs/common';
+
+import type { Response } from 'express';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import type { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 
 export interface SendOptions {
   contentType?: string;
@@ -50,11 +52,13 @@ export class StorageService {
 
   /** Driver-agnostic global scratch space (data/tmp). */
   tempDir(): string {
+    assertRestoreAccessAllowed();
     return this.registry.tempDir();
   }
 
   /** The category backend's same-volume spool dir, else tempDir(). Resolved per call. */
   spoolDirFor(category: ServedCategory): string {
+    assertRestoreAccessAllowed();
     return this.registry.resolve(category).driver.getSpoolDir?.() ?? this.tempDir();
   }
 
@@ -96,6 +100,7 @@ export class StorageService {
 
   /** Names in and out are category-relative — the key prefix stays a registry detail. */
   async *list(category: ServedCategory, subPrefix = ''): AsyncIterable<ObjectStat> {
+    assertRestoreAccessAllowed();
     const { driver, keyPrefix } = this.registry.resolve(category);
     for await (const stat of driver.list(keyPrefix + subPrefix)) {
       yield { ...stat, key: stat.key.slice(keyPrefix.length) };
@@ -279,6 +284,7 @@ export class StorageService {
 
   /** Replica failures from mirror backends — logged there, surfaced here. */
   health(): { replicaFailures: readonly ReplicaFailure[] } {
+    assertRestoreAccessAllowed();
     return { replicaFailures: this.registry.replicaFailures() };
   }
 
@@ -291,10 +297,12 @@ export class StorageService {
    * unexported from the module, this facade is the only way in.
    */
   reloadConfig(): void {
+    assertRestoreAccessAllowed();
     this.registry.reload();
   }
 
   private resolve(category: ServedCategory, name: string): Resolved {
+    assertRestoreAccessAllowed();
     const { driver, keyPrefix } = this.registry.resolve(category);
     const key = keyPrefix + name;
     assertValidKey(key);

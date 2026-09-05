@@ -2,7 +2,19 @@
  * Auto-backup settings + retention (moved from tests/unit/scheduler.test.ts
  * when the code moved from src/scheduler.ts into the backup domain).
  */
+import {
+  buildCronExpression,
+  cleanupOldBackups,
+  loadSettings,
+  saveSettings,
+  type BackupSettings,
+} from '../../../src/nest/backup/auto-backup.settings';
+import type { StorageService } from '../../../src/nest/storage/storage.service';
+
+import fs from 'node:fs';
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
+
+const logMock = vi.hoisted(() => ({ logInfo: vi.fn(), logError: vi.fn() }));
 
 // Prevent fs side effects (creating directories, reading files)
 vi.mock('node:fs', () => ({
@@ -26,19 +38,8 @@ vi.mock('node:fs', () => ({
   createWriteStream: vi.fn(() => ({ on: vi.fn(), pipe: vi.fn() })),
 }));
 vi.mock('../../../src/nest/audit/audit-log.logger', () => ({
-  logInfo: vi.fn(),
-  logError: vi.fn(),
+  ...logMock,
 }));
-
-import fs from 'node:fs';
-import {
-  buildCronExpression,
-  cleanupOldBackups,
-  loadSettings,
-  saveSettings,
-  type BackupSettings,
-} from '../../../src/nest/backup/auto-backup.settings';
-import type { StorageService } from '../../../src/nest/storage/storage.service';
 
 // The settings half still does file I/O; these handles pin the mock functions
 // from the factory above to the plain signatures loadSettings/saveSettings use.
@@ -63,7 +64,9 @@ function settings(overrides: Partial<BackupSettings> = {}): BackupSettings {
 describe('buildCronExpression', () => {
   describe('hourly', () => {
     it('returns 0 * * * * regardless of hour/dow/dom', () => {
-      expect(buildCronExpression(settings({ interval: 'hourly', hour: 5, day_of_week: 3, day_of_month: 15 }))).toBe('0 * * * *');
+      expect(buildCronExpression(settings({ interval: 'hourly', hour: 5, day_of_week: 3, day_of_month: 15 }))).toBe(
+        '0 * * * *',
+      );
     });
   });
 
@@ -145,19 +148,40 @@ describe('loadSettings / saveSettings', () => {
   });
 
   it('returns the defaults when no settings file exists', () => {
-    expect(loadSettings()).toEqual({ enabled: false, interval: 'daily', keep_days: 7, hour: 2, day_of_week: 0, day_of_month: 1 });
+    expect(loadSettings()).toEqual({
+      enabled: false,
+      interval: 'daily',
+      keep_days: 7,
+      hour: 2,
+      day_of_week: 0,
+      day_of_month: 1,
+    });
   });
 
   it('merges the saved file over the defaults', () => {
     existsSyncMock.mockReturnValue(true);
     readFileSyncMock.mockReturnValue(JSON.stringify({ enabled: true, interval: 'weekly', hour: 6 }));
-    expect(loadSettings()).toEqual({ enabled: true, interval: 'weekly', keep_days: 7, hour: 6, day_of_week: 0, day_of_month: 1 });
+    expect(loadSettings()).toEqual({
+      enabled: true,
+      interval: 'weekly',
+      keep_days: 7,
+      hour: 6,
+      day_of_week: 0,
+      day_of_month: 1,
+    });
   });
 
   it('falls back to the defaults on a corrupt settings file', () => {
     existsSyncMock.mockReturnValue(true);
     readFileSyncMock.mockReturnValue('{not json');
-    expect(loadSettings()).toEqual({ enabled: false, interval: 'daily', keep_days: 7, hour: 2, day_of_week: 0, day_of_month: 1 });
+    expect(loadSettings()).toEqual({
+      enabled: false,
+      interval: 'daily',
+      keep_days: 7,
+      hour: 2,
+      day_of_week: 0,
+      day_of_month: 1,
+    });
   });
 
   it('saveSettings creates the data dir when missing and writes pretty JSON', () => {
@@ -180,6 +204,11 @@ describe('loadSettings / saveSettings', () => {
 describe('cleanupOldBackups', () => {
   const DAY = 24 * 60 * 60 * 1000;
   const NOW = new Date('2026-04-27T02:00:00Z').getTime();
+
+  beforeEach(() => {
+    logMock.logInfo.mockClear();
+    logMock.logError.mockClear();
+  });
 
   function isoFilename(daysAgo: number, prefix: 'auto-backup' | 'backup' = 'auto-backup'): string {
     const d = new Date(NOW - daysAgo * DAY);
@@ -242,6 +271,21 @@ describe('cleanupOldBackups', () => {
     expect(deletedKeys(storage)).toEqual([old]);
   });
 
+  it('interprets filename timestamps as UTC even when the process timezone is not UTC', async () => {
+    const previousTz = process.env.TZ;
+    try {
+      process.env.TZ = 'America/Los_Angeles';
+      // This is 7d 2h old in UTC and must be deleted. Parsed as local time it
+      // would be only 6d 19h old and incorrectly survive the cutoff.
+      const storage = storageWith([{ key: 'auto-backup-2026-04-20T00-00-00.zip', mtimeMs: NOW }]);
+      await cleanupOldBackups(storage, 7, NOW);
+      expect(deletedKeys(storage)).toEqual(['auto-backup-2026-04-20T00-00-00.zip']);
+    } finally {
+      if (previousTz === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTz;
+    }
+  });
+
   it('malformed filename falls back to mtimeMs: keeps recent file', async () => {
     const storage = storageWith([{ key: 'auto-backup-garbage.zip', mtimeMs: NOW - 1 * DAY }]);
     await cleanupOldBackups(storage, 7, NOW);
@@ -269,21 +313,32 @@ describe('cleanupOldBackups', () => {
 
   it('swallows storage list errors without throwing', async () => {
     const storage = {
-      list: vi.fn(() => { throw new Error('ENOENT'); }),
+      list: vi.fn(() => {
+        throw new Error('ENOENT');
+      }),
       delete: vi.fn(async () => {}),
     } as unknown as StorageService;
     await expect(cleanupOldBackups(storage, 7, NOW)).resolves.toBeUndefined();
   });
 
-  it('swallows delete failures without throwing (mirror replica or fs error)', async () => {
-    const storage = storageWith([{ key: isoFilename(30) }]);
-    (storage.delete as Mock).mockRejectedValue(new Error('EACCES'));
+  it('continues deleting after one stale object fails and logs an aggregate summary', async () => {
+    const first = isoFilename(30);
+    const second = isoFilename(31);
+    const storage = storageWith([{ key: first }, { key: second }]);
+    (storage.delete as Mock).mockImplementation(async (_category: string, key: string) => {
+      if (key === first) throw new Error('EACCES');
+    });
     await expect(cleanupOldBackups(storage, 7, NOW)).resolves.toBeUndefined();
+    expect(deletedKeys(storage)).toEqual([first, second]);
+    expect(logMock.logError).toHaveBeenCalledWith(`Auto-Backup delete failed: ${first}: EACCES`);
+    expect(logMock.logInfo).toHaveBeenCalledWith('Auto-Backup cleanup complete: scanned 2, deleted 1, failed 1');
   });
 
   it('swallows non-Error throws without throwing (string rejection path)', async () => {
     const storage = {
-      list: vi.fn(() => { throw 'nope'; }),
+      list: vi.fn(() => {
+        throw 'nope';
+      }),
       delete: vi.fn(async () => {}),
     } as unknown as StorageService;
     await expect(cleanupOldBackups(storage, 7, NOW)).resolves.toBeUndefined();

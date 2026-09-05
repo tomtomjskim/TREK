@@ -6,8 +6,40 @@
  * and the download-token auth over a real in-memory SQLite DB, plus the
  * files.bridge delegation (inside the src/nest coverage gate).
  */
-import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
+import { runMigrations } from '../../../src/db/migrations';
+import { createTables } from '../../../src/db/schema';
+import { EphemeralTokenService } from '../../../src/nest/auth/ephemeral-token.service';
+import { resetSessionRevocationStateForTests, sessionKeyForId } from '../../../src/nest/auth/session-revocation';
+import { DatabaseService, type TripAccess } from '../../../src/nest/database/database.service';
+import { AllowedFileTypesService } from '../../../src/nest/files/allowed-file-types.service';
+import {
+  DEFAULT_ALLOWED_EXTENSIONS,
+  MAX_FILE_SIZE,
+  MAX_VIDEO_SIZE,
+  BLOCKED_EXTENSIONS,
+  filesDir,
+  isVideoMime,
+  isVideoExtension,
+} from '../../../src/nest/files/files.constants';
+import { FilesService } from '../../../src/nest/files/files.service';
+import type { PermissionsService } from '../../../src/nest/permissions/permissions.service';
+import { RealtimeService } from '../../../src/nest/realtime/realtime.service';
+import type { TripFile, User } from '../../../src/types';
+import {
+  createUser,
+  createTrip,
+  addTripMember,
+  createPlace,
+  createReservation,
+  createDay,
+  createDayAssignment,
+  setAppSetting,
+} from '../../helpers/factories';
+import { resetTestDb } from '../../helpers/test-db';
+
+import type { Request } from 'express';
 import path from 'path';
+import { describe, it, expect, vi, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 
 // ── DB setup ──────────────────────────────────────────────────────────────────
 
@@ -25,11 +57,15 @@ const { testDb, bareDb, dbMock } = vi.hoisted(() => {
     reinitialize: () => {},
     getPlaceWithTags: () => null,
     canAccessTrip: (tripId: unknown, userId: number) =>
-      db.prepare(`
+      db
+        .prepare(
+          `
         SELECT t.id, t.user_id FROM trips t
         LEFT JOIN trip_members m ON m.trip_id = t.id AND m.user_id = ?
         WHERE t.id = ? AND (t.user_id = ? OR m.user_id IS NOT NULL)
-      `).get(userId, tripId, userId),
+      `,
+        )
+        .get(userId, tripId, userId),
     isOwner: (tripId: unknown, userId: number) =>
       !!db.prepare('SELECT id FROM trips WHERE id = ? AND user_id = ?').get(tripId, userId),
   };
@@ -50,34 +86,23 @@ const permissionsStub = { checkPermission } as unknown as PermissionsService;
 const { verifyJwtAndLoadUser } = vi.hoisted(() => ({ verifyJwtAndLoadUser: vi.fn() }));
 vi.mock('../../../src/nest/auth/jwt-verify', () => ({ verifyJwtAndLoadUser }));
 
-const { consumeEphemeralToken } = vi.hoisted(() => ({ consumeEphemeralToken: vi.fn() }));
-vi.mock('../../../src/nest/auth/ephemeral-tokens', () => ({ consumeEphemeralToken }));
-
-import type { Request } from 'express';
-import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
-import { resetTestDb } from '../../helpers/test-db';
-import { createUser, createTrip, addTripMember, createPlace, createReservation, createDay, createDayAssignment, setAppSetting } from '../../helpers/factories';
-import { DatabaseService, type TripAccess } from '../../../src/nest/database/database.service';
-import type { PermissionsService } from '../../../src/nest/permissions/permissions.service';
-import { FilesService } from '../../../src/nest/files/files.service';
-import { AllowedFileTypesService } from '../../../src/nest/files/allowed-file-types.service';
-import {
-  DEFAULT_ALLOWED_EXTENSIONS,
-  MAX_FILE_SIZE,
-  MAX_VIDEO_SIZE,
-  BLOCKED_EXTENSIONS,
-  filesDir,
-  isVideoMime,
-  isVideoExtension,
-} from '../../../src/nest/files/files.constants';
-import type { TripFile, User } from '../../../src/types';
-import { RealtimeService } from '../../../src/nest/realtime/realtime.service';
-import { EphemeralTokenService } from '../../../src/nest/auth/ephemeral-token.service';
+const { consumeEphemeralToken, consumeEphemeralTokenWithMeta } = vi.hoisted(() => ({
+  consumeEphemeralToken: vi.fn(),
+  consumeEphemeralTokenWithMeta: vi.fn(),
+}));
+vi.mock('../../../src/nest/auth/ephemeral-tokens', () => ({ consumeEphemeralToken, consumeEphemeralTokenWithMeta }));
 
 const storageDelete = vi.fn();
-const storageStub = { delete: storageDelete } as unknown as import('../../../src/nest/storage/storage.service').StorageService;
-const svc = new FilesService(new DatabaseService(testDb), permissionsStub, new RealtimeService(), new EphemeralTokenService(), storageStub);
+const storageStub = {
+  delete: storageDelete,
+} as unknown as import('../../../src/nest/storage/storage.service').StorageService;
+const svc = new FilesService(
+  new DatabaseService(testDb),
+  permissionsStub,
+  new RealtimeService(),
+  new EphemeralTokenService(),
+  storageStub,
+);
 
 beforeAll(() => {
   createTables(testDb);
@@ -85,6 +110,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  resetSessionRevocationStateForTests();
   resetTestDb(testDb);
   vi.clearAllMocks();
 });
@@ -104,12 +130,17 @@ function seedTrip() {
   return { user, trip };
 }
 
-function makeFile(tripId: number, userId: number, overrides: Partial<{ filename: string; originalname: string; size: number; mimetype: string }> = {}, opts: Parameters<FilesService['createFile']>[3] = {}) {
+function makeFile(
+  tripId: number,
+  userId: number,
+  overrides: Partial<{ filename: string; originalname: string; size: number; mimetype: string }> = {},
+  opts: Parameters<FilesService['createFile']>[3] = {},
+) {
   return svc.createFile(
     tripId,
     { filename: 'stored-name.pdf', originalname: 'visa.pdf', size: 1234, mimetype: 'application/pdf', ...overrides },
     userId,
-    opts
+    opts,
   );
 }
 
@@ -151,7 +182,9 @@ describe('files.constants', () => {
     }
     expect(MAX_FILE_SIZE).toBe(50 * 1024 * 1024);
     expect(MAX_VIDEO_SIZE).toBe(500 * 1024 * 1024);
-    expect(DEFAULT_ALLOWED_EXTENSIONS).toBe('jpg,jpeg,png,gif,webp,heic,pdf,doc,docx,xls,xlsx,txt,csv,pkpass,pkpasses,md,markdown');
+    expect(DEFAULT_ALLOWED_EXTENSIONS).toBe(
+      'jpg,jpeg,png,gif,webp,heic,pdf,doc,docx,xls,xlsx,txt,csv,pkpass,pkpasses,md,markdown',
+    );
   });
 
   it('FILE-SVC-004: filesDir resolves to <server>/uploads/files despite the deeper module location', () => {
@@ -274,10 +307,15 @@ describe('createFile', () => {
   it('FILE-SVC-016: stores the provided metadata and links the reservation title through FILE_SELECT', () => {
     const { user, trip } = seedTrip();
     const reservation = createReservation(testDb, trip.id, { title: 'Night train' });
-    const file = makeFile(trip.id, user.id, { originalname: 'ticket.pdf', size: 99, mimetype: 'application/pdf' }, {
-      reservation_id: String(reservation.id),
-      description: 'the booking',
-    });
+    const file = makeFile(
+      trip.id,
+      user.id,
+      { originalname: 'ticket.pdf', size: 99, mimetype: 'application/pdf' },
+      {
+        reservation_id: String(reservation.id),
+        description: 'the booking',
+      },
+    );
     expect((file as unknown as Record<string, unknown>).reservation_title).toBe('Night train');
     expect(file.description).toBe('the booking');
     expect(file.original_name).toBe('ticket.pdf');
@@ -301,9 +339,17 @@ describe('updateFile', () => {
     const { user, trip } = seedTrip();
     const place = createPlace(testDb, trip.id);
     const reservation = createReservation(testDb, trip.id);
-    const file = makeFile(trip.id, user.id, {}, { description: 'old', place_id: String(place.id), reservation_id: String(reservation.id) });
+    const file = makeFile(
+      trip.id,
+      user.id,
+      {},
+      { description: 'old', place_id: String(place.id), reservation_id: String(reservation.id) },
+    );
     const current = svc.getFileById(file.id, trip.id)!;
-    const updated = svc.updateFile(file.id, current, { description: '', place_id: '', reservation_id: null }) as Record<string, unknown>;
+    const updated = svc.updateFile(file.id, current, { description: '', place_id: '', reservation_id: null }) as Record<
+      string,
+      unknown
+    >;
     expect(updated.description).toBeNull(); // '' → NULL on update too (post-migration fix: symmetric with createFile)
     expect(updated.place_id).toBeNull();
     expect(updated.reservation_id).toBeNull();
@@ -324,7 +370,10 @@ describe('toggleStarred / softDeleteFile / restoreFile', () => {
     const { user, trip } = seedTrip();
     const file = makeFile(trip.id, user.id);
     svc.softDeleteFile(file.id);
-    const row = testDb.prepare('SELECT deleted_at FROM trip_files WHERE id = ?').get(file.id) as Record<string, unknown>;
+    const row = testDb.prepare('SELECT deleted_at FROM trip_files WHERE id = ?').get(file.id) as Record<
+      string,
+      unknown
+    >;
     expect(row.deleted_at).not.toBeNull();
   });
 
@@ -385,7 +434,7 @@ describe('emptyTrash', () => {
     svc.softDeleteFile(bad.id);
     const boom = new Error('EBUSY');
     storageDelete.mockImplementation((_category: string, name: string) =>
-      name.includes('bad.pdf') ? Promise.reject(boom) : Promise.resolve()
+      name.includes('bad.pdf') ? Promise.reject(boom) : Promise.resolve(),
     );
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
 
@@ -431,10 +480,14 @@ describe('findForeignLinkTarget', () => {
     const foreignRes = createReservation(testDb, foreign.id);
     const foreignPlace = createPlace(testDb, foreign.id);
 
-    expect(svc.findForeignLinkTarget(mine.id, { reservation_id: 0, place_id: null, assignment_id: undefined })).toBeNull();
+    expect(
+      svc.findForeignLinkTarget(mine.id, { reservation_id: 0, place_id: null, assignment_id: undefined }),
+    ).toBeNull();
     expect(svc.findForeignLinkTarget(mine.id, { reservation_id: '' })).toBeNull();
     // Both foreign — the reservation check runs before the place check.
-    expect(svc.findForeignLinkTarget(mine.id, { reservation_id: foreignRes.id, place_id: foreignPlace.id })).toBe('reservation_id');
+    expect(svc.findForeignLinkTarget(mine.id, { reservation_id: foreignRes.id, place_id: foreignPlace.id })).toBe(
+      'reservation_id',
+    );
   });
 });
 
@@ -506,22 +559,47 @@ describe('authenticateDownload', () => {
     expect(verifyJwtAndLoadUser).toHaveBeenCalledWith('bearer-jwt');
 
     verifyJwtAndLoadUser.mockReturnValue(null);
-    expect(svc.authenticateDownload(req({ bearer: 'stale' }))).toEqual({ error: 'Invalid or expired token', status: 401 });
+    expect(svc.authenticateDownload(req({ bearer: 'stale' }))).toEqual({
+      error: 'Invalid or expired token',
+      status: 401,
+    });
   });
 
   it('FILE-SVC-034: a ?token= ephemeral token is consumed with the download purpose', () => {
-    consumeEphemeralToken.mockReturnValue(9);
-    expect(svc.authenticateDownload(req({ token: 'eph' }))).toEqual({ userId: 9 });
-    expect(consumeEphemeralToken).toHaveBeenCalledWith('eph', 'download');
+    const { user } = createUser(testDb);
+    consumeEphemeralTokenWithMeta.mockReturnValue({ userId: user.id, pv: 0, sid: 'browser-session' });
+    expect(svc.authenticateDownload(req({ token: 'eph' }))).toEqual({ userId: user.id });
+    expect(consumeEphemeralTokenWithMeta).toHaveBeenCalledWith('eph', 'download');
 
-    consumeEphemeralToken.mockReturnValue(null);
-    expect(svc.authenticateDownload(req({ token: 'spent' }))).toEqual({ error: 'Invalid or expired token', status: 401 });
+    consumeEphemeralTokenWithMeta.mockReturnValue(null);
+    expect(svc.authenticateDownload(req({ token: 'spent' }))).toEqual({
+      error: 'Invalid or expired token',
+      status: 401,
+    });
+  });
+
+  it('FILE-SVC-034b: a download token derived from a logged-out session is rejected', () => {
+    const { user } = createUser(testDb);
+    consumeEphemeralTokenWithMeta.mockReturnValue({ userId: user.id, pv: 0, sid: 'browser-session' });
+    testDb
+      .prepare('INSERT INTO jsnetworkcorp_auth_session_revocations (session_key, user_id) VALUES (?, ?)')
+      .run(sessionKeyForId('browser-session'), user.id);
+
+    expect(svc.authenticateDownload(req({ token: 'eph' }))).toEqual({ error: 'Invalid or expired token', status: 401 });
+  });
+
+  it('FILE-SVC-034c: a download token minted before a password-version bump is rejected', () => {
+    const { user } = createUser(testDb);
+    consumeEphemeralTokenWithMeta.mockReturnValue({ userId: user.id, pv: 0, sid: 'browser-session' });
+    testDb.prepare('UPDATE users SET password_version = 1 WHERE id = ?').run(user.id);
+
+    expect(svc.authenticateDownload(req({ token: 'eph' }))).toEqual({ error: 'Invalid or expired token', status: 401 });
   });
 
   it('FILE-SVC-035: no credentials at all is a 401 Authentication required', () => {
     expect(svc.authenticateDownload(req({}))).toEqual({ error: 'Authentication required', status: 401 });
     expect(verifyJwtAndLoadUser).not.toHaveBeenCalled();
-    expect(consumeEphemeralToken).not.toHaveBeenCalled();
+    expect(consumeEphemeralTokenWithMeta).not.toHaveBeenCalled();
   });
 });
 

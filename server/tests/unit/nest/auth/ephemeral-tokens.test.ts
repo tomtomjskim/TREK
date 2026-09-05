@@ -67,6 +67,17 @@ describe('ephemeralTokens', () => {
       const result = consumeEphemeralToken('nonexistent-token', 'download');
       expect(result).toBeNull();
     });
+
+    it('AUTH-SESSION-EPHEMERAL-001: carries the source session lineage in token metadata', async () => {
+      const { createEphemeralToken, consumeEphemeralTokenWithMeta } = await getModule();
+      const token = createEphemeralToken(42, 'ws', { pv: 3, sid: 'browser-session' })!;
+
+      expect(consumeEphemeralTokenWithMeta(token, 'ws')).toEqual({
+        userId: 42,
+        pv: 3,
+        sid: 'browser-session',
+      });
+    });
   });
 
   describe('startTokenCleanup / stopTokenCleanup', () => {

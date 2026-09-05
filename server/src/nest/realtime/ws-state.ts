@@ -1,6 +1,8 @@
-import { WebSocketServer, WebSocket } from 'ws';
 import { emitPluginEvent, pluginEventMeta } from '../../plugin-event-sink';
 import { User } from '../../types';
+import type { SessionBinding } from '../auth/session-revocation';
+
+import { WebSocketServer, WebSocket } from 'ws';
 
 /**
  * The socket registry: rooms, per-socket identity, and the three fan-out
@@ -37,6 +39,7 @@ const bookRooms = new Map<number, Set<TrekWebSocket>>();
 const socketBooks = new WeakMap<TrekWebSocket, Set<number>>();
 const socketRooms = new WeakMap<TrekWebSocket, Set<number>>();
 const socketUser = new WeakMap<TrekWebSocket, User>();
+const socketSession = new WeakMap<TrekWebSocket, SessionBinding>();
 const socketId = new WeakMap<TrekWebSocket, number>();
 
 /**
@@ -60,12 +63,41 @@ export function getServer(): WebSocketServer | null {
   return wss;
 }
 
-export function registerSocket(ws: TrekWebSocket, user: User): number {
+export function registerSocket(ws: TrekWebSocket, user: User, session?: SessionBinding): number {
   const sid = nextSocketId++;
   socketId.set(ws, sid);
   socketUser.set(ws, user);
+  if (session) socketSession.set(ws, session);
   socketRooms.set(ws, new Set());
   return sid;
+}
+
+/** Close every live socket derived from one logged-out browser session. */
+export function revokeSessionSockets(sessionId: string): void {
+  if (!wss) return;
+  for (const ws of wss.clients) {
+    const socket = ws as TrekWebSocket;
+    if (socketSession.get(socket)?.sid === sessionId) socket.close(4001, 'Session logged out');
+  }
+}
+
+/** Close all browser sockets for an identity version rotation or deletion. */
+export function revokeUserSockets(userId: number): void {
+  if (!wss) return;
+  for (const ws of wss.clients) {
+    const socket = ws as TrekWebSocket;
+    if (socketUser.get(socket)?.id === userId) socket.close(4001, 'Session invalidated');
+  }
+}
+
+/** Close every authenticated socket after a process-wide JWT rotation/restore. */
+export function revokeAllSockets(): void {
+  if (!wss) return;
+  for (const ws of wss.clients) (ws as TrekWebSocket).close(4001, 'Session invalidated');
+}
+
+export function sessionBindingOf(ws: TrekWebSocket): SessionBinding | undefined {
+  return socketSession.get(ws);
 }
 
 export function userOf(ws: TrekWebSocket): User | undefined {
@@ -154,11 +186,7 @@ export function bookPeers(journeyId: number): BookPeer[] {
  * something that happened to the trip, and announcing ten of them a second to
  * every subscribed plugin would be a firehose of nothing.
  */
-export function broadcastToBook(
-  journeyId: number,
-  payload: Record<string, unknown>,
-  excludeSid?: number,
-): void {
+export function broadcastToBook(journeyId: number, payload: Record<string, unknown>, excludeSid?: number): void {
   const room = bookRooms.get(journeyId);
   if (!room || room.size === 0) return;
   for (const ws of room) {
@@ -208,11 +236,7 @@ export function broadcast(
 }
 
 /** Send a message to all sockets belonging to a specific user (e.g. trip invitations). */
-export function broadcastToUser(
-  userId: number,
-  payload: Record<string, unknown>,
-  excludeSid?: number | string,
-): void {
+export function broadcastToUser(userId: number, payload: Record<string, unknown>, excludeSid?: number | string): void {
   if (!wss) return;
   const excludeNum = excludeSid ? Number(excludeSid) : null;
   for (const ws of wss.clients) {

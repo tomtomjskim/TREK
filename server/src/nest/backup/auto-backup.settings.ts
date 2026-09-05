@@ -1,7 +1,8 @@
-import path from 'node:path';
-import fs from 'node:fs';
 import { logInfo, logError } from '../audit/audit-log.logger';
 import type { StorageService } from '../storage/storage.service';
+
+import fs from 'node:fs';
+import path from 'node:path';
 
 /**
  * Auto-backup settings and retention — the pure half of the auto-backup cron
@@ -35,11 +36,16 @@ export function buildCronExpression(settings: BackupSettings): string {
   const dom = settings.day_of_month >= 1 && settings.day_of_month <= 28 ? settings.day_of_month : 1;
 
   switch (settings.interval) {
-    case 'hourly':  return '0 * * * *';
-    case 'daily':   return `0 ${hour} * * *`;
-    case 'weekly':  return `0 ${hour} * * ${dow}`;
-    case 'monthly': return `0 ${hour} ${dom} * *`;
-    default:        return `0 ${hour} * * *`;
+    case 'hourly':
+      return '0 * * * *';
+    case 'daily':
+      return `0 ${hour} * * *`;
+    case 'weekly':
+      return `0 ${hour} * * ${dow}`;
+    case 'monthly':
+      return `0 ${hour} ${dom} * *`;
+    default:
+      return `0 ${hour} * * *`;
   }
 }
 
@@ -69,26 +75,49 @@ function autoBackupTimestampMs(filename: string): number | null {
   // Accept both legacy auto-backup-<timestamp>.zip and the current
   // auto-backup-<timestamp>-<uuid>.zip. Capture only the timestamp so a UUID
   // cannot make a fresh archive look stale through the mtime fallback.
-  const match = /^auto-backup-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})(?:-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\.zip$/.exec(filename);
+  const match =
+    /^auto-backup-(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2})(?:-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})?\.zip$/.exec(
+      filename,
+    );
   if (!match) return null;
   const iso = match[1].replace(/T(\d{2})-(\d{2})-(\d{2})$/, 'T$1:$2:$3');
-  const ms = Date.parse(iso);
+  // The timestamp is emitted in UTC. Without an explicit offset Date.parse()
+  // interprets this ISO-like value in the process timezone, making retention
+  // drift by the host's UTC offset.
+  const ms = Date.parse(`${iso}Z`);
   return Number.isNaN(ms) ? null : ms;
 }
 
-export async function cleanupOldBackups(storage: StorageService, keepDays: number, now: number = Date.now()): Promise<void> {
+export async function cleanupOldBackups(
+  storage: StorageService,
+  keepDays: number,
+  now: number = Date.now(),
+): Promise<void> {
+  const cutoff = now - keepDays * 24 * 60 * 60 * 1000;
+  let scanned = 0;
+  let deleted = 0;
+  let failed = 0;
   try {
-    const cutoff = now - keepDays * 24 * 60 * 60 * 1000;
     for await (const obj of storage.list('backups')) {
       if (obj.key.includes('/')) continue; // list() recurses; retention is top-level-only like the readdir it replaces
       if (!obj.key.startsWith('auto-backup-') || !obj.key.endsWith('.zip')) continue; // manual backup-*.zip is never auto-deleted
+      scanned++;
       const ageMs = autoBackupTimestampMs(obj.key) ?? obj.mtimeMs;
       if (ageMs < cutoff) {
-        await storage.delete('backups', obj.key); // fans out to mirror replicas too
-        logInfo(`Auto-Backup old backup deleted: ${obj.key}`);
+        try {
+          await storage.delete('backups', obj.key); // fans out to mirror replicas too
+          deleted++;
+          logInfo(`Auto-Backup old backup deleted: ${obj.key}`);
+        } catch (err: unknown) {
+          // A mirror or provider failure must not prevent other stale objects
+          // from being reclaimed on this run.
+          failed++;
+          logError(`Auto-Backup delete failed: ${obj.key}: ${err instanceof Error ? err.message : err}`);
+        }
       }
     }
   } catch (err: unknown) {
     logError(`Auto-Backup cleanup: ${err instanceof Error ? err.message : err}`);
   }
+  logInfo(`Auto-Backup cleanup complete: scanned ${scanned}, deleted ${deleted}, failed ${failed}`);
 }

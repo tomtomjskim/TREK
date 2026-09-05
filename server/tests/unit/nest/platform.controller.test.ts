@@ -1,5 +1,16 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { resetRestoreQuiescenceForTests, runInRestoreQuiescence } from '../../../src/nest/backup/restore-quiescence';
+import {
+  applyPlatformUploads,
+  applyPlatformSpa,
+  applyPlatformStatic,
+  storageStaticHandler,
+} from '../../../src/nest/platform/platform.routes';
+import { SpaFallbackFilter } from '../../../src/nest/platform/spa-fallback.filter';
+import type { StorageService } from '../../../src/nest/storage/storage.service';
+import { StorageNotFoundError, StorageInvalidKeyError } from '../../../src/nest/storage/storage.types';
 import { NotFoundException } from '@nestjs/common';
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // --- hoisted mock fns so the vi.mock factories can reference them -----------------
 const h = vi.hoisted(() => ({
@@ -11,16 +22,6 @@ const h = vi.hoisted(() => ({
 
 vi.mock('../../../src/nest/auth/jwt-verify', () => ({ verifyJwtAndLoadUser: h.verifyJwtAndLoadUser }));
 vi.mock('../../../src/db/database', () => ({ db: { prepare: h.dbPrepare } }));
-
-import {
-  applyPlatformUploads,
-  applyPlatformSpa,
-  applyPlatformStatic,
-  storageStaticHandler,
-} from '../../../src/nest/platform/platform.routes';
-import { SpaFallbackFilter } from '../../../src/nest/platform/spa-fallback.filter';
-import { StorageNotFoundError, StorageInvalidKeyError } from '../../../src/nest/storage/storage.types';
-import type { StorageService } from '../../../src/nest/storage/storage.service';
 
 // The serving swap addresses files as (category, name) on the injected facade;
 // these unit tests only assert routing/auth/error mapping, so a two-method stub
@@ -44,13 +45,15 @@ type Handler = (...args: unknown[]) => unknown;
  */
 function fakeApp() {
   const calls: Array<{ method: string; path?: string; handlers: Handler[] }> = [];
-  const record = (method: string) => (...args: unknown[]) => {
-    if (typeof args[0] === 'string' || args[0] instanceof RegExp) {
-      calls.push({ method, path: String(args[0]), handlers: args.slice(1) as Handler[] });
-    } else {
-      calls.push({ method, handlers: args as Handler[] });
-    }
-  };
+  const record =
+    (method: string) =>
+    (...args: unknown[]) => {
+      if (typeof args[0] === 'string' || args[0] instanceof RegExp) {
+        calls.push({ method, path: String(args[0]), handlers: args.slice(1) as Handler[] });
+      } else {
+        calls.push({ method, handlers: args as Handler[] });
+      }
+    };
   const app = {
     use: record('use'),
     get: record('get'),
@@ -65,21 +68,66 @@ function makeRes() {
     statusCode: 200,
     body: undefined as unknown,
     headers: {} as Record<string, string>,
-    status: vi.fn(function (this: typeof res, c: number) { this.statusCode = c; return this; }),
-    json: vi.fn(function (this: typeof res, b: unknown) { this.body = b; return this; }),
-    send: vi.fn(function (this: typeof res, b: unknown) { this.body = b; return this; }),
-    end: vi.fn(function (this: typeof res) { return this; }),
-    sendFile: vi.fn(function (this: typeof res, p: string) { this.body = `FILE:${p}`; return this; }),
-    setHeader: vi.fn(function (this: typeof res, k: string, v: string) { this.headers[k] = v; return this; }),
+    status: vi.fn(function (this: typeof res, c: number) {
+      this.statusCode = c;
+      return this;
+    }),
+    json: vi.fn(function (this: typeof res, b: unknown) {
+      this.body = b;
+      return this;
+    }),
+    send: vi.fn(function (this: typeof res, b: unknown) {
+      this.body = b;
+      return this;
+    }),
+    end: vi.fn(function (this: typeof res) {
+      return this;
+    }),
+    sendFile: vi.fn(function (this: typeof res, p: string) {
+      this.body = `FILE:${p}`;
+      return this;
+    }),
+    setHeader: vi.fn(function (this: typeof res, k: string, v: string) {
+      this.headers[k] = v;
+      return this;
+    }),
   };
   return res;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetRestoreQuiescenceForTests();
 });
 
 describe('applyPlatformUploads', () => {
+  it('keeps restore draining until a pre-init upload response finishes', async () => {
+    const { app, calls } = fakeApp();
+    applyPlatformUploads(app, storage);
+    const admission = calls.find((c) => c.method === 'use' && c.path === '/uploads')!.handlers[0];
+    const events: Record<string, () => void> = {};
+    const res = {
+      ...makeRes(),
+      once: vi.fn((event: string, callback: () => void) => {
+        events[event] = callback;
+      }),
+    };
+    const next = vi.fn();
+
+    admission({}, res, next);
+    expect(next).toHaveBeenCalledOnce();
+    let restoreEntered = false;
+    const restore = runInRestoreQuiescence(async () => {
+      restoreEntered = true;
+    });
+    await Promise.resolve();
+    expect(restoreEntered).toBe(false);
+
+    events.finish();
+    await restore;
+    expect(restoreEntered).toBe(true);
+  });
+
   it('registers the four static mounts + the files block', () => {
     const { app, calls } = fakeApp();
     applyPlatformUploads(app, storage);
@@ -229,16 +277,9 @@ describe('applyPlatformUploads', () => {
       h.dbPrepare.mockImplementationOnce(() => photoStmt).mockImplementationOnce(() => shareStmt);
       const res = makeRes();
 
-      await photoHandler()(
-        { params: { filename: 'a.jpg' }, headers: {}, query: { token: 'share1' } },
-        res,
-        next,
-      );
+      await photoHandler()({ params: { filename: 'a.jpg' }, headers: {}, query: { token: 'share1' } }, res, next);
 
-      expect(h.dbPrepare).toHaveBeenNthCalledWith(
-        2,
-        expect.stringContaining("datetime(expires_at) > datetime('now')"),
-      );
+      expect(h.dbPrepare).toHaveBeenNthCalledWith(2, expect.stringContaining("datetime(expires_at) > datetime('now')"));
     });
 
     it('404 when the object vanishes between the exists check and the send', async () => {
@@ -376,7 +417,9 @@ describe('storageStaticHandler', () => {
 
 describe('applyPlatformStatic', () => {
   const original = process.env.NODE_ENV;
-  afterEach(() => { process.env.NODE_ENV = original; });
+  afterEach(() => {
+    process.env.NODE_ENV = original;
+  });
 
   it('is a no-op outside production', () => {
     process.env.NODE_ENV = 'development';
@@ -410,13 +453,15 @@ describe('applyPlatformStatic', () => {
 
 describe('applyPlatformSpa', () => {
   const original = process.env.NODE_ENV;
-  afterEach(() => { process.env.NODE_ENV = original; });
+  afterEach(() => {
+    process.env.NODE_ENV = original;
+  });
 
   it('only serves statics (no catch-all) outside production', () => {
     process.env.NODE_ENV = 'development';
     const { app, calls } = fakeApp();
     applyPlatformSpa(app);
-    expect(calls.some((c) => c.method === 'get' && c.path === '/.*/' )).toBe(false);
+    expect(calls.some((c) => c.method === 'get' && c.path === '/.*/')).toBe(false);
   });
 
   it('registers the index.html catch-all in production', () => {
@@ -435,7 +480,9 @@ describe('applyPlatformSpa', () => {
 
 describe('SpaFallbackFilter', () => {
   const original = process.env.NODE_ENV;
-  afterEach(() => { process.env.NODE_ENV = original; });
+  afterEach(() => {
+    process.env.NODE_ENV = original;
+  });
 
   function host(req: { method: string }, res: ReturnType<typeof makeRes>) {
     return { switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }) } as never;

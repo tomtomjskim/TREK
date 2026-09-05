@@ -2,9 +2,27 @@
  * Unit tests for backupService.
  * Covers BACKUP-031 to BACKUP-060.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  formatSize,
+  parseIntField,
+  parseAutoBackupBody,
+  isValidBackupFilename,
+  checkRateLimit,
+  createBackup,
+  deleteBackup,
+  restoreFromZip,
+  restoreBackup,
+  BACKUP_RATE_WINDOW,
+  backupFileExists,
+  listBackups,
+  sendBackupToResponse,
+  validateBackupManifest,
+} from '../../../src/nest/backup/backup.impl';
+import type { StorageService } from '../../../src/nest/storage/storage.service';
+
 import { createHash } from 'node:crypto';
 import path from 'node:path';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — must be defined before any vi.mock() calls
@@ -15,7 +33,9 @@ const fsMock = vi.hoisted(() => ({
   mkdirSync: vi.fn(),
   createWriteStream: vi.fn(),
   unlinkSync: vi.fn(),
-  statSync: vi.fn(),
+  statSync: vi.fn((p: string): { size?: number; isDirectory?: () => boolean } => ({
+    isDirectory: () => String(p).includes('.session-revocations-pending'),
+  })),
   readdirSync: vi.fn(),
   createReadStream: vi.fn(),
   rmSync: vi.fn(),
@@ -56,10 +76,36 @@ const unzipperMock = vi.hoisted(() => ({
 }));
 
 const pluginBackupMock = vi.hoisted(() => ({
+  PLUGIN_TREE_ARCHIVE_MARKER: '.trek-backup-root',
   stageExtractedPluginTrees: vi.fn(() => false),
   applyStagedRestoreNow: vi.fn(async () => true),
   applyStagedRestoreNowStrict: vi.fn(async () => null),
   discardStagedPluginTrees: vi.fn(),
+  getPluginRestoreRuntimeLifecycle: vi.fn(() => null),
+}));
+
+const restoreBoundaryMock = vi.hoisted(() => {
+  const restoreSessionAuthority = vi.fn();
+  return {
+    assertSchemaCompatibility: vi.fn(),
+    confirmSessionRevocationStoreHealth: vi.fn(),
+    sanitizeRestoredAuthState: vi.fn(),
+    checkpointSessionAuthority: vi.fn(() => ({ restore: restoreSessionAuthority })),
+    restoreSessionAuthority,
+    rotateSessionAuthority: vi.fn(() => ({})),
+    beginRestoreJournal: vi.fn(),
+    markRestoreJournal: vi.fn(),
+  };
+});
+
+const restoreQuiescenceMock = vi.hoisted(() => ({
+  runInRestoreQuiescence: vi.fn(async (
+    operation: () => Promise<unknown>,
+    options?: { onDrainStarted?: () => void | Promise<void> },
+  ) => {
+    await options?.onDrainStarted?.();
+    return operation();
+  }),
 }));
 
 const dbMock = vi.hoisted(() => ({
@@ -69,6 +115,7 @@ const dbMock = vi.hoisted(() => ({
   },
   closeDb: vi.fn(),
   reinitialize: vi.fn(),
+  getDatabaseFilePath: vi.fn(() => '/app/data/travel.db'),
   getPlaceWithTags: vi.fn(),
   canAccessTrip: vi.fn(),
   isOwner: vi.fn(),
@@ -84,23 +131,27 @@ vi.mock('fs', () => ({ default: fsMock, ...fsMock }));
 vi.mock('archiver', () => ({ default: archiverMock }));
 vi.mock('unzipper', () => ({ default: unzipperMock }));
 vi.mock('../../../src/nest/plugins/plugin-backup', () => pluginBackupMock);
-import {
-  formatSize,
-  parseIntField,
-  parseAutoBackupBody,
-  isValidBackupFilename,
-  checkRateLimit,
-  createBackup,
-  deleteBackup,
-  restoreFromZip,
-  restoreBackup,
-  BACKUP_RATE_WINDOW,
-  backupFileExists,
-  listBackups,
-  sendBackupToResponse,
-  validateBackupManifest,
-} from '../../../src/nest/backup/backup.impl';
-import type { StorageService } from '../../../src/nest/storage/storage.service';
+vi.mock('../../../src/db/migrationRunner', () => ({
+  assertSchemaCompatibility: restoreBoundaryMock.assertSchemaCompatibility,
+}));
+vi.mock('../../../src/nest/auth/session-authority', () => ({
+  checkpointSessionAuthority: restoreBoundaryMock.checkpointSessionAuthority,
+  rotateSessionAuthority: restoreBoundaryMock.rotateSessionAuthority,
+}));
+vi.mock('../../../src/nest/auth/session-revocation', () => ({
+  confirmSessionRevocationStoreHealth: restoreBoundaryMock.confirmSessionRevocationStoreHealth,
+}));
+vi.mock('../../../src/nest/backup/restored-auth-state', () => ({
+  sanitizeRestoredAuthState: restoreBoundaryMock.sanitizeRestoredAuthState,
+}));
+vi.mock('../../../src/nest/backup/restore-journal', () => ({
+  beginRestoreJournal: restoreBoundaryMock.beginRestoreJournal,
+  markRestoreJournal: restoreBoundaryMock.markRestoreJournal,
+}));
+vi.mock('../../../src/nest/backup/restore-quiescence', () => ({
+  RestoreRecoveryRequiredError: class RestoreRecoveryRequiredError extends Error {},
+  runInRestoreQuiescence: restoreQuiescenceMock.runInRestoreQuiescence,
+}));
 
 // ---------------------------------------------------------------------------
 // Storage stub — backup.impl functions receive StorageService as a parameter
@@ -343,17 +394,22 @@ describe('BACKUP-035 checkRateLimit', () => {
 describe('BACKUP-036 createBackup', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dbMock.getDatabaseFilePath.mockReturnValue('/app/data/travel.db');
   });
 
   /** Wires the write-stream + archiver mocks so finalize() resolves the build. */
   function setupArchiveSuccess() {
     const writableEvents: Record<string, Function> = {};
     fsMock.createWriteStream.mockReturnValue({
-      on: vi.fn((event: string, cb: Function) => { writableEvents[event] = cb; }),
+      on: vi.fn((event: string, cb: Function) => {
+        writableEvents[event] = cb;
+      }),
     } as never);
     archiverInstanceMock.on.mockImplementation(() => {});
     archiverInstanceMock.pipe.mockReturnValue(undefined);
-    archiverInstanceMock.finalize.mockImplementation(() => { writableEvents['close']?.(); });
+    archiverInstanceMock.finalize.mockImplementation(() => {
+      writableEvents['close']?.();
+    });
     archiverMock.mockReturnValue(archiverInstanceMock);
     return writableEvents;
   }
@@ -408,8 +464,12 @@ describe('BACKUP-036 createBackup', () => {
 
     expect(storage.getLocalPathOrNull).toHaveBeenCalledWith('files', 'a.pdf');
     expect(storage.getLocalPathOrNull).toHaveBeenCalledWith('journey', 'thumbs/x.jpg');
-    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), { name: 'uploads/files/a.pdf' });
-    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), { name: 'uploads/journey/thumbs/x.jpg' });
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), {
+      name: 'uploads/files/a.pdf',
+    });
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), {
+      name: 'uploads/journey/thumbs/x.jpg',
+    });
     // Local objects are copied into the private spool to close hash/archive TOCTOU.
     expect(storage.getStream).not.toHaveBeenCalled();
   });
@@ -425,7 +485,11 @@ describe('BACKUP-036 createBackup', () => {
       // setupArchiveSuccess set up (finalize() resolves the build via 'close');
       // staged files use a minimal fake that just resolves the pipeline.
       if (String(p).includes('zip-build-')) {
-        return { on: vi.fn((event: string, cb: Function) => { writableEvents[event] = cb; }) };
+        return {
+          on: vi.fn((event: string, cb: Function) => {
+            writableEvents[event] = cb;
+          }),
+        };
       }
       // pipeline() (real, from node:stream/promises) needs a real Writable —
       // a PassThrough gives it one without touching the real filesystem.
@@ -454,17 +518,19 @@ describe('BACKUP-036 createBackup', () => {
     expect(stagedPath).toContain('/stub/spool/staging-backup-');
     expect(stagedPath).toContain('files/remote.pdf');
     // The staging dir is removed alongside zipSpool/dbSnap in the existing finally.
-    expect(fsMock.rmSync).toHaveBeenCalledWith(
-      expect.stringContaining('/stub/spool/staging-backup-'),
-      { recursive: true, force: true },
-    );
+    expect(fsMock.rmSync).toHaveBeenCalledWith(expect.stringContaining('/stub/spool/staging-backup-'), {
+      recursive: true,
+      force: true,
+    });
   });
 
   it('BACKUP-036l — a vanished remote object (archiver "warning") fails the backup instead of silently dropping it', async () => {
     fsMock.existsSync.mockReturnValue(false);
     const archiveEvents: Record<string, Function> = {};
     fsMock.createWriteStream.mockReturnValue({ on: vi.fn() } as never);
-    archiverInstanceMock.on.mockImplementation((event: string, cb: Function) => { archiveEvents[event] = cb; });
+    archiverInstanceMock.on.mockImplementation((event: string, cb: Function) => {
+      archiveEvents[event] = cb;
+    });
     archiverInstanceMock.pipe.mockReturnValue(undefined);
     archiverInstanceMock.finalize.mockImplementation(() => {
       // archiver emits 'warning' (not 'error') for entries it couldn't stat/read
@@ -499,16 +565,27 @@ describe('BACKUP-036 createBackup', () => {
     fsMock.existsSync.mockImplementation((p: string) => String(p).includes('plugins'));
     // Two plugin code dirs: 'notes' is real, 'devlink' resolves outside the root.
     // The plugin-data snapshot reads with { withFileTypes: true }; hand it Dirent-likes there.
-    const dirent = (name: string, directory = true) => ({ name, isDirectory: () => directory, isFile: () => !directory });
+    const dirent = (name: string, directory = true) => ({
+      name,
+      isDirectory: () => directory,
+      isFile: () => !directory,
+    });
     fsMock.readdirSync.mockImplementation((p: string, opts?: { withFileTypes?: boolean }) => {
       const value = String(p);
       const entries = value.includes('plugins-snap')
-        ? value.endsWith('notes') ? [dirent('plugin.db', false)] : [dirent('notes')]
-        : value.endsWith('/plugins') ? [dirent('notes'), dirent('devlink')]
-        : value.endsWith('/plugins/notes') ? [dirent('index.js', false)] : [];
+        ? value.endsWith('notes')
+          ? [dirent('plugin.db', false)]
+          : [dirent('notes')]
+        : value.endsWith('/plugins')
+          ? [dirent('notes'), dirent('devlink')]
+          : value.endsWith('/plugins/notes')
+            ? [dirent('index.js', false)]
+            : [];
       return (opts?.withFileTypes ? entries : entries.map((entry) => entry.name)) as never;
     });
-    fsMock.realpathSync.mockImplementation((p: string) => (String(p).endsWith('devlink') ? '/somewhere/else/devlink' : p));
+    fsMock.realpathSync.mockImplementation((p: string) =>
+      String(p).endsWith('devlink') ? '/somewhere/else/devlink' : p,
+    );
     fsMock.statSync.mockReturnValue({ isDirectory: () => true } as never);
     setupArchiveSuccess();
     const storage = stubStorage({ stat: statOf(2048) });
@@ -516,9 +593,54 @@ describe('BACKUP-036 createBackup', () => {
     await createBackup(storage);
 
     // the consistent snapshot and real code files are manifest-bound; the dev-link is skipped.
-    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('plugins-snap'), { name: 'plugins-data/notes/plugin.db' });
-    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), { name: 'plugins-code/notes/index.js' });
-    expect(archiverInstanceMock.file).not.toHaveBeenCalledWith(expect.anything(), { name: expect.stringContaining('devlink') });
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('plugins-snap'), {
+      name: 'plugins-data/notes/plugin.db',
+    });
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), {
+      name: 'plugins-code/notes/index.js',
+    });
+    expect(archiverInstanceMock.file).not.toHaveBeenCalledWith(expect.anything(), {
+      name: expect.stringContaining('devlink'),
+    });
+  });
+
+  it('BACKUP-036p1 — archives manifest-bound root markers when both plugin trees are empty', async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    setupArchiveSuccess();
+    const storage = stubStorage({ stat: statOf(2048) });
+
+    await createBackup(storage);
+
+    expect(archiverInstanceMock.append).toHaveBeenCalledWith(Buffer.alloc(0), {
+      name: 'plugins-data/.trek-backup-root',
+    });
+    expect(archiverInstanceMock.append).toHaveBeenCalledWith(Buffer.alloc(0), {
+      name: 'plugins-code/.trek-backup-root',
+    });
+    const manifestCall = archiverInstanceMock.append.mock.calls.find(
+      (call: unknown[]) => (call[1] as { name?: string })?.name === 'backup-manifest.json',
+    );
+    const manifest = JSON.parse(String(manifestCall?.[0])) as {
+      entries: Array<{ path: string; category: string; source: string; size: number; sha256: string }>;
+    };
+    expect(manifest.entries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: 'plugins-data/.trek-backup-root',
+          category: 'plugins-data',
+          source: '.trek-backup-root',
+          size: 0,
+          sha256: createHash('sha256').update(Buffer.alloc(0)).digest('hex'),
+        }),
+        expect.objectContaining({
+          path: 'plugins-code/.trek-backup-root',
+          category: 'plugins-code',
+          source: '.trek-backup-root',
+          size: 0,
+          sha256: createHash('sha256').update(Buffer.alloc(0)).digest('hex'),
+        }),
+      ]),
+    );
   });
 
   it('BACKUP-036q — self-contained backups archive the at-rest key, but the manifest never exposes its value', async () => {
@@ -532,14 +654,12 @@ describe('BACKUP-036 createBackup', () => {
 
       await createBackup(storage);
 
-      expect(archiverInstanceMock.file).toHaveBeenCalledWith(
-        expect.stringContaining('.encryption_key'),
-        { name: '.encryption_key' },
-      );
-      expect(archiverInstanceMock.append).toHaveBeenCalledWith(
-        expect.not.stringContaining('fixture-secret-value'),
-        { name: 'backup-manifest.json' },
-      );
+      expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('.encryption_key'), {
+        name: '.encryption_key',
+      });
+      expect(archiverInstanceMock.append).toHaveBeenCalledWith(expect.not.stringContaining('fixture-secret-value'), {
+        name: 'backup-manifest.json',
+      });
     } finally {
       if (previous === undefined) delete process.env.ENCRYPTION_KEY;
       else process.env.ENCRYPTION_KEY = previous;
@@ -548,7 +668,9 @@ describe('BACKUP-036 createBackup', () => {
 
   it('BACKUP-036b — WAL checkpoint error is swallowed (non-critical)', async () => {
     // db.exec throws on WAL checkpoint
-    dbMock.db.exec.mockImplementationOnce(() => { throw new Error('WAL checkpoint failed'); });
+    dbMock.db.exec.mockImplementationOnce(() => {
+      throw new Error('WAL checkpoint failed');
+    });
     fsMock.existsSync.mockReturnValue(false);
     setupArchiveSuccess();
     const storage = stubStorage({ stat: statOf(512) });
@@ -563,7 +685,9 @@ describe('BACKUP-036 createBackup', () => {
     fsMock.existsSync.mockReturnValue(false);
     const archiveEvents: Record<string, Function> = {};
     fsMock.createWriteStream.mockReturnValue({ on: vi.fn() } as never);
-    archiverInstanceMock.on.mockImplementation((event: string, cb: Function) => { archiveEvents[event] = cb; });
+    archiverInstanceMock.on.mockImplementation((event: string, cb: Function) => {
+      archiveEvents[event] = cb;
+    });
     archiverInstanceMock.pipe.mockReturnValue(undefined);
     archiverInstanceMock.finalize.mockImplementation(() => {
       // Simulate archive error instead of success
@@ -579,6 +703,27 @@ describe('BACKUP-036 createBackup', () => {
     expect(fsMock.rmSync).toHaveBeenCalledWith(expect.stringContaining('zip-build-backup-'), { force: true });
   });
 
+  it('BACKUP-036ca — output stream failure rejects once even if close follows', async () => {
+    fsMock.existsSync.mockReturnValue(false);
+    const outputEvents: Record<string, Function> = {};
+    fsMock.createWriteStream.mockReturnValue({
+      on: vi.fn((event: string, cb: Function) => {
+        outputEvents[event] = cb;
+      }),
+    } as never);
+    archiverInstanceMock.on.mockImplementation(() => {});
+    archiverInstanceMock.pipe.mockReturnValue(undefined);
+    archiverInstanceMock.finalize.mockImplementation(() => {
+      outputEvents.error?.(new Error('ENOSPC: output stream failed'));
+      outputEvents.close?.();
+    });
+    archiverMock.mockReturnValue(archiverInstanceMock);
+    const storage = stubStorage();
+
+    await expect(createBackup(storage)).rejects.toThrow('ENOSPC');
+    expect(storage.put).not.toHaveBeenCalled();
+  });
+
   it('BACKUP-036d — includes travel.db when it exists, snapshotted into the spool', async () => {
     fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('travel.db'));
     setupArchiveSuccess();
@@ -588,10 +733,20 @@ describe('BACKUP-036 createBackup', () => {
 
     // the core DB is snapshotted (VACUUM INTO) and archived under the name travel.db
     expect(dbMock.db.exec).toHaveBeenCalledWith(expect.stringContaining('VACUUM INTO'));
-    expect(archiverInstanceMock.file).toHaveBeenCalledWith(
-      expect.stringContaining('/stub/spool/travel-snap-backup-'),
-      { name: 'travel.db' }
-    );
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/stub/spool/travel-snap-backup-'), {
+      name: 'travel.db',
+    });
+  });
+
+  it('BACKUP-036d1 — snapshots the authoritative custom database path', async () => {
+    dbMock.getDatabaseFilePath.mockReturnValue('/custom/trek/live.db');
+    fsMock.existsSync.mockImplementation((p: string) => String(p) === '/custom/trek/live.db');
+    setupArchiveSuccess();
+
+    await createBackup(stubStorage({ stat: statOf(1024) }));
+
+    expect(fsMock.existsSync).toHaveBeenCalledWith('/custom/trek/live.db');
+    expect(dbMock.db.exec).toHaveBeenCalledWith(expect.stringContaining('VACUUM INTO'));
   });
 
   it('BACKUP-036e — excludes the re-derivable photo caches nested under photos/', async () => {
@@ -609,10 +764,12 @@ describe('BACKUP-036 createBackup', () => {
 
     await createBackup(storage);
 
-    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), { name: 'uploads/photos/flat.jpg' });
-    const names = archiverInstanceMock.file.mock.calls.map(c => c[1]?.name as string);
-    expect(names.some(n => n?.includes('google/'))).toBe(false);
-    expect(names.some(n => n?.includes('trek/'))).toBe(false);
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('/staging-backup-'), {
+      name: 'uploads/photos/flat.jpg',
+    });
+    const names = archiverInstanceMock.file.mock.calls.map((c) => c[1]?.name as string);
+    expect(names.some((n) => n?.includes('google/'))).toBe(false);
+    expect(names.some((n) => n?.includes('trek/'))).toBe(false);
     // Only the archived categories are ever listed — the excludes are structural.
     expect(storage.getLocalPathOrNull).toHaveBeenCalledTimes(1);
   });
@@ -628,7 +785,7 @@ describe('BACKUP-036 createBackup', () => {
     await createBackup(storage);
 
     expect(archiverInstanceMock.glob).not.toHaveBeenCalled();
-    const listed = (storage.list as ReturnType<typeof vi.fn>).mock.calls.map(c => c[0] as string);
+    const listed = (storage.list as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0] as string);
     expect(listed.sort()).toEqual(['avatars', 'covers', 'files', 'journey', 'photos', 'places']);
     expect(listed).not.toContain('backups');
   });
@@ -643,10 +800,9 @@ describe('BACKUP-036 createBackup', () => {
 
       await createBackup(storage);
 
-      expect(archiverInstanceMock.file).toHaveBeenCalledWith(
-        expect.stringContaining('.encryption_key'),
-        { name: '.encryption_key' },
-      );
+      expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('.encryption_key'), {
+        name: '.encryption_key',
+      });
     } finally {
       process.env.ENCRYPTION_KEY = prevEnvKey;
     }
@@ -676,10 +832,9 @@ describe('BACKUP-036 createBackup', () => {
     const result = await createBackup(storage, 'auto-backup');
 
     expect(result.filename).toMatch(/^auto-backup-.*\.zip$/);
-    expect(archiverInstanceMock.file).toHaveBeenCalledWith(
-      expect.stringContaining('travel-snap-auto-backup-'),
-      { name: 'travel.db' },
-    );
+    expect(archiverInstanceMock.file).toHaveBeenCalledWith(expect.stringContaining('travel-snap-auto-backup-'), {
+      name: 'travel.db',
+    });
     expect(storage.put).toHaveBeenCalledWith('backups', result.filename, {
       tmpPath: expect.stringContaining('zip-build-auto-backup-'),
     });
@@ -689,7 +844,9 @@ describe('BACKUP-036 createBackup', () => {
     fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('travel.db'));
     dbMock.db.exec
       .mockImplementationOnce(() => undefined)
-      .mockImplementationOnce(() => { throw new Error('database is busy'); });
+      .mockImplementationOnce(() => {
+        throw new Error('database is busy');
+      });
     setupArchiveSuccess();
 
     await expect(createBackup(stubStorage({ stat: statOf(1024) }))).rejects.toThrow(/snapshot failed/i);
@@ -699,7 +856,9 @@ describe('BACKUP-036 createBackup', () => {
     fsMock.existsSync.mockReturnValue(false);
     setupArchiveSuccess();
 
-    await expect(createBackup(stubStorage({ stat: vi.fn(async () => null) }))).rejects.toThrow(/vanished after commit/i);
+    await expect(createBackup(stubStorage({ stat: vi.fn(async () => null) }))).rejects.toThrow(
+      /vanished after commit/i,
+    );
   });
 
   it('BACKUP-036t — skips non-directory plugin code entries', async () => {
@@ -710,9 +869,7 @@ describe('BACKUP-036 createBackup', () => {
     });
     fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('/plugins'));
     fsMock.readdirSync.mockImplementation((p: string, opts?: { withFileTypes?: boolean }) => {
-      const entries = String(p).endsWith('/plugins')
-        ? [dirent('readme.txt', 'file'), dirent('socket', 'other')]
-        : [];
+      const entries = String(p).endsWith('/plugins') ? [dirent('readme.txt', 'file'), dirent('socket', 'other')] : [];
       return (opts?.withFileTypes ? entries : entries.map((entry) => entry.name)) as never;
     });
     fsMock.realpathSync.mockImplementation((p: string) => p);
@@ -721,28 +878,40 @@ describe('BACKUP-036 createBackup', () => {
 
     await createBackup(stubStorage({ stat: statOf(1024) }));
 
-    expect(archiverInstanceMock.file).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ name: expect.stringContaining('plugins-code') }));
+    expect(archiverInstanceMock.file).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: expect.stringContaining('plugins-code') }),
+    );
     expect(fsMock.readdirSync.mock.calls.some(([p]) => /(?:readme\.txt|socket)$/.test(String(p)))).toBe(false);
   });
 
   it('BACKUP-036u — ignores special entries while walking plugin data files', async () => {
     const special = { name: 'socket', isDirectory: () => false, isFile: () => false };
     const directory = { name: 'notes', isDirectory: () => true, isFile: () => false };
-    fsMock.existsSync.mockImplementation((p: string) => String(p).includes('plugins-data') || String(p).includes('plugins-snap'));
+    fsMock.existsSync.mockImplementation(
+      (p: string) => String(p).includes('plugins-data') || String(p).includes('plugins-snap'),
+    );
     fsMock.readdirSync.mockImplementation((p: string, opts?: { withFileTypes?: boolean }) => {
       const value = String(p);
-      const entries = value.endsWith('plugins-data') ? [directory]
-        : value.endsWith('plugins-data/notes') ? [special]
-        : value.includes('plugins-snap-') && value.endsWith('/notes') ? [special]
-        : value.includes('plugins-snap-') ? [directory]
-        : [];
+      const entries = value.endsWith('plugins-data')
+        ? [directory]
+        : value.endsWith('plugins-data/notes')
+          ? [special]
+          : value.includes('plugins-snap-') && value.endsWith('/notes')
+            ? [special]
+            : value.includes('plugins-snap-')
+              ? [directory]
+              : [];
       return (opts?.withFileTypes ? entries : entries.map((entry) => entry.name)) as never;
     });
     setupArchiveSuccess();
 
     await createBackup(stubStorage({ stat: statOf(1024) }));
 
-    expect(archiverInstanceMock.file).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ name: expect.stringContaining('plugins-data') }));
+    expect(archiverInstanceMock.file).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ name: expect.stringContaining('plugins-data') }),
+    );
   });
 
   it('BACKUP-036v — concurrent creates receive distinct final archive names', async () => {
@@ -766,9 +935,13 @@ describe('BACKUP-036 createBackup', () => {
     fsMock.existsSync.mockReturnValue(false);
     setupArchiveSuccess();
     let releaseFirstPut!: () => void;
-    const firstPutBlocked = new Promise<void>((resolve) => { releaseFirstPut = resolve; });
+    const firstPutBlocked = new Promise<void>((resolve) => {
+      releaseFirstPut = resolve;
+    });
     let firstPutStarted!: () => void;
-    const firstPutReady = new Promise<void>((resolve) => { firstPutStarted = resolve; });
+    const firstPutReady = new Promise<void>((resolve) => {
+      firstPutStarted = resolve;
+    });
     let putCount = 0;
     const storage = stubStorage({
       stat: statOf(1024),
@@ -802,28 +975,47 @@ describe('BACKUP-060 manifest policy', () => {
   beforeEach(() => vi.clearAllMocks());
 
   const digest = createHash('sha256').update('fixture-bytes').digest('hex');
-  const databaseEntry = () => ({ path: 'travel.db', category: 'database', source: 'travel.db', size: 13, sha256: digest });
-  const manifestResult = (entries: unknown[], archivePaths = entries.map((entry) => (entry as { path?: string })?.path ?? 'entry').concat('backup-manifest.json')) => {
+  const databaseEntry = () => ({
+    path: 'travel.db',
+    category: 'database',
+    source: 'travel.db',
+    size: 13,
+    sha256: digest,
+  });
+  const manifestResult = (
+    entries: unknown[],
+    archivePaths = entries.map((entry) => (entry as { path?: string })?.path ?? 'entry').concat('backup-manifest.json'),
+  ) => {
     fsMock.existsSync.mockReturnValue(true);
-    fsMock.readFileSync.mockImplementation((p: string) => String(p).endsWith('backup-manifest.json')
-      ? JSON.stringify({ version: 1, entries })
-      : Buffer.from('fixture-bytes'));
+    fsMock.readFileSync.mockImplementation((p: string) =>
+      String(p).endsWith('backup-manifest.json')
+        ? JSON.stringify({ version: 1, entries })
+        : Buffer.from('fixture-bytes'),
+    );
     return validateBackupManifest('/restore', archivePaths);
   };
 
   it('BACKUP-060a — rejects a manifest upload key that storage would reject', () => {
     const manifest = JSON.stringify({
       version: 1,
-      entries: [{
-        path: 'uploads/files/.hidden', category: 'uploads', source: 'files/.hidden', size: 0,
-        sha256: '0'.repeat(64),
-      }],
+      entries: [
+        {
+          path: 'uploads/files/.hidden',
+          category: 'uploads',
+          source: 'files/.hidden',
+          size: 0,
+          sha256: '0'.repeat(64),
+        },
+      ],
     });
     fsMock.existsSync.mockReturnValue(true);
-    fsMock.readFileSync.mockImplementation((p: string) => String(p).endsWith('backup-manifest.json') ? manifest : Buffer.alloc(0));
+    fsMock.readFileSync.mockImplementation((p: string) =>
+      String(p).endsWith('backup-manifest.json') ? manifest : Buffer.alloc(0),
+    );
 
-    expect(validateBackupManifest('/restore', ['uploads/files/.hidden', 'backup-manifest.json']))
-      .toBe('Invalid backup: checksum manifest is malformed.');
+    expect(validateBackupManifest('/restore', ['uploads/files/.hidden', 'backup-manifest.json'])).toBe(
+      'Invalid backup: checksum manifest is malformed.',
+    );
   });
 
   it('BACKUP-060b — accepts every non-database manifest category and validates their bytes', () => {
@@ -854,20 +1046,24 @@ describe('BACKUP-060 manifest policy', () => {
     const pathsByFd = new Map<number, string>();
     let nextFd = 100;
     fsMock.existsSync.mockReturnValue(true);
-    fsMock.readFileSync.mockImplementation((p: string) => String(p).endsWith('backup-manifest.json')
-      ? JSON.stringify({ version: 1, entries })
-      : Buffer.from('unexpected-read'));
+    fsMock.readFileSync.mockImplementation((p: string) =>
+      String(p).endsWith('backup-manifest.json')
+        ? JSON.stringify({ version: 1, entries })
+        : Buffer.from('unexpected-read'),
+    );
     fsMock.openSync.mockImplementation((p?: string) => {
       const fd = nextFd++;
       pathsByFd.set(fd, path.relative('/restore', String(p)).split(path.sep).join('/'));
       return fd;
     });
-    fsMock.readSync.mockImplementation((fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
-      const bytes = payloads.get(pathsByFd.get(fd) ?? '') ?? Buffer.alloc(0);
-      if (position >= bytes.length) return 0;
-      bytes.copy(buffer, 0, position);
-      return bytes.length - position;
-    });
+    fsMock.readSync.mockImplementation(
+      (fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
+        const bytes = payloads.get(pathsByFd.get(fd) ?? '') ?? Buffer.alloc(0);
+        if (position >= bytes.length) return 0;
+        bytes.copy(buffer, 0, position);
+        return bytes.length - position;
+      },
+    );
     const archivePaths = [...payloads.keys(), 'backup-manifest.json'];
 
     try {
@@ -877,8 +1073,9 @@ describe('BACKUP-060 manifest policy', () => {
         const original = candidate.sha256;
         try {
           candidate.sha256 = '0'.repeat(64);
-          expect(validateBackupManifest('/restore', archivePaths))
-            .toBe(`Invalid backup: checksum verification failed for ${candidate.path}.`);
+          expect(validateBackupManifest('/restore', archivePaths)).toBe(
+            `Invalid backup: checksum verification failed for ${candidate.path}.`,
+          );
         } finally {
           candidate.sha256 = original;
         }
@@ -886,12 +1083,14 @@ describe('BACKUP-060 manifest policy', () => {
     } finally {
       fsMock.readFileSync.mockImplementation((_path: string): string | Buffer => Buffer.from('fixture-bytes'));
       fsMock.openSync.mockImplementation(() => 42);
-      fsMock.readSync.mockImplementation((_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
-        if (position > 0) return 0;
-        const bytes = Buffer.from('fixture-bytes');
-        bytes.copy(buffer);
-        return bytes.length;
-      });
+      fsMock.readSync.mockImplementation(
+        (_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
+          if (position > 0) return 0;
+          const bytes = Buffer.from('fixture-bytes');
+          bytes.copy(buffer);
+          return bytes.length;
+        },
+      );
     }
   });
 
@@ -914,19 +1113,44 @@ describe('BACKUP-060 manifest policy', () => {
     fsMock.existsSync.mockReturnValue(true);
     fsMock.readFileSync.mockReturnValue('{not-json');
 
-    expect(validateBackupManifest('/restore', ['travel.db', 'backup-manifest.json']))
-      .toBe('Invalid backup: checksum manifest is unreadable.');
+    expect(validateBackupManifest('/restore', ['travel.db', 'backup-manifest.json'])).toBe(
+      'Invalid backup: checksum manifest is unreadable.',
+    );
+  });
+
+  it('BACKUP-060c2 — accepts plugin root markers only as canonical empty payloads', () => {
+    const nonEmptyMarker = {
+      path: 'plugins-data/.trek-backup-root',
+      category: 'plugins-data',
+      source: '.trek-backup-root',
+      size: 13,
+      sha256: digest,
+    };
+
+    expect(manifestResult([databaseEntry(), nonEmptyMarker])).toBe(
+      'Invalid backup: checksum manifest is malformed.',
+    );
   });
 
   it('BACKUP-060d — rejects duplicate, uncovered, mismatched, and missing manifest files', () => {
     const base = databaseEntry();
     expect(manifestResult([base, { ...base }])).toBe('Invalid backup: checksum manifest has duplicate paths.');
-    const noDatabase = { path: 'plugins-code/notes/index.js', category: 'plugins-code', source: 'notes/index.js', size: 13, sha256: digest };
+    const noDatabase = {
+      path: 'plugins-code/notes/index.js',
+      category: 'plugins-code',
+      source: 'notes/index.js',
+      size: 13,
+      sha256: digest,
+    };
     expect(manifestResult([noDatabase])).toBe('Invalid backup: checksum manifest does not cover travel.db.');
-    expect(manifestResult([base], ['travel.db', 'extra.bin', 'backup-manifest.json'])).toBe('Invalid backup: archive entries do not match the checksum manifest.');
+    expect(manifestResult([base], ['travel.db', 'extra.bin', 'backup-manifest.json'])).toBe(
+      'Invalid backup: archive entries do not match the checksum manifest.',
+    );
     fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('backup-manifest.json'));
     fsMock.readFileSync.mockReturnValue(JSON.stringify({ version: 1, entries: [base] }));
-    expect(validateBackupManifest('/restore', ['travel.db', 'backup-manifest.json'])).toMatch(/manifest entry is missing/);
+    expect(validateBackupManifest('/restore', ['travel.db', 'backup-manifest.json'])).toMatch(
+      /manifest entry is missing/,
+    );
   });
 });
 
@@ -952,7 +1176,11 @@ describe('BACKUP-037 deleteBackup', () => {
     // Note: storage.delete is idempotent on a MISSING object (route parity holds
     // because the controller pre-checks existence and 404s); this pins that a
     // real backend failure still surfaces.
-    const storage = stubStorage({ delete: vi.fn(async () => { throw new Error('EIO: i/o error'); }) });
+    const storage = stubStorage({
+      delete: vi.fn(async () => {
+        throw new Error('EIO: i/o error');
+      }),
+    });
 
     await expect(deleteBackup(storage, 'backup-missing.zip')).rejects.toThrow('EIO');
   });
@@ -1080,7 +1308,11 @@ describe('BACKUP-061 restoreFromZip extraction', () => {
 
     const result = await restoreFromZip(stubStorage(), '/data/tmp/no-manifest.zip');
 
-    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/checksum manifest not found.*pinned previous image/i), status: 400 });
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/checksum manifest not found.*pinned previous image/i),
+      status: 400,
+    });
     expect(dbMock.closeDb).not.toHaveBeenCalled();
   });
 
@@ -1101,45 +1333,57 @@ describe('BACKUP-061 restoreFromZip extraction', () => {
   it('BACKUP-061a2 — rejects a checksum mismatch without touching the live DB', () => {
     const manifest = JSON.stringify({
       version: 1,
-      entries: [{
-        path: 'travel.db',
-        category: 'database',
-        source: 'travel.db',
-        size: 13,
-        sha256: 'c16a40a4584e5bccc84b45172fcdfa922f59ff1edebf3adba7b8266ea04eb39a',
-      }],
+      entries: [
+        {
+          path: 'travel.db',
+          category: 'database',
+          source: 'travel.db',
+          size: 13,
+          sha256: 'c16a40a4584e5bccc84b45172fcdfa922f59ff1edebf3adba7b8266ea04eb39a',
+        },
+      ],
     });
     fsMock.existsSync.mockReturnValue(true);
     fsMock.readFileSync.mockImplementation((p: string) =>
       String(p).endsWith('backup-manifest.json') ? Buffer.from(manifest) : Buffer.from('tampered-bytes'),
     );
-    fsMock.readSync.mockImplementation((_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
-      if (position > 0) return 0;
-      const bytes = Buffer.from('tampered-bytes');
-      bytes.copy(buffer);
-      return bytes.length;
-    });
+    fsMock.readSync.mockImplementation(
+      (_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
+        if (position > 0) return 0;
+        const bytes = Buffer.from('tampered-bytes');
+        bytes.copy(buffer);
+        return bytes.length;
+      },
+    );
 
-    expect(validateBackupManifest('/restore', ['travel.db', 'backup-manifest.json']))
-      .toMatch(/checksum verification failed/i);
+    expect(validateBackupManifest('/restore', ['travel.db', 'backup-manifest.json'])).toMatch(
+      /checksum verification failed/i,
+    );
     expect(dbMock.closeDb).not.toHaveBeenCalled();
   });
 
   it('BACKUP-061a3 — rejects a manifest path traversal entry before file verification', () => {
     fsMock.existsSync.mockReturnValue(true);
-    fsMock.readFileSync.mockReturnValue(Buffer.from(JSON.stringify({
-      version: 1,
-      entries: [{
-        path: '../travel.db',
-        category: 'database',
-        source: 'travel.db',
-        size: 0,
-        sha256: '0'.repeat(64),
-      }],
-    })));
+    fsMock.readFileSync.mockReturnValue(
+      Buffer.from(
+        JSON.stringify({
+          version: 1,
+          entries: [
+            {
+              path: '../travel.db',
+              category: 'database',
+              source: 'travel.db',
+              size: 0,
+              sha256: '0'.repeat(64),
+            },
+          ],
+        }),
+      ),
+    );
 
-    expect(validateBackupManifest('/restore', ['../travel.db', 'backup-manifest.json']))
-      .toBe('Invalid backup: checksum manifest is malformed.');
+    expect(validateBackupManifest('/restore', ['../travel.db', 'backup-manifest.json'])).toBe(
+      'Invalid backup: checksum manifest is malformed.',
+    );
   });
 
   // The `path.isAbsolute(rel)` half of the guard is only reachable where drive letters
@@ -1147,15 +1391,18 @@ describe('BACKUP-061 restoreFromZip extraction', () => {
   // slash is normalised away and only the `..` check above can fire. Asserting it
   // unconditionally passed locally on Windows and failed on the Linux CI runner, which
   // is the wrong way round for a security test to be discovered.
-  it.runIf(process.platform === 'win32')('BACKUP-061b — a drive-letter entry path is refused the same way', async () => {
-    unzipperMock.Open.file.mockResolvedValueOnce({ files: [zipEntry('C:/Windows/system32/evil.dll')] });
+  it.runIf(process.platform === 'win32')(
+    'BACKUP-061b — a drive-letter entry path is refused the same way',
+    async () => {
+      unzipperMock.Open.file.mockResolvedValueOnce({ files: [zipEntry('C:/Windows/system32/evil.dll')] });
 
-    const result = await restoreFromZip(stubStorage(), '/data/tmp/abs.zip');
+      const result = await restoreFromZip(stubStorage(), '/data/tmp/abs.zip');
 
-    expect(result.success).toBe(false);
-    expect(result.status).toBe(400);
-    expect(fsMock.createWriteStream).not.toHaveBeenCalled();
-  });
+      expect(result.success).toBe(false);
+      expect(result.status).toBe(400);
+      expect(fsMock.createWriteStream).not.toHaveBeenCalled();
+    },
+  );
 
   it('BACKUP-061c — directory entries are skipped rather than written', async () => {
     unzipperMock.Open.file.mockResolvedValueOnce({
@@ -1217,7 +1464,15 @@ describe('BACKUP-061 restoreFromZip extraction', () => {
         .fn()
         .mockReturnValueOnce({ get: vi.fn().mockReturnValue({ integrity_check: 'ok' }) })
         .mockReturnValueOnce({
-          all: vi.fn().mockReturnValue([{ name: 'users' }, { name: 'trips' }, { name: 'trip_members' }, { name: 'places' }, { name: 'days' }]),
+          all: vi
+            .fn()
+            .mockReturnValue([
+              { name: 'users' },
+              { name: 'trips' },
+              { name: 'trip_members' },
+              { name: 'places' },
+              { name: 'days' },
+            ]),
         }),
       close: vi.fn(),
     };
@@ -1240,31 +1495,56 @@ describe('BACKUP-061 restoreFromZip extraction', () => {
 
   it('BACKUP-061g — preserves the recovery journal when rollback itself fails', async () => {
     setupSuccessfulExtraction();
+    const lifecycle = { shutdown: vi.fn(async () => {}), resume: vi.fn(async () => {}) };
+    pluginBackupMock.getPluginRestoreRuntimeLifecycle.mockReturnValueOnce(lifecycle);
     const fakeDbInstance = {
-      prepare: vi.fn()
+      prepare: vi
+        .fn()
         .mockReturnValueOnce({ get: vi.fn().mockReturnValue({ integrity_check: 'ok' }) })
-        .mockReturnValueOnce({ all: vi.fn().mockReturnValue([{ name: 'users' }, { name: 'trips' }, { name: 'trip_members' }, { name: 'places' }, { name: 'days' }]) }),
+        .mockReturnValueOnce({
+          all: vi
+            .fn()
+            .mockReturnValue([
+              { name: 'users' },
+              { name: 'trips' },
+              { name: 'trip_members' },
+              { name: 'places' },
+              { name: 'days' },
+            ]),
+        }),
       close: vi.fn(),
     };
-    DatabaseMock.mockImplementation(function () { return fakeDbInstance; });
+    DatabaseMock.mockImplementation(function () {
+      return fakeDbInstance;
+    });
     fsMock.existsSync.mockImplementation((p: string) => !String(p).includes('uploads'));
     fsMock.rmSync.mockReturnValue(undefined);
     dbMock.closeDb
       .mockReset()
       .mockImplementationOnce(() => undefined)
-      .mockImplementationOnce(() => { throw new Error('close failed during rollback'); });
+      .mockImplementationOnce(() => {
+        throw new Error('close failed during rollback');
+      });
     dbMock.reinitialize
       .mockReset()
-      .mockImplementationOnce(() => { throw new Error('restored database failed to reopen'); })
+      .mockImplementationOnce(() => {
+        throw new Error('restored database failed to reopen');
+      })
       .mockImplementation(() => undefined);
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     try {
-      await expect(restoreFromZip(stubStorage(), '/data/tmp/rollback-journal.zip'))
-        .rejects.toThrow(/automatic rollback was incomplete/i);
+      await expect(restoreFromZip(stubStorage(), '/data/tmp/rollback-journal.zip')).rejects.toThrow(
+        /automatic rollback was incomplete/i,
+      );
 
-      expect(error).toHaveBeenCalledWith(expect.stringContaining('Restore rollback incomplete'), expect.stringContaining('restore-journal-'));
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('Restore rollback incomplete'),
+        expect.stringContaining('restore-journal-'),
+      );
       expect(fsMock.rmSync.mock.calls.some(([target]) => String(target).includes('restore-journal-'))).toBe(false);
+      expect(lifecycle.shutdown).toHaveBeenCalledOnce();
+      expect(lifecycle.resume).not.toHaveBeenCalled();
     } finally {
       error.mockRestore();
       dbMock.closeDb.mockImplementation(() => undefined);
@@ -1275,36 +1555,68 @@ describe('BACKUP-061 restoreFromZip extraction', () => {
   it('BACKUP-061h — wraps a non-Error plugin staging failure', async () => {
     setupSuccessfulExtraction();
     const fakeDbInstance = {
-      prepare: vi.fn()
+      prepare: vi
+        .fn()
         .mockReturnValueOnce({ get: vi.fn().mockReturnValue({ integrity_check: 'ok' }) })
-        .mockReturnValueOnce({ all: vi.fn().mockReturnValue([{ name: 'users' }, { name: 'trips' }, { name: 'trip_members' }, { name: 'places' }, { name: 'days' }]) }),
+        .mockReturnValueOnce({
+          all: vi
+            .fn()
+            .mockReturnValue([
+              { name: 'users' },
+              { name: 'trips' },
+              { name: 'trip_members' },
+              { name: 'places' },
+              { name: 'days' },
+            ]),
+        }),
       close: vi.fn(),
     };
-    DatabaseMock.mockImplementation(function () { return fakeDbInstance; });
+    DatabaseMock.mockImplementation(function () {
+      return fakeDbInstance;
+    });
     fsMock.existsSync.mockImplementation((p: string) => !String(p).includes('uploads'));
     fsMock.rmSync.mockReturnValue(undefined);
-    pluginBackupMock.stageExtractedPluginTrees.mockImplementationOnce(() => { throw 'plugin staging unavailable'; });
+    pluginBackupMock.stageExtractedPluginTrees.mockImplementationOnce(() => {
+      throw 'plugin staging unavailable';
+    });
 
-    await expect(restoreFromZip(stubStorage(), '/data/tmp/staging-error.zip'))
-      .rejects.toThrow('Plugin restore staging failed: plugin staging unavailable');
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/staging-error.zip')).rejects.toThrow(
+      'Plugin restore staging failed: plugin staging unavailable',
+    );
     pluginBackupMock.stageExtractedPluginTrees.mockImplementation(() => false);
   });
 
   it('BACKUP-061h1 — wraps an Error plugin staging failure without losing its message', async () => {
     setupSuccessfulExtraction();
     const fakeDbInstance = {
-      prepare: vi.fn()
+      prepare: vi
+        .fn()
         .mockReturnValueOnce({ get: vi.fn().mockReturnValue({ integrity_check: 'ok' }) })
-        .mockReturnValueOnce({ all: vi.fn().mockReturnValue([{ name: 'users' }, { name: 'trips' }, { name: 'trip_members' }, { name: 'places' }, { name: 'days' }]) }),
+        .mockReturnValueOnce({
+          all: vi
+            .fn()
+            .mockReturnValue([
+              { name: 'users' },
+              { name: 'trips' },
+              { name: 'trip_members' },
+              { name: 'places' },
+              { name: 'days' },
+            ]),
+        }),
       close: vi.fn(),
     };
-    DatabaseMock.mockImplementation(function () { return fakeDbInstance; });
+    DatabaseMock.mockImplementation(function () {
+      return fakeDbInstance;
+    });
     fsMock.existsSync.mockImplementation((p: string) => !String(p).includes('uploads'));
     fsMock.rmSync.mockReturnValue(undefined);
-    pluginBackupMock.stageExtractedPluginTrees.mockImplementationOnce(() => { throw new Error('plugin stage failed'); });
+    pluginBackupMock.stageExtractedPluginTrees.mockImplementationOnce(() => {
+      throw new Error('plugin stage failed');
+    });
 
-    await expect(restoreFromZip(stubStorage(), '/data/tmp/staging-error-object.zip'))
-      .rejects.toThrow('Plugin restore staging failed: plugin stage failed');
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/staging-error-object.zip')).rejects.toThrow(
+      'Plugin restore staging failed: plugin stage failed',
+    );
     pluginBackupMock.stageExtractedPluginTrees.mockImplementation(() => false);
   });
 
@@ -1321,7 +1633,9 @@ describe('BACKUP-061 restoreFromZip extraction', () => {
     unzipperMock.Open.file.mockRejectedValueOnce(new Error('archive unreadable'));
     fsMock.existsSync.mockReturnValue(false);
 
-    await expect(restoreFromZip(stubStorage(), '/data/tmp/unreadable-no-dir.zip')).rejects.toThrow('archive unreadable');
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/unreadable-no-dir.zip')).rejects.toThrow(
+      'archive unreadable',
+    );
     expect(fsMock.rmSync).not.toHaveBeenCalledWith(expect.stringContaining('restore-'), expect.anything());
   });
 });
@@ -1374,16 +1688,17 @@ describe('BACKUP-062 sendBackupToResponse', () => {
     await sendBackupToResponse(storage, 'backup-2026-01-01T00-00-00.zip', res);
 
     expect(storage.sendToResponse).toHaveBeenCalledOnce();
-    expect(storage.sendToResponse).toHaveBeenCalledWith(
-      'backups',
-      'backup-2026-01-01T00-00-00.zip',
-      res,
-      { disposition: 'attachment; filename="backup-2026-01-01T00-00-00.zip"' },
-    );
+    expect(storage.sendToResponse).toHaveBeenCalledWith('backups', 'backup-2026-01-01T00-00-00.zip', res, {
+      disposition: 'attachment; filename="backup-2026-01-01T00-00-00.zip"',
+    });
   });
 
   it('BACKUP-062b — propagates a storage failure (the controller owns the miss contract)', async () => {
-    const storage = stubStorage({ sendToResponse: vi.fn(async () => { throw new Error('missing'); }) });
+    const storage = stubStorage({
+      sendToResponse: vi.fn(async () => {
+        throw new Error('missing');
+      }),
+    });
     const res = {} as import('express').Response;
 
     await expect(sendBackupToResponse(storage, 'backup-x.zip', res)).rejects.toThrow('missing');
@@ -1407,7 +1722,9 @@ describe('BACKUP-041 listBackups', () => {
 
   it('BACKUP-041b — returns BackupInfo for each .zip object', async () => {
     const storage = stubStorage({
-      list: listOf([{ key: 'backup-2026-01-01T00-00-00.zip', size: 1024, mtimeMs: Date.parse('2026-01-01T00:00:00Z') }]),
+      list: listOf([
+        { key: 'backup-2026-01-01T00-00-00.zip', size: 1024, mtimeMs: Date.parse('2026-01-01T00:00:00Z') },
+      ]),
     });
 
     const result = await listBackups(storage);
@@ -1480,26 +1797,38 @@ function setupSuccessfulExtraction() {
   fsMock.readFileSync.mockImplementation((p: string) =>
     String(p).endsWith('backup-manifest.json') ? manifest : Buffer.from('fixture-bytes'),
   );
-  fsMock.readSync.mockImplementation((_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
-    if (position > 0) return 0;
-    const bytes = Buffer.from('fixture-bytes');
-    bytes.copy(buffer);
-    return bytes.length;
-  });
+  fsMock.readSync.mockImplementation(
+    (_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
+      if (position > 0) return 0;
+      const bytes = Buffer.from('fixture-bytes');
+      bytes.copy(buffer);
+      return bytes.length;
+    },
+  );
   const makeEntry = (entryPath: string) => ({
-    type: 'File', path: entryPath, uncompressedSize: 13,
+    type: 'File',
+    path: entryPath,
+    uncompressedSize: 13,
     stream: () => ({
       on: vi.fn(),
-      pipe: (out: { __finish?: () => void }) => { out.__finish?.(); return out; },
+      pipe: (out: { __finish?: () => void }) => {
+        out.__finish?.();
+        return out;
+      },
     }),
   });
   unzipperMock.Open.file.mockResolvedValue({ files: [makeEntry('travel.db'), makeEntry('backup-manifest.json')] });
   fsMock.createWriteStream.mockImplementation(() => {
     const out: { __finish?: () => void; on: ReturnType<typeof vi.fn> } = {
-      on: vi.fn((event: string, callback: () => void) => { if (event === 'finish') out.__finish = callback; }),
+      on: vi.fn((event: string, callback: () => void) => {
+        if (event === 'finish') out.__finish = callback;
+      }),
     };
     return out as never;
   });
+  fsMock.statSync.mockImplementation((p: string) => ({
+    isDirectory: () => String(p).includes('.session-revocations-pending'),
+  }));
 }
 
 describe('BACKUP-064 restore admission', () => {
@@ -1509,7 +1838,9 @@ describe('BACKUP-064 restore admission', () => {
 
   it('BACKUP-064a — rejects a concurrent restore before it can touch the shared extraction or staging paths', async () => {
     let releaseFirst!: (directory: { files: never[] }) => void;
-    const firstDirectory = new Promise<{ files: never[] }>((resolve) => { releaseFirst = resolve; });
+    const firstDirectory = new Promise<{ files: never[] }>((resolve) => {
+      releaseFirst = resolve;
+    });
     let openCalls = 0;
     unzipperMock.Open.file.mockImplementation(() => {
       openCalls += 1;
@@ -1543,7 +1874,9 @@ describe('BACKUP-042 restoreFromZip — integrity check fails', () => {
   it('BACKUP-042a — returns status 400 with integrity check error message', async () => {
     setupSuccessfulExtraction();
 
-    fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-manifest.json'));
+    fsMock.existsSync.mockImplementation(
+      (p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-manifest.json'),
+    );
     fsMock.rmSync.mockReturnValue(undefined);
 
     const fakeDbInstance = {
@@ -1574,11 +1907,14 @@ describe('BACKUP-043 restoreFromZip — missing required table', () => {
   it('BACKUP-043a — returns status 400 with missing required table error', async () => {
     setupSuccessfulExtraction();
 
-    fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-manifest.json'));
+    fsMock.existsSync.mockImplementation(
+      (p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-manifest.json'),
+    );
     fsMock.rmSync.mockReturnValue(undefined);
 
     const fakeDbInstance = {
-      prepare: vi.fn()
+      prepare: vi
+        .fn()
         .mockReturnValueOnce({
           get: vi.fn().mockReturnValue({ integrity_check: 'ok' }),
         })
@@ -1608,7 +1944,9 @@ describe('BACKUP-044 restoreFromZip — Database constructor throws (invalid SQL
   it('BACKUP-044a — returns status 400 with "not a valid SQLite database" error', async () => {
     setupSuccessfulExtraction();
 
-    fsMock.existsSync.mockImplementation((p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-manifest.json'));
+    fsMock.existsSync.mockImplementation(
+      (p: string) => String(p).endsWith('travel.db') || String(p).endsWith('backup-manifest.json'),
+    );
     fsMock.rmSync.mockReturnValue(undefined);
 
     DatabaseMock.mockImplementation(function () {
@@ -1627,22 +1965,26 @@ describe('BACKUP-044 restoreFromZip — Database constructor throws (invalid SQL
 describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    dbMock.getDatabaseFilePath.mockReturnValue('/app/data/travel.db');
   });
 
   function setupAllTablesPresent() {
     const fakeDbInstance = {
-      prepare: vi.fn()
+      prepare: vi
+        .fn()
         .mockReturnValueOnce({
           get: vi.fn().mockReturnValue({ integrity_check: 'ok' }),
         })
         .mockReturnValueOnce({
-          all: vi.fn().mockReturnValue([
-            { name: 'users' },
-            { name: 'trips' },
-            { name: 'trip_members' },
-            { name: 'places' },
-            { name: 'days' },
-          ]),
+          all: vi
+            .fn()
+            .mockReturnValue([
+              { name: 'users' },
+              { name: 'trips' },
+              { name: 'trip_members' },
+              { name: 'places' },
+              { name: 'days' },
+            ]),
         }),
       close: vi.fn(),
     };
@@ -1671,13 +2013,32 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     expect(result).toEqual({ success: true });
   });
 
+  it('BACKUP-045a1 — swaps the authoritative custom database path', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    dbMock.getDatabaseFilePath.mockReturnValue('/custom/trek/live.db');
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).resolves.toEqual({ success: true });
+
+    expect(fsMock.renameSync).toHaveBeenCalledWith('/custom/trek/live.db.restore-tmp', '/custom/trek/live.db');
+  });
+
   it('BACKUP-045b — closeDb is called before file copy operations', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
 
     const callOrder: string[] = [];
-    dbMock.closeDb.mockImplementation(() => { callOrder.push('closeDb'); });
-    fsMock.copyFileSync.mockImplementation(() => { callOrder.push('copyFileSync'); });
+    dbMock.closeDb.mockImplementation(() => {
+      callOrder.push('closeDb');
+    });
+    fsMock.copyFileSync.mockImplementation(() => {
+      callOrder.push('copyFileSync');
+    });
     fsMock.unlinkSync.mockReturnValue(undefined);
     fsMock.rmSync.mockReturnValue(undefined);
 
@@ -1714,6 +2075,129 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     expect(pluginBackupMock.discardStagedPluginTrees).not.toHaveBeenCalled();
   });
 
+  it('BACKUP-045c1 — a later rollback restores the pending session-revocation journal too', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    fsMock.unlinkSync.mockReturnValue(undefined);
+    fsMock.copyFileSync.mockReturnValue(undefined);
+    fsMock.cpSync.mockReturnValue(undefined);
+    fsMock.rmSync.mockReturnValue(undefined);
+
+    const storage = stubStorage({
+      reloadConfig: vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error('restored storage config is invalid');
+        })
+        .mockImplementation(() => undefined),
+    });
+
+    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('restored storage config is invalid');
+
+    expect(
+      fsMock.cpSync.mock.calls.some(
+        ([from, to]) =>
+          String(from).includes('/core/.session-revocations-pending') &&
+          String(to).endsWith('/.session-revocations-pending'),
+      ),
+    ).toBe(true);
+  });
+
+  it('BACKUP-045c2 — a failure after session rotation restores the previous JWT secret', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    fsMock.unlinkSync.mockReturnValue(undefined);
+    fsMock.copyFileSync.mockReturnValue(undefined);
+    fsMock.cpSync.mockReturnValue(undefined);
+    fsMock.rmSync.mockReturnValue(undefined);
+
+    const storage = stubStorage({
+      reloadConfig: vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error('post-rotation failure');
+        })
+        .mockImplementation(() => undefined),
+    });
+
+    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('post-rotation failure');
+
+    expect(restoreBoundaryMock.checkpointSessionAuthority).toHaveBeenCalledOnce();
+    expect(restoreBoundaryMock.rotateSessionAuthority).toHaveBeenCalledOnce();
+    expect(restoreBoundaryMock.checkpointSessionAuthority.mock.invocationCallOrder[0]).toBeLessThan(
+      restoreBoundaryMock.rotateSessionAuthority.mock.invocationCallOrder[0],
+    );
+    expect(
+      fsMock.copyFileSync.mock.calls.some(
+        ([from, to]) =>
+          String(from).endsWith('/.jwt_secret') &&
+          String(to).includes('/core/.jwt_secret'),
+      ),
+    ).toBe(true);
+    expect(restoreBoundaryMock.restoreSessionAuthority).toHaveBeenCalledOnce();
+    expect(restoreBoundaryMock.restoreSessionAuthority.mock.invocationCallOrder[0]).toBeGreaterThan(
+      Math.max(...fsMock.copyFileSync.mock.invocationCallOrder),
+    );
+    expect(
+      fsMock.copyFileSync.mock.calls.some(
+        ([from, to]) =>
+          String(from).includes('/core/.jwt_secret') &&
+          String(to).endsWith('/.jwt_secret'),
+      ),
+    ).toBe(true);
+  });
+
+  it('BACKUP-045c3 — rollback removes a rotated JWT secret when none existed before restore', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).includes('uploads')) return false;
+      if (String(p).endsWith('/.jwt_secret')) return false;
+      return true;
+    });
+    fsMock.unlinkSync.mockReturnValue(undefined);
+    fsMock.copyFileSync.mockReturnValue(undefined);
+    fsMock.cpSync.mockReturnValue(undefined);
+    fsMock.rmSync.mockReturnValue(undefined);
+
+    const storage = stubStorage({
+      reloadConfig: vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error('post-rotation failure');
+        })
+        .mockImplementation(() => undefined),
+    });
+
+    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('post-rotation failure');
+
+    expect(
+      fsMock.rmSync.mock.calls.some(
+        ([target, options]) =>
+          String(target).endsWith('/.jwt_secret') &&
+          options?.force === true,
+      ),
+    ).toBe(true);
+    expect(restoreBoundaryMock.restoreSessionAuthority).toHaveBeenCalledOnce();
+    const jwtRemovalIndex = fsMock.rmSync.mock.calls.findIndex(([target]) =>
+      String(target).endsWith('/.jwt_secret'),
+    );
+    expect(restoreBoundaryMock.restoreSessionAuthority.mock.invocationCallOrder[0]).toBeGreaterThan(
+      fsMock.rmSync.mock.invocationCallOrder[jwtRemovalIndex],
+    );
+  });
+
   it('BACKUP-045d — never restores .encryption_key even if a legacy extraction carries one', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
@@ -1733,9 +2217,14 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     expect(result).toEqual({ success: true });
     // The old key is journaled for rollback, but a key from an archive outside
     // the manifest is never copied into the live key path.
-    expect(fsMock.copyFileSync.mock.calls.some(([from, to]) =>
-      String(from).includes('restore-') && String(from).endsWith('.encryption_key') && String(to).endsWith('/data/.encryption_key'),
-    )).toBe(false);
+    expect(
+      fsMock.copyFileSync.mock.calls.some(
+        ([from, to]) =>
+          String(from).includes('restore-') &&
+          String(from).endsWith('.encryption_key') &&
+          String(to).endsWith('/data/.encryption_key'),
+      ),
+    ).toBe(false);
   });
 
   it('BACKUP-045e — skips key restore when the archive has no .encryption_key', async () => {
@@ -1766,25 +2255,44 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     delete process.env.ENCRYPTION_KEY;
     try {
       const digest = createHash('sha256').update('fixture-bytes').digest('hex');
-      const manifest = JSON.stringify({ version: 1, entries: [
-        { path: 'travel.db', category: 'database', source: 'travel.db', size: 13, sha256: digest },
-        { path: '.encryption_key', category: 'encryption-key', source: '.encryption_key', size: 13, sha256: digest },
-      ] });
+      const manifest = JSON.stringify({
+        version: 1,
+        entries: [
+          { path: 'travel.db', category: 'database', source: 'travel.db', size: 13, sha256: digest },
+          { path: '.encryption_key', category: 'encryption-key', source: '.encryption_key', size: 13, sha256: digest },
+        ],
+      });
       const makeEntry = (entryPath: string) => ({
-        type: 'File', path: entryPath, uncompressedSize: 13,
-        stream: () => ({ on: vi.fn(), pipe: (out: { __finish?: () => void }) => { out.__finish?.(); return out; } }),
+        type: 'File',
+        path: entryPath,
+        uncompressedSize: 13,
+        stream: () => ({
+          on: vi.fn(),
+          pipe: (out: { __finish?: () => void }) => {
+            out.__finish?.();
+            return out;
+          },
+        }),
       });
-      unzipperMock.Open.file.mockResolvedValueOnce({ files: [makeEntry('travel.db'), makeEntry('.encryption_key'), makeEntry('backup-manifest.json')] });
-      fsMock.readFileSync.mockImplementation((p: string) => String(p).endsWith('backup-manifest.json') ? manifest : Buffer.from('fixture-bytes'));
-      fsMock.readSync.mockImplementation((_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
-        if (position > 0) return 0;
-        const bytes = Buffer.from('fixture-bytes');
-        bytes.copy(buffer);
-        return bytes.length;
+      unzipperMock.Open.file.mockResolvedValueOnce({
+        files: [makeEntry('travel.db'), makeEntry('.encryption_key'), makeEntry('backup-manifest.json')],
       });
+      fsMock.readFileSync.mockImplementation((p: string) =>
+        String(p).endsWith('backup-manifest.json') ? manifest : Buffer.from('fixture-bytes'),
+      );
+      fsMock.readSync.mockImplementation(
+        (_fd: number, buffer: Buffer, _offset: number, _length: number, position: number) => {
+          if (position > 0) return 0;
+          const bytes = Buffer.from('fixture-bytes');
+          bytes.copy(buffer);
+          return bytes.length;
+        },
+      );
       fsMock.createWriteStream.mockImplementation(() => {
         const out: { __finish?: () => void; on: ReturnType<typeof vi.fn> } = {
-          on: vi.fn((event: string, callback: () => void) => { if (event === 'finish') out.__finish = callback; }),
+          on: vi.fn((event: string, callback: () => void) => {
+            if (event === 'finish') out.__finish = callback;
+          }),
         };
         return out as never;
       });
@@ -1813,22 +2321,28 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     setupAllTablesPresent();
 
     const callOrder: string[] = [];
-    dbMock.reinitialize.mockImplementation(() => { callOrder.push('reinitialize'); });
+    dbMock.reinitialize.mockImplementation(() => {
+      callOrder.push('reinitialize');
+    });
 
     const dirent = (name: string, dir = false) => ({ name, isDirectory: () => dir, isFile: () => !dir });
     fsMock.existsSync.mockImplementation((p: string) => !String(p).endsWith('.encryption_key'));
     fsMock.readdirSync.mockImplementation((p: string, opts?: { withFileTypes?: boolean }) => {
       const s = String(p);
       const entries = s.endsWith('uploads') ? [dirent('files', true)] : s.endsWith('files') ? [dirent('a.pdf')] : [];
-      return (opts?.withFileTypes ? entries : entries.map(e => e.name)) as never;
+      return (opts?.withFileTypes ? entries : entries.map((e) => e.name)) as never;
     });
     fsMock.unlinkSync.mockReturnValue(undefined);
     fsMock.copyFileSync.mockReturnValue(undefined);
     fsMock.rmSync.mockReturnValue(undefined);
 
     const storage = stubStorage({
-      reloadConfig: vi.fn(() => { callOrder.push('reloadConfig'); }),
-      put: vi.fn(async () => { callOrder.push('put:rehydrate'); }),
+      reloadConfig: vi.fn(() => {
+        callOrder.push('reloadConfig');
+      }),
+      put: vi.fn(async () => {
+        callOrder.push('put:rehydrate');
+      }),
     });
 
     const result = await restoreFromZip(storage, '/data/tmp/upload.zip');
@@ -1840,6 +2354,8 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
   it('BACKUP-045g — an unavailable immediate plugin apply is not reported as a successful restore', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
+    const lifecycle = { shutdown: vi.fn(async () => {}), resume: vi.fn(async () => {}) };
+    pluginBackupMock.getPluginRestoreRuntimeLifecycle.mockReturnValueOnce(lifecycle);
     pluginBackupMock.stageExtractedPluginTrees.mockReturnValueOnce(true);
     pluginBackupMock.applyStagedRestoreNowStrict.mockResolvedValueOnce(null);
     fsMock.existsSync.mockImplementation((p: string) => {
@@ -1848,8 +2364,77 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
       return true;
     });
 
-    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow('Plugin restore could not be applied');
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow(
+      'Plugin restore could not be applied',
+    );
     expect(pluginBackupMock.discardStagedPluginTrees).toHaveBeenCalled();
+    expect(lifecycle.shutdown).toHaveBeenCalledOnce();
+    expect(lifecycle.resume).toHaveBeenCalledOnce();
+  });
+
+  it('BACKUP-045g0 — stops plugin runtime before core mutation and resumes it after a commit without plugin staging', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    const order: string[] = [];
+    const lifecycle = {
+      shutdown: vi.fn(async () => {
+        order.push('plugin shutdown');
+      }),
+      resume: vi.fn(async () => {
+        order.push('plugin resume');
+      }),
+    };
+    pluginBackupMock.getPluginRestoreRuntimeLifecycle.mockReturnValueOnce(lifecycle);
+    dbMock.closeDb.mockImplementation(() => {
+      order.push('closeDb');
+    });
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    fsMock.rmSync.mockReturnValue(undefined);
+
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).resolves.toEqual({ success: true });
+
+    expect(lifecycle.shutdown).toHaveBeenCalledOnce();
+    expect(lifecycle.resume).toHaveBeenCalledOnce();
+    expect(order.indexOf('plugin shutdown')).toBeLessThan(order.indexOf('closeDb'));
+    expect(order.indexOf('plugin resume')).toBeGreaterThan(order.lastIndexOf('closeDb'));
+    expect(pluginBackupMock.applyStagedRestoreNowStrict).not.toHaveBeenCalled();
+  });
+
+  it('BACKUP-045g0a — a drain timeout waits for unfinished plugin shutdown before scheduling resume', async () => {
+    setupSuccessfulExtraction();
+    setupAllTablesPresent();
+    let finishShutdown!: () => void;
+    const shutdownBody = new Promise<void>((resolve) => {
+      finishShutdown = resolve;
+    });
+    const lifecycle = {
+      shutdown: vi.fn(() => shutdownBody),
+      resume: vi.fn(async () => {}),
+    };
+    pluginBackupMock.getPluginRestoreRuntimeLifecycle.mockReturnValueOnce(lifecycle);
+    fsMock.existsSync.mockImplementation((p: string) => {
+      if (String(p).endsWith('travel.db')) return true;
+      if (String(p).includes('uploads')) return false;
+      return true;
+    });
+    restoreQuiescenceMock.runInRestoreQuiescence.mockImplementationOnce(async (_operation, options) => {
+      void options?.onDrainStarted?.();
+      await Promise.resolve();
+      throw new Error('restore drain timed out');
+    });
+
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow('restore drain timed out');
+
+    expect(lifecycle.shutdown).toHaveBeenCalledOnce();
+    expect(lifecycle.resume).not.toHaveBeenCalled();
+    expect(dbMock.closeDb).not.toHaveBeenCalled();
+
+    finishShutdown();
+    await vi.waitFor(() => expect(lifecycle.resume).toHaveBeenCalledOnce());
   });
 
   it('BACKUP-045g1 — commits the plugin pair receipt only after every restore phase succeeds', async () => {
@@ -1863,31 +2448,46 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     const transaction = {
       labels: ['plugins-data', 'plugins-code'],
       rollback: vi.fn(),
-      commitCleanup: vi.fn(() => { order.push('plugin commit'); }),
+      commitCleanup: vi.fn(() => {
+        order.push('plugin commit');
+      }),
+      resume: vi.fn(async () => {
+        order.push('plugin resume');
+      }),
     };
     pluginBackupMock.applyStagedRestoreNowStrict.mockResolvedValueOnce(transaction);
-    dbMock.reinitialize.mockImplementation(() => { order.push('reinitialize'); });
+    dbMock.reinitialize.mockImplementation(() => {
+      order.push('reinitialize');
+    });
     fsMock.existsSync.mockImplementation((p: string) => {
       if (String(p).endsWith('travel.db')) return true;
       if (String(p).includes('uploads')) return false;
       return true;
     });
     fsMock.rmSync.mockReturnValue(undefined);
-    const storage = stubStorage({ reloadConfig: vi.fn(() => { order.push('reloadConfig'); }) });
+    const storage = stubStorage({
+      reloadConfig: vi.fn(() => {
+        order.push('reloadConfig');
+      }),
+    });
 
     await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).resolves.toEqual({ success: true });
 
     expect(transaction.commitCleanup).toHaveBeenCalledOnce();
     expect(transaction.rollback).not.toHaveBeenCalled();
+    expect(transaction.resume).toHaveBeenCalledOnce();
     expect(order.indexOf('plugin staging')).toBeGreaterThan(order.indexOf('reinitialize'));
     expect(order.indexOf('plugin staging')).toBeGreaterThan(order.indexOf('reloadConfig'));
     expect(order.indexOf('plugin commit')).toBeGreaterThan(order.indexOf('plugin staging'));
+    expect(order.indexOf('plugin resume')).toBeGreaterThan(order.indexOf('plugin commit'));
   });
 
   it('BACKUP-045g1b — a closeDb failure cannot publish plugin staging for the next boot', async () => {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
-    dbMock.closeDb.mockImplementationOnce(() => { throw new Error('close failed'); });
+    dbMock.closeDb.mockImplementationOnce(() => {
+      throw new Error('close failed');
+    });
     fsMock.existsSync.mockImplementation((p: string) => {
       if (String(p).endsWith('travel.db')) return true;
       if (String(p).includes('uploads')) return false;
@@ -1908,11 +2508,20 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     const order: string[] = [];
     const transaction = {
       labels: ['plugins-data', 'plugins-code'],
-      rollback: vi.fn(() => { order.push('plugin rollback'); }),
-      commitCleanup: vi.fn(() => { throw new Error('plugin staging cleanup failed'); }),
+      rollback: vi.fn(() => {
+        order.push('plugin rollback');
+      }),
+      commitCleanup: vi.fn(() => {
+        throw new Error('plugin staging cleanup failed');
+      }),
+      resume: vi.fn(async () => {
+        order.push('plugin resume');
+      }),
     };
     pluginBackupMock.applyStagedRestoreNowStrict.mockResolvedValueOnce(transaction);
-    dbMock.closeDb.mockImplementation(() => { order.push('closeDb'); });
+    dbMock.closeDb.mockImplementation(() => {
+      order.push('closeDb');
+    });
     fsMock.existsSync.mockImplementation((p: string) => {
       if (String(p).endsWith('travel.db')) return true;
       if (String(p).includes('uploads')) return false;
@@ -1920,11 +2529,15 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     });
     fsMock.rmSync.mockReturnValue(undefined);
 
-    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow('plugin staging cleanup failed');
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow(
+      'plugin staging cleanup failed',
+    );
 
     expect(transaction.rollback).toHaveBeenCalledOnce();
+    expect(transaction.resume).toHaveBeenCalledOnce();
     expect(order.indexOf('plugin rollback')).toBeGreaterThanOrEqual(0);
     expect(order.indexOf('plugin rollback')).toBeLessThan(order.lastIndexOf('closeDb'));
+    expect(order.indexOf('plugin resume')).toBeGreaterThan(order.lastIndexOf('closeDb'));
     expect(pluginBackupMock.discardStagedPluginTrees).not.toHaveBeenCalled();
   });
 
@@ -1972,8 +2585,11 @@ describe('BACKUP-045 restoreFromZip — full success path (no uploads)', () => {
     fsMock.rmSync.mockReturnValue(undefined);
 
     const storage = stubStorage({
-      reloadConfig: vi.fn()
-        .mockImplementationOnce(() => { throw new Error('restored storage config is invalid'); })
+      reloadConfig: vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error('restored storage config is invalid');
+        })
         .mockImplementationOnce(() => {}),
     });
 
@@ -1994,18 +2610,21 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
 
   function setupAllTablesPresent() {
     const fakeDbInstance = {
-      prepare: vi.fn()
+      prepare: vi
+        .fn()
         .mockReturnValueOnce({
           get: vi.fn().mockReturnValue({ integrity_check: 'ok' }),
         })
         .mockReturnValueOnce({
-          all: vi.fn().mockReturnValue([
-            { name: 'users' },
-            { name: 'trips' },
-            { name: 'trip_members' },
-            { name: 'places' },
-            { name: 'days' },
-          ]),
+          all: vi
+            .fn()
+            .mockReturnValue([
+              { name: 'users' },
+              { name: 'trips' },
+              { name: 'trip_members' },
+              { name: 'places' },
+              { name: 'days' },
+            ]),
         }),
       close: vi.fn(),
     };
@@ -2026,9 +2645,9 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
     });
     fsMock.readdirSync.mockImplementation((p: string, opts?: { withFileTypes?: boolean }) => {
       const s = String(p);
-      const key = Object.keys(tree).find(k => s.endsWith(k));
+      const key = Object.keys(tree).find((k) => s.endsWith(k));
       const entries = key ? tree[key] : [];
-      return (opts?.withFileTypes ? entries : entries.map(e => e.name)) as never;
+      return (opts?.withFileTypes ? entries : entries.map((e) => e.name)) as never;
     });
     fsMock.unlinkSync.mockReturnValue(undefined);
     fsMock.copyFileSync.mockReturnValue(undefined);
@@ -2038,7 +2657,9 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
   function setupEmptyUploadArchive() {
     setupSuccessfulExtraction();
     setupAllTablesPresent();
-    fsMock.existsSync.mockImplementation((p: string) => !String(p).includes('/uploads') && !String(p).endsWith('.encryption_key'));
+    fsMock.existsSync.mockImplementation(
+      (p: string) => !String(p).includes('/uploads') && !String(p).endsWith('.encryption_key'),
+    );
     fsMock.copyFileSync.mockReturnValue(undefined);
     fsMock.rmSync.mockReturnValue(undefined);
   }
@@ -2072,15 +2693,14 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
       put: vi.fn(async () => {}),
     });
 
-    await expect(restoreFromZip(storage, '/data/tmp/empty-uploads-failure.zip'))
-      .rejects.toThrow('plugin stage failed after upload reconcile');
+    await expect(restoreFromZip(storage, '/data/tmp/empty-uploads-failure.zip')).rejects.toThrow(
+      'plugin stage failed after upload reconcile',
+    );
 
     expect(storage.delete).toHaveBeenCalledWith('files', 'old.bin');
-    expect(storage.put).toHaveBeenCalledWith(
-      'files',
-      'old.bin',
-      { tmpPath: expect.stringMatching(/restore-journal-\d+-[0-9a-f-]+\/uploads\/files\/old\.bin$/) },
-    );
+    expect(storage.put).toHaveBeenCalledWith('files', 'old.bin', {
+      tmpPath: expect.stringMatching(/restore-journal-\d+-[0-9a-f-]+\/uploads\/files\/old\.bin$/),
+    });
   });
 
   it('BACKUP-046a — writes all archive entries before removing stale existing objects', async () => {
@@ -2112,13 +2732,25 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
     // stale keys are deleted only after both uploaded archive files are put.
     const deleted = (storage.delete as ReturnType<typeof vi.fn>).mock.calls;
     expect(deleted).toHaveLength(7);
-    expect(deleted.map(([c]) => c).sort()).toEqual(['avatars', 'covers', 'files', 'journey', 'journey', 'photos', 'places']);
+    expect(deleted.map(([c]) => c).sort()).toEqual([
+      'avatars',
+      'covers',
+      'files',
+      'journey',
+      'journey',
+      'photos',
+      'places',
+    ]);
     // rehydration: every extracted file becomes a category put, nested keys intact
-    expect(storage.put).toHaveBeenCalledWith('files', 'a.pdf', { tmpPath: expect.stringContaining('/uploads/files/a.pdf') });
-    expect(storage.put).toHaveBeenCalledWith('journey', 'thumbs/t.jpg', { tmpPath: expect.stringContaining('/uploads/journey/thumbs/t.jpg') });
+    expect(storage.put).toHaveBeenCalledWith('files', 'a.pdf', {
+      tmpPath: expect.stringContaining('/uploads/files/a.pdf'),
+    });
+    expect(storage.put).toHaveBeenCalledWith('journey', 'thumbs/t.jpg', {
+      tmpPath: expect.stringContaining('/uploads/journey/thumbs/t.jpg'),
+    });
     // No uploads bulk copy remains (plugin-tree staging still uses cpSync — out of scope).
-    const cpTargets = fsMock.cpSync.mock.calls.map(c => String(c[1]));
-    expect(cpTargets.some(t => t.includes('uploads'))).toBe(false);
+    const cpTargets = fsMock.cpSync.mock.calls.map((c) => String(c[1]));
+    expect(cpTargets.some((t) => t.includes('uploads'))).toBe(false);
   });
 
   it('BACKUP-046b — fails closed when post-manifest extraction contains an invalid upload entry', async () => {
@@ -2129,8 +2761,9 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
       '/uploads/files': [dirent('a.pdf')],
       '/uploads/mystery': [dirent('b.bin')],
     });
-    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip'))
-      .rejects.toThrow('invalid upload entry: mystery/b.bin');
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/upload.zip')).rejects.toThrow(
+      'invalid upload entry: mystery/b.bin',
+    );
   });
 
   it('BACKUP-046b1 — rejects a bare extracted upload file with no storage category', async () => {
@@ -2138,8 +2771,9 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
     setupAllTablesPresent();
     setupExtractedUploads({ '/uploads': [dirent('stray.txt')] });
 
-    await expect(restoreFromZip(stubStorage(), '/data/tmp/bare-upload.zip'))
-      .rejects.toThrow('invalid upload entry: stray.txt');
+    await expect(restoreFromZip(stubStorage(), '/data/tmp/bare-upload.zip')).rejects.toThrow(
+      'invalid upload entry: stray.txt',
+    );
   });
 
   it('BACKUP-046b2 — rejects an existing inventory with an unsafe key', async () => {
@@ -2150,8 +2784,9 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
       list: listOf([{ key: '../unsafe', size: 1 }]),
     });
 
-    await expect(restoreFromZip(storage, '/data/tmp/unsafe-inventory.zip'))
-      .rejects.toThrow('Storage inventory contains an invalid key');
+    await expect(restoreFromZip(storage, '/data/tmp/unsafe-inventory.zip')).rejects.toThrow(
+      'Storage inventory contains an invalid key',
+    );
   });
 
   it('BACKUP-046b3 — rejects an existing inventory that exceeds the compensation journal cap', async () => {
@@ -2162,8 +2797,9 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
       list: listOf([{ key: 'large.bin', size: 6 * 1024 * 1024 * 1024 }]),
     });
 
-    await expect(restoreFromZip(storage, '/data/tmp/large-inventory.zip'))
-      .rejects.toThrow('bounded restore compensation journal limit');
+    await expect(restoreFromZip(storage, '/data/tmp/large-inventory.zip')).rejects.toThrow(
+      'bounded restore compensation journal limit',
+    );
   });
 
   it('BACKUP-046c — a genuine put failure still fails the restore', async () => {
@@ -2174,7 +2810,9 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
       '/uploads/files': [dirent('a.pdf')],
     });
     const storage = stubStorage({
-      put: vi.fn(async () => { throw new Error('ENOSPC: no space left'); }),
+      put: vi.fn(async () => {
+        throw new Error('ENOSPC: no space left');
+      }),
     });
 
     await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('ENOSPC');
@@ -2195,9 +2833,7 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
           yield { key: 'old.bin', size: 1, mtimeMs: 0 };
         })(),
       ),
-      put: vi.fn()
-        .mockResolvedValueOnce(undefined)
-        .mockRejectedValueOnce(new Error('second object write failed')),
+      put: vi.fn().mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('second object write failed')),
     });
 
     await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('second object write failed');
@@ -2227,7 +2863,9 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
       }),
     });
 
-    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow('later put failed after prior overwrite');
+    await expect(restoreFromZip(storage, '/data/tmp/upload.zip')).rejects.toThrow(
+      'later put failed after prior overwrite',
+    );
 
     // The first put might have overwritten the live key before the second put
     // failed. A restore is not allowed to leave that partial archive state live.
@@ -2252,7 +2890,9 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
           if (category === 'files') yield { key: 'stale.bin', size: 4, mtimeMs: 0 };
         })(),
       ),
-      put: vi.fn(async (category: string, key: string, source: unknown) => { writes.push([category, key, source]); }),
+      put: vi.fn(async (category: string, key: string, source: unknown) => {
+        writes.push([category, key, source]);
+      }),
       delete: vi.fn(async (category: string, key: string) => {
         if (category === 'files' && key === 'stale.bin') throw new Error('stale delete failed');
       }),
@@ -2284,14 +2924,20 @@ describe('BACKUP-046 restoreFromZip — uploads rehydration through storage', ()
         puts += 1;
         if (puts >= 2) throw new Error('upload write failed');
       }),
-      delete: vi.fn(async () => { throw new Error('stale cleanup failed'); }),
+      delete: vi.fn(async () => {
+        throw new Error('stale cleanup failed');
+      }),
     });
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     try {
-      await expect(restoreFromZip(storage, '/data/tmp/compensation-failure.zip'))
-        .rejects.toThrow(/automatic rollback was incomplete/i);
-      expect(error).toHaveBeenCalledWith(expect.stringContaining('Restore rollback incomplete'), expect.stringContaining('restore-journal-'));
+      await expect(restoreFromZip(storage, '/data/tmp/compensation-failure.zip')).rejects.toThrow(
+        /automatic rollback was incomplete/i,
+      );
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining('Restore rollback incomplete'),
+        expect.stringContaining('restore-journal-'),
+      );
       expect(fsMock.rmSync.mock.calls.some(([target]) => String(target).includes('restore-journal-'))).toBe(false);
     } finally {
       error.mockRestore();
@@ -2314,7 +2960,11 @@ describe('BACKUP-063 restoreBackup', () => {
     });
 
     await expect(restoreBackup(storage, 'backup-2026-01-01T00-00-00.zip')).resolves.toEqual({ success: true });
-    expect(storage.withLocalFile).toHaveBeenCalledWith('backups', 'backup-2026-01-01T00-00-00.zip', expect.any(Function));
+    expect(storage.withLocalFile).toHaveBeenCalledWith(
+      'backups',
+      'backup-2026-01-01T00-00-00.zip',
+      expect.any(Function),
+    );
   });
 
   it('BACKUP-063b — the local path handed back by storage feeds the restore core', async () => {
@@ -2325,7 +2975,11 @@ describe('BACKUP-063 restoreBackup', () => {
 
     const result = await restoreBackup(storage, 'backup-2026-01-01T00-00-00.zip');
 
-    expect(result).toMatchObject({ success: false, error: expect.stringMatching(/checksum manifest not found.*pinned previous image/i), status: 400 });
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringMatching(/checksum manifest not found.*pinned previous image/i),
+      status: 400,
+    });
   });
 });
 

@@ -1,8 +1,9 @@
-import fs from 'node:fs';
-import path from 'node:path';
+import { pluginDataDir, pluginDbFile, pluginsDataRoot } from '../paths';
+
 import Database from 'better-sqlite3';
 import type { Database as Db } from 'better-sqlite3';
-import { pluginDataDir, pluginDbFile, pluginsDataRoot } from '../paths';
+import fs from 'node:fs';
+import path from 'node:path';
 
 /**
  * A plugin's own sqlite database (#plugins, db:own). The HOST owns the handle;
@@ -49,11 +50,18 @@ const openDbs = new Set<PluginDataDb>();
 
 /** Fold the WAL back into each open plugin.db so a subsequent file copy is a complete,
  * consistent snapshot — mirrors the wal_checkpoint the core backup runs on travel.db.
- * Best-effort per handle; never throws. */
+ * A failed checkpoint makes the snapshot unsafe, so the whole operation fails closed. */
 export function checkpointAllPluginDataDbs(): void {
+  const failures: unknown[] = [];
   for (const d of openDbs) {
-    try { d.checkpoint(); } catch { /* a busy/closed handle is skipped, not fatal */ }
+    try {
+      d.checkpoint();
+    } catch (error) {
+      failures.push(error);
+    }
   }
+  if (failures.length)
+    throw new Error('Plugin data WAL checkpoint failed; refusing an incomplete backup.', { cause: failures[0] });
 }
 
 export class PluginDataDb {
@@ -71,9 +79,7 @@ export class PluginDataDb {
     const pageSize = Number(this.db.pragma('page_size', { simple: true })) || 4096;
     this.db.pragma(`max_page_count = ${Math.max(1, Math.floor(QUOTA_BYTES / pageSize))}`);
     // Track applied migrations so db.migrate is idempotent per (plugin, id).
-    this.db.exec(
-      `CREATE TABLE IF NOT EXISTS _plugin_migrations (id TEXT PRIMARY KEY, applied_at INTEGER)`,
-    );
+    this.db.exec(`CREATE TABLE IF NOT EXISTS _plugin_migrations (id TEXT PRIMARY KEY, applied_at INTEGER)`);
   }
 
   private guard(sql: string): void {
@@ -203,50 +209,144 @@ export function removePluginData(pluginId: string): void {
  * Copy every plugin's data dir into `destRoot` as a CONSISTENT snapshot, for a backup to
  * archive instead of the live tree. An open plugin.db is captured with VACUUM INTO (safe
  * under concurrent writes); a plugin with no live handle is copied as-is (no writer). The
- * -wal/-shm sidecars are never copied — the snapshot folds them in, and copying them out
- * of step with the .db is exactly what produced torn/corrupt restores when the archiver
- * read the live files lazily while a plugin kept writing. Blobs and any other files a
- * plugin wrote to its dir are copied verbatim. Best-effort per file; never throws.
+ * -wal/-shm sidecars for an open handle are never copied — the snapshot folds them in,
+ * and copying them out of step with the .db is exactly what produced torn/corrupt restores
+ * when the archiver read the live files lazily while a plugin kept writing. Blobs and any other files a
+ * plugin wrote to its dir are copied verbatim. Any VACUUM, checkpoint, copy,
+ * source-read, or inventory verification failure aborts the complete snapshot.
  */
+type PluginInventoryKind = 'directory' | 'file';
+type PluginInventory = Map<string, PluginInventoryKind>;
+
+/** Read all ordinary source entries recursively. Unsupported special entries are not
+ * plugin data and remain excluded, matching the backup walker; unreadable directories
+ * are errors because silently omitting one makes restore destructive. */
+function readPluginInventory(root: string): PluginInventory {
+  const inventory: PluginInventory = new Map();
+  const walk = (dir: string, prefix: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      throw new Error(`Plugin data source is unreadable: ${dir}`, { cause: error });
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isFile()) continue;
+      const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        inventory.set(relative, 'directory');
+        walk(path.join(dir, entry.name), relative);
+      } else {
+        inventory.set(relative, 'file');
+      }
+    }
+  };
+  walk(root, '');
+  return inventory;
+}
+
+function withoutFoldedSidecars(inventory: PluginInventory): PluginInventory {
+  return new Map(
+    [...inventory].filter(([relative]) => {
+      const name = path.basename(relative);
+      return !name.endsWith('-wal') && !name.endsWith('-shm');
+    }),
+  );
+}
+
+function assertPluginInventory(pluginId: string, expected: PluginInventory, staged: PluginInventory): void {
+  if (expected.size !== staged.size || [...expected].some(([relative, kind]) => staged.get(relative) !== kind)) {
+    const expectedEntries = [...expected]
+      .map(([relative, kind]) => `${kind}:${relative}`)
+      .sort()
+      .join(', ');
+    const stagedEntries = [...staged]
+      .map(([relative, kind]) => `${kind}:${relative}`)
+      .sort()
+      .join(', ');
+    throw new Error(
+      `Plugin data snapshot inventory mismatch for ${pluginId} (source: [${expectedEntries}], staged: [${stagedEntries}])`,
+    );
+  }
+}
+
+function readPluginRootInventory(root: string): Map<string, PluginInventoryKind> {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(`Plugin data root is unreadable: ${root}`, { cause: error });
+  }
+  const inventory = new Map<string, PluginInventoryKind>();
+  for (const entry of entries) {
+    if (entry.isDirectory()) inventory.set(entry.name, 'directory');
+    else if (entry.isFile()) inventory.set(entry.name, 'file');
+  }
+  return inventory;
+}
+
 export function snapshotAllPluginDataDbs(destRoot: string): void {
   const root = pluginsDataRoot();
   if (!fs.existsSync(root)) return;
+  fs.rmSync(destRoot, { recursive: true, force: true });
+  fs.mkdirSync(destRoot, { recursive: true });
   const openById = new Map<string, PluginDataDb>();
   for (const d of openDbs) if (d.isOpen()) openById.set(d.pluginId, d);
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
+  let rootEntries: fs.Dirent[];
+  try {
+    rootEntries = fs.readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    throw new Error(`Plugin data root is unreadable: ${root}`, { cause: error });
+  }
+  for (const entry of rootEntries) {
+    if (!entry.isDirectory()) {
+      if (entry.isFile()) throw new Error(`Unexpected file in plugin data root: ${entry.name}`);
+      continue;
+    }
     const srcDir = path.join(root, entry.name);
     const destDir = path.join(destRoot, entry.name);
     fs.mkdirSync(destDir, { recursive: true });
     const open = openById.get(entry.name);
-    // Handle the live db up front so we know whether its WAL got folded in. If both
-    // the VACUUM INTO snapshot and the checkpoint fail, the -wal/-shm are NOT folded,
-    // so they must be copied alongside the .db — a .db stripped of an un-checkpointed
-    // WAL loses committed transactions, whereas the .db + its WAL is a recoverable set.
+    const sourceBefore = readPluginInventory(srcDir);
     let foldedIn = false;
     if (open) {
-      try { open.snapshotInto(path.join(destDir, 'plugin.db')); foldedIn = true; }
-      catch {
-        try { open.checkpoint(); foldedIn = true; } catch { /* WAL not folded — keep sidecars */ }
-        try { fs.copyFileSync(path.join(srcDir, 'plugin.db'), path.join(destDir, 'plugin.db')); }
-        catch { /* unreadable live db — best effort */ }
+      try {
+        open.snapshotInto(path.join(destDir, 'plugin.db'));
+        foldedIn = true;
+      } catch (error) {
+        throw new Error(`Plugin data database snapshot failed for ${entry.name}; refusing an incomplete backup.`, {
+          cause: error,
+        });
       }
     }
-    for (const f of fs.readdirSync(srcDir, { withFileTypes: true })) {
-      if (f.name === 'plugin.db' && open) continue; // already snapshotted above
-      // Skip the .db sidecars only when the live handle's WAL was folded in — VACUUM
-      // INTO / checkpoint absorbs them, and copying them out of step with a live writer
-      // is what produced torn restores. For a plugin with NO open handle there is no
-      // writer, so the -wal/-shm are a consistent set with the .db; copy them too, or an
-      // unclean shutdown's committed-but-uncheckpointed transactions (still sitting in
-      // the WAL) would be lost from the backup.
-      if ((f.name.endsWith('-wal') || f.name.endsWith('-shm')) && foldedIn) continue;
-      const src = path.join(srcDir, f.name);
-      const dest = path.join(destDir, f.name);
+    for (const [relative, kind] of sourceBefore) {
+      if (relative === 'plugin.db' && open) continue;
+      const name = path.basename(relative);
+      if ((name.endsWith('-wal') || name.endsWith('-shm')) && foldedIn) continue;
+      const src = path.join(srcDir, relative);
+      const dest = path.join(destDir, relative);
       try {
-        if (f.isDirectory()) fs.cpSync(src, dest, { recursive: true });
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        if (kind === 'directory') fs.cpSync(src, dest, { recursive: true });
         else fs.copyFileSync(src, dest);
-      } catch { /* skip an unreadable entry rather than fail the whole backup */ }
+      } catch (error) {
+        throw new Error(`Plugin data entry copy failed for ${entry.name}/${relative}; refusing an incomplete backup.`, {
+          cause: error,
+        });
+      }
     }
+    const sourceAfter = readPluginInventory(srcDir);
+    const expected = foldedIn ? withoutFoldedSidecars(sourceAfter) : sourceAfter;
+    const staged = readPluginInventory(destDir);
+    assertPluginInventory(entry.name, expected, staged);
+  }
+  const rootBefore = new Map<string, PluginInventoryKind>();
+  for (const entry of rootEntries) {
+    if (entry.isDirectory()) rootBefore.set(entry.name, 'directory');
+    else if (entry.isFile()) rootBefore.set(entry.name, 'file');
+  }
+  const rootAfter = readPluginRootInventory(root);
+  if (rootBefore.size !== rootAfter.size || [...rootBefore].some(([name, kind]) => rootAfter.get(name) !== kind)) {
+    throw new Error('Plugin data snapshot root inventory changed during backup; refusing an incomplete backup.');
   }
 }

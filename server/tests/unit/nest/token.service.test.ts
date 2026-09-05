@@ -1,3 +1,20 @@
+// ---------------------------------------------------------------------------
+// Imports (after mocks)
+// ---------------------------------------------------------------------------
+import { runMigrations } from '../../../src/db/migrations';
+import { createTables } from '../../../src/db/schema';
+import { revokeUserSessions } from '../../../src/mcp/sessionManager';
+import { EphemeralTokenService } from '../../../src/nest/auth/ephemeral-token.service';
+import { createEphemeralToken } from '../../../src/nest/auth/ephemeral-tokens';
+import { DatabaseService } from '../../../src/nest/database/database.service';
+import { TokenService } from '../../../src/nest/tokens/token.service';
+import { TokensModule } from '../../../src/nest/tokens/tokens.module';
+import { createUser } from '../../helpers/factories';
+import { expectRegisteredProvider } from '../../helpers/module-providers';
+import { resetTestDb } from '../../helpers/test-db';
+
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
+
 /**
  * token.service.test.ts
  *
@@ -30,23 +47,6 @@ const { testDb, dbMock } = vi.hoisted(() => {
 vi.mock('../../../src/db/database', () => dbMock);
 vi.mock('../../../src/nest/auth/ephemeral-tokens', () => ({ createEphemeralToken: vi.fn() }));
 vi.mock('../../../src/mcp/sessionManager', () => ({ revokeUserSessions: vi.fn() }));
-
-// ---------------------------------------------------------------------------
-// Imports (after mocks)
-// ---------------------------------------------------------------------------
-
-import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
-import { createTables } from '../../../src/db/schema';
-import { runMigrations } from '../../../src/db/migrations';
-import { resetTestDb } from '../../helpers/test-db';
-import { createUser } from '../../helpers/factories';
-import { TokenService } from '../../../src/nest/tokens/token.service';
-import { TokensModule } from '../../../src/nest/tokens/tokens.module';
-import { DatabaseService } from '../../../src/nest/database/database.service';
-import { createEphemeralToken } from '../../../src/nest/auth/ephemeral-tokens';
-import { revokeUserSessions } from '../../../src/mcp/sessionManager';
-import { expectRegisteredProvider } from '../../helpers/module-providers';
-import { EphemeralTokenService } from '../../../src/nest/auth/ephemeral-token.service';
 
 const svc = new TokenService(new DatabaseService(testDb), new EphemeralTokenService());
 
@@ -91,9 +91,9 @@ describe('MCP token service', () => {
   it('AUTH-DB-044: createMcpToken returns 400 when user has 10 tokens already', () => {
     const { user } = createUser(testDb);
     for (let i = 0; i < 10; i++) {
-      testDb.prepare(
-        'INSERT INTO mcp_tokens (user_id, name, token_hash, token_prefix) VALUES (?, ?, ?, ?)'
-      ).run(user.id, `Token ${i}`, `hash${i}`, `trek_prefix${i}`);
+      testDb
+        .prepare('INSERT INTO mcp_tokens (user_id, name, token_hash, token_prefix) VALUES (?, ?, ?, ?)')
+        .run(user.id, `Token ${i}`, `hash${i}`, `trek_prefix${i}`);
     }
     const result = svc.createMcpToken(user.id, 'One More');
     expect(result.status).toBe(400);
@@ -121,7 +121,9 @@ describe('MCP token service', () => {
     const { user } = createUser(testDb);
     const created = svc.createMcpToken(user.id, 'sweep-down');
     const tokenId = String((created.token as { id: number }).id);
-    vi.mocked(revokeUserSessions).mockImplementationOnce(() => { throw new Error('sweep down'); });
+    vi.mocked(revokeUserSessions).mockImplementationOnce(() => {
+      throw new Error('sweep down');
+    });
 
     expect(svc.deleteMcpToken(user.id, tokenId)).toEqual({ success: true });
     expect(testDb.prepare('SELECT id FROM mcp_tokens WHERE id = ?').get(tokenId)).toBeUndefined();
@@ -264,8 +266,8 @@ describe('MCP token service (admin view)', () => {
 
     const all = svc.listAllMcpTokens() as Record<string, unknown>[];
     expect(all).toHaveLength(2);
-    expect(all.every(t => typeof t.username === 'string')).toBe(true);
-    expect(all.some(t => t.token_hash !== undefined)).toBe(false);
+    expect(all.every((t) => typeof t.username === 'string')).toBe(true);
+    expect(all.some((t) => t.token_hash !== undefined)).toBe(false);
   });
 
   it('TOKEN-004: adminDeleteMcpToken removes any user token and revokes that user', () => {
@@ -289,18 +291,23 @@ describe('MCP token service (admin view)', () => {
 // ---------------------------------------------------------------------------
 
 describe('ephemeral tokens', () => {
+  const binding = { pv: 0, sid: 'browser-session' };
+
   it('AUTH-DB-086: createResourceToken rejects a non-download purpose and 503s when the store is down', () => {
     const { user } = createUser(testDb);
-    expect(svc.createResourceToken(user.id, 'exfiltrate')).toEqual({ error: 'Invalid purpose', status: 400 });
-    expect(svc.createResourceToken(user.id, 'download')).toEqual({ error: 'Service unavailable', status: 503 });
+    expect(svc.createResourceToken(user.id, 'exfiltrate', binding)).toEqual({ error: 'Invalid purpose', status: 400 });
+    expect(svc.createResourceToken(user.id, 'download', binding)).toEqual({
+      error: 'Service unavailable',
+      status: 503,
+    });
     vi.mocked(createEphemeralToken).mockReturnValueOnce('tok-1');
-    expect(svc.createResourceToken(user.id, 'download')).toEqual({ token: 'tok-1' });
+    expect(svc.createResourceToken(user.id, 'download', binding)).toEqual({ token: 'tok-1' });
   });
 
   it('AUTH-DB-087: createWsToken returns the ephemeral token when the store answers', () => {
     const { user } = createUser(testDb);
     vi.mocked(createEphemeralToken).mockReturnValueOnce('ws-tok');
-    expect(svc.createWsToken(user.id)).toEqual({ token: 'ws-tok' });
+    expect(svc.createWsToken(user.id, binding)).toEqual({ token: 'ws-tok' });
   });
 
   it('TOKEN-006: createWsToken binds the caller password_version, so a pre-reset token is rejected on connect', () => {
@@ -308,20 +315,31 @@ describe('ephemeral tokens', () => {
     testDb.prepare('UPDATE users SET password_version = 7 WHERE id = ?').run(user.id);
     vi.mocked(createEphemeralToken).mockReturnValueOnce('ws-tok');
 
-    svc.createWsToken(user.id);
-    expect(createEphemeralToken).toHaveBeenCalledWith(user.id, 'ws', { pv: 7 });
+    svc.createWsToken(user.id, { pv: 7, sid: 'source-session' });
+    expect(createEphemeralToken).toHaveBeenCalledWith(user.id, 'ws', { pv: 7, sid: 'source-session' });
+  });
+
+  it('TOKEN-006b: ws and download capabilities inherit the browser session lineage', () => {
+    const { user } = createUser(testDb);
+    vi.mocked(createEphemeralToken).mockReturnValue('derived-token');
+
+    svc.createWsToken(user.id, binding);
+    expect(createEphemeralToken).toHaveBeenCalledWith(user.id, 'ws', { pv: 0, sid: 'browser-session' });
+
+    svc.createResourceToken(user.id, 'download', binding);
+    expect(createEphemeralToken).toHaveBeenCalledWith(user.id, 'download', { pv: 0, sid: 'browser-session' });
   });
 
   it('TOKEN-007: createWsToken falls back to pv 0 for a user row without one', () => {
     vi.mocked(createEphemeralToken).mockReturnValueOnce('ws-tok');
-    svc.createWsToken(99999);
-    expect(createEphemeralToken).toHaveBeenCalledWith(99999, 'ws', { pv: 0 });
+    svc.createWsToken(99999, binding);
+    expect(createEphemeralToken).toHaveBeenCalledWith(99999, 'ws', binding);
   });
 
   it('TOKEN-008: createWsToken reports 503 when the store refuses', () => {
     const { user } = createUser(testDb);
     vi.mocked(createEphemeralToken).mockReturnValueOnce(null as unknown as string);
-    expect(svc.createWsToken(user.id)).toEqual({ error: 'Service unavailable', status: 503 });
+    expect(svc.createWsToken(user.id, binding)).toEqual({ error: 'Service unavailable', status: 503 });
   });
 });
 
@@ -345,10 +363,16 @@ describe('verifyMcpToken', () => {
     const created = svc.createMcpToken(user.id, 'stamped');
     const raw = (created.token as { raw_token: string }).raw_token;
     const id = (created.token as { id: number }).id;
-    expect((testDb.prepare('SELECT last_used_at FROM mcp_tokens WHERE id = ?').get(id) as { last_used_at: string | null }).last_used_at).toBeNull();
+    expect(
+      (testDb.prepare('SELECT last_used_at FROM mcp_tokens WHERE id = ?').get(id) as { last_used_at: string | null })
+        .last_used_at,
+    ).toBeNull();
 
     svc.verifyMcpToken(raw);
-    expect((testDb.prepare('SELECT last_used_at FROM mcp_tokens WHERE id = ?').get(id) as { last_used_at: string | null }).last_used_at).not.toBeNull();
+    expect(
+      (testDb.prepare('SELECT last_used_at FROM mcp_tokens WHERE id = ?').get(id) as { last_used_at: string | null })
+        .last_used_at,
+    ).not.toBeNull();
 
     svc.verifyMcpToken('trek_wrong');
     expect(testDb.prepare('SELECT COUNT(*) c FROM mcp_tokens').get()).toEqual({ c: 1 });

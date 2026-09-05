@@ -1,9 +1,11 @@
-import { Controller, Get, Res } from '@nestjs/common';
-import type { Response } from 'express';
-import { KitineraryExtractorService } from '../booking-import/kitinerary-extractor.service';
-import { AddonsService } from '../addons/addons.service';
 import { ADDON_IDS } from '../../addons';
+import { AddonsService } from '../addons/addons.service';
 import { Public } from '../auth/public.decorator';
+import { RestoreQuiescenceProbe } from '../backup/restore-quiescence.interceptor';
+import { KitineraryExtractorService } from '../booking-import/kitinerary-extractor.service';
+import { Controller, Get, Res } from '@nestjs/common';
+
+import type { Response } from 'express';
 
 /** Exposes the container probe and the server feature flags consumed by the
  *  frontend to show/hide optional UI. */
@@ -19,6 +21,7 @@ export class FeaturesController {
    *  path inside globalMiddleware, so probes work regardless of proxy setup;
    *  @Res() keeps the exact legacy header casing and body bytes. */
   @Get()
+  @RestoreQuiescenceProbe()
   health(@Res() res: Response): void {
     res.setHeader('Cache-Control', 'no-store, must-revalidate');
     res.json({ status: 'ok' });

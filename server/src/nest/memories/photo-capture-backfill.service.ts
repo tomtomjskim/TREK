@@ -1,8 +1,10 @@
-import { Injectable } from '@nestjs/common';
-import exifr from 'exifr';
-import { PhotoResolverService } from './photo-resolver.service';
-import { StorageService } from '../storage/storage.service';
+import { RestoreInProgressError, runTrackedApplicationWork } from '../backup/restore-quiescence';
 import { TrekPhotosRepository } from '../photos/trek-photos.repository';
+import { StorageService } from '../storage/storage.service';
+import { PhotoResolverService } from './photo-resolver.service';
+import { Injectable } from '@nestjs/common';
+
+import exifr from 'exifr';
 
 /**
  * Ask the provider when and where a photo was taken, and record it (#1614).
@@ -33,6 +35,16 @@ export class PhotoCaptureBackfillService {
 
   /** Awaitable form, so tests do not have to chase a floating promise. */
   async run(trekPhotoIds: number[], userId: number): Promise<void> {
+    try {
+      await runTrackedApplicationWork(() => this.runAdmitted(trekPhotoIds, userId));
+    } catch (err) {
+      // A scheduled task racing with restore has no request to report 503 to;
+      // simply leave the rows untouched and let the next import retry it.
+      if (!(err instanceof RestoreInProgressError)) throw err;
+    }
+  }
+
+  private async runAdmitted(trekPhotoIds: number[], userId: number): Promise<void> {
     for (const id of trekPhotoIds) {
       try {
         const photo = this.photos.resolve(id);
@@ -84,10 +96,13 @@ export class PhotoCaptureBackfillService {
     type Exif = { DateTimeOriginal?: Date; CreateDate?: Date; latitude?: number; longitude?: number };
     let parsed: Exif | null;
     try {
-      parsed = await this.storage.withLocalFile('journey', name, async abs =>
-        (await exifr.parse(abs, {
-          pick: ['DateTimeOriginal', 'CreateDate', 'latitude', 'longitude'],
-        })) as Exif | null,
+      parsed = await this.storage.withLocalFile(
+        'journey',
+        name,
+        async (abs) =>
+          (await exifr.parse(abs, {
+            pick: ['DateTimeOriginal', 'CreateDate', 'latitude', 'longitude'],
+          })) as Exif | null,
       );
     } catch {
       // A vanished object, an invalid key, not an image, a truncated upload,

@@ -1,15 +1,16 @@
-import { Injectable } from '@nestjs/common';
 import { ADDON_IDS } from '../../addons';
+import { AddonsService } from '../addons/addons.service';
+import { logError } from '../audit/audit-log.logger';
+import { runTrackedApplicationWork } from '../backup/restore-quiescence';
 import { DatabaseService } from '../database/database.service';
 import { RealtimeService } from '../realtime/realtime.service';
-import { AddonsService } from '../addons/addons.service';
 import { ReservationsReadRepository } from '../reservations/reservations-read.repository';
-import { logError } from '../audit/audit-log.logger';
+import { buildSavePayload } from './airtrail-sync.helpers';
 import { AirtrailAuthError, type AirtrailCreds, type AirtrailFlightRaw } from './airtrail.client';
 import { AirtrailClient } from './airtrail.client';
-import { AirtrailService } from './airtrail.service';
 import { canonicalHash } from './airtrail.mapper';
-import { buildSavePayload } from './airtrail-sync.helpers';
+import { AirtrailService } from './airtrail.service';
+import { Injectable } from '@nestjs/common';
 
 /**
  * The AirTrail link lifecycle — the enablement gate, the detach policy, the
@@ -43,7 +44,8 @@ export class AirtrailLinkService {
   broadcastUpdated(tripId: number, reservationId: number): void {
     try {
       const reservation = this.reads.getReservationWithJoins(reservationId);
-      if (reservation) this.realtime.broadcast(String(tripId), 'reservation:updated', { reservation } as never, undefined);
+      if (reservation)
+        this.realtime.broadcast(String(tripId), 'reservation:updated', { reservation } as never, undefined);
     } catch {
       /* broadcast failure is non-fatal */
     }
@@ -82,10 +84,18 @@ export class AirtrailLinkService {
    * next pull's AirTrail-wins policy can't silently revert the local edit.
    */
   async pushReservationToAirtrail(reservationId: number, tripId: number): Promise<void> {
+    return runTrackedApplicationWork(() => this.pushReservationToAirtrailAdmitted(reservationId, tripId));
+  }
+
+  private async pushReservationToAirtrailAdmitted(reservationId: number, tripId: number): Promise<void> {
     if (!this.syncGloballyEnabled()) return;
 
     const row = this.db.get<{
-      id: number; trip_id: number; external_id: string; external_owner_user_id: number | null; sync_enabled: number;
+      id: number;
+      trip_id: number;
+      external_id: string;
+      external_owner_user_id: number | null;
+      sync_enabled: number;
     }>(
       "SELECT id, trip_id, external_id, external_owner_user_id, sync_enabled FROM reservations WHERE id = ? AND external_source = 'airtrail'",
       reservationId,

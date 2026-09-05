@@ -1,7 +1,8 @@
-import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 import { logError } from '../audit/audit-log.logger';
+import { runTrackedApplicationWork } from '../backup/restore-quiescence';
 import { CronRegistrarService } from '../scheduling/cron-registrar.service';
 import { TrekPhotoCacheService } from './trek-photo-cache.service';
+import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 
 /**
  * Trek photo cache cleanup: every 2 hours — evict disk files and DB rows past
@@ -19,14 +20,19 @@ export class TrekPhotoCacheJob implements OnApplicationBootstrap {
   onApplicationBootstrap(): void {
     if (!this.registrar.isEnabled()) return;
     // Run once immediately on startup to evict any entries left over from a previous run
-    void (async () => {
-      try {
-        await this.cache.sweepExpired();
-      } catch { /* cache dir may not exist yet — harmless */ }
-    })();
-    this.registrar.register('trek-photo-cache', '0 */2 * * *', () => {
-      void this.tick();
-    }, { timezone: 'none' });
+    try {
+      void runTrackedApplicationWork(async () => {
+        try {
+          await this.cache.sweepExpired();
+        } catch {
+          /* cache dir may not exist yet — harmless */
+        }
+      });
+    } catch {
+      // A restore can begin as bootstrap completes; its next scheduled sweep
+      // will retry after the service reopens.
+    }
+    this.registrar.register('trek-photo-cache', '0 */2 * * *', () => this.tick(), { timezone: 'none' });
   }
 
   async tick(): Promise<void> {

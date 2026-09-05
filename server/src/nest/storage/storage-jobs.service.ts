@@ -1,7 +1,9 @@
-import fs from 'node:fs';
-import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import { pipeline } from 'node:stream/promises';
+import { runTrackedApplicationWork } from '../backup/restore-quiescence';
+import { contentTypeFor } from './content-type';
+import { MirrorDriver } from './drivers/mirror.driver';
+import { GLOBAL_TEMP_DIR } from './storage-paths';
+import { StorageRegistryService } from './storage-registry.service';
+import type { StorageDriver } from './storage.types';
 import { Injectable, Logger } from '@nestjs/common';
 import {
   STORAGE_CATEGORIES,
@@ -9,11 +11,11 @@ import {
   type StorageCategory,
   type StorageMigrationStatus,
 } from '@trek/shared';
-import { contentTypeFor } from './content-type';
-import { MirrorDriver } from './drivers/mirror.driver';
-import { GLOBAL_TEMP_DIR } from './storage-paths';
-import { StorageRegistryService } from './storage-registry.service';
-import type { StorageDriver } from './storage.types';
+
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 export class BackfillTargetError extends Error {}
 export class BackfillBusyError extends Error {}
@@ -64,9 +66,7 @@ export class StorageJobsService {
     // even while a sync is running — the busy check only applies once we
     // know there's a real mirror to be busy about.
     const snapshot = this.registry.snapshot();
-    const categories = STORAGE_CATEGORIES.filter(
-      (category) => snapshot.categories[category]?.backend === mirrorName,
-    );
+    const categories = STORAGE_CATEGORIES.filter((category) => snapshot.categories[category]?.backend === mirrorName);
     if (categories.length === 0) {
       throw new BackfillTargetError(`'${mirrorName}' is not a mirror routed by any category`);
     }
@@ -94,17 +94,22 @@ export class StorageJobsService {
         startedAt: Date.now(),
       },
     };
-    this.jobs.set(mirrorName, job);
-
     // Detached: the driver instances are resolved above, so a registry
     // reload() mid-run keeps this job on them (the in-flight guarantee).
-    void driver
-      .backfill(prefixes, {
+    // Acquire restore admission before publishing a running status. Admission
+    // can fail synchronously once restore starts draining; publishing first
+    // would leave a permanent phantom job that blocks every later operation.
+    const work = runTrackedApplicationWork(() =>
+      driver.backfill(prefixes, {
         onProgress: (progress) => {
           job.status = { ...job.status, ...progress };
         },
         isCancelled: () => job.cancelled,
-      })
+      }),
+    );
+    this.jobs.set(mirrorName, job);
+
+    void work
       .then((result) => {
         job.status = {
           ...job.status,
@@ -181,9 +186,15 @@ export class StorageJobsService {
         startedAt: Date.now(),
       },
     };
-    this.migrations.set(category, job);
     // Detached, driver instances resolved above (in-flight guarantee, same as backfill).
-    void this.runMigration(job, current.driver, target, current.keyPrefix, destPrefix)
+    // As with backfill, do not expose a running status until restore admission
+    // has succeeded; runTrackedApplicationWork may reject synchronously.
+    const work = runTrackedApplicationWork(() =>
+      this.runMigration(job, current.driver, target, current.keyPrefix, destPrefix),
+    );
+    this.migrations.set(category, job);
+
+    void work
       .catch((err: unknown) => {
         job.status = {
           ...job.status,

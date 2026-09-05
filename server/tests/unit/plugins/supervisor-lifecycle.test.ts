@@ -5,6 +5,12 @@
  * crash-restart cycle doesn't leak the dead child's cron tasks.
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import {
+  admitApplicationRequest,
+  resetRestoreQuiescenceForTests,
+  RestoreInProgressError,
+  runInRestoreQuiescence,
+} from '../../../src/nest/backup/restore-quiescence';
 import { PluginSupervisor } from '../../../src/nest/plugins/supervisor/plugin-supervisor';
 import { RpcRateLimiter, TokenBucket } from '../../../src/nest/plugins/host/rate-limit';
 
@@ -20,6 +26,272 @@ function makeSupervisor() {
 // Reaches into the private `running` map so a case can assert on the live entry.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const entry = (s: PluginSupervisor, id: string): { status: string } => (s as any).running.get(id);
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function activeInvocationEntry(send = vi.fn()) {
+  return {
+    id: 'p',
+    status: 'active',
+    child: { send },
+    pending: new Map(),
+    invocations: new Map(),
+  };
+}
+
+describe('supervisor restore quiescence boundary', () => {
+  afterEach(() => resetRestoreQuiescenceForTests());
+
+  it('keeps restore draining until a host-to-child invoke receives its response', async () => {
+    const { s } = makeSupervisor();
+    const sup = activeInvocationEntry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).running.set('p', sup);
+
+    const invocation = s.invoke('p', 'invoke.route', { routeId: 1 });
+    const request = sup.child.send.mock.calls[0][0] as { id: string };
+    let restoreEntered = false;
+    let finishRestore!: () => void;
+    const restoreBody = new Promise<void>((resolve) => {
+      finishRestore = resolve;
+    });
+    const restore = runInRestoreQuiescence(async () => {
+      restoreEntered = true;
+      await restoreBody;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    const enteredWhileInvokePending = restoreEntered;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).onMessage(sup, { k: 'res', id: request.id, ok: true, result: 'ok' });
+    await expect(invocation).resolves.toBe('ok');
+    await vi.waitFor(() => expect(restoreEntered).toBe(true));
+    finishRestore();
+    await restore;
+
+    expect(enteredWhileInvokePending).toBe(false);
+  });
+
+  it('keeps restore draining until a host-to-child invoke reaches its timeout', async () => {
+    const { s } = makeSupervisor();
+    const sup = activeInvocationEntry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).running.set('p', sup);
+
+    const invocation = s.invoke('p', 'invoke.route', { routeId: 1 }, { timeoutMs: 5 });
+    let restoreEntered = false;
+    const restore = runInRestoreQuiescence(async () => {
+      restoreEntered = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(restoreEntered).toBe(false);
+    await expect(invocation).rejects.toThrow('plugin invoke timed out');
+    await restore;
+    expect(restoreEntered).toBe(true);
+  });
+
+  it('returns a rejected Promise without sending when restore already owns admission', async () => {
+    const { s } = makeSupervisor();
+    const sup = activeInvocationEntry();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).running.set('p', sup);
+    const blocker = admitApplicationRequest()!;
+    let finishRestore!: () => void;
+    const restore = runInRestoreQuiescence(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRestore = resolve;
+        }),
+    );
+
+    let invocation!: Promise<unknown>;
+    expect(() => {
+      invocation = s.invoke('p', 'invoke.route', { routeId: 1 }, { timeoutMs: 5 });
+    }).not.toThrow();
+    const error = await invocation.catch((caught) => caught);
+
+    blocker.release();
+    await vi.waitFor(() => expect(finishRestore).toBeTypeOf('function'));
+    finishRestore();
+    await restore;
+
+    expect(error).toBeInstanceOf(RestoreInProgressError);
+    expect(sup.child.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps restore draining until an admitted child-to-host RPC dispatch completes', async () => {
+    const { s } = makeSupervisor();
+    let finishDispatch!: () => void;
+    const dispatchBody = new Promise<void>((resolve) => {
+      finishDispatch = resolve;
+    });
+    const dispatch = vi.fn(async () => {
+      await dispatchBody;
+      return { k: 'res', id: 'rpc-1', ok: true, result: 'ok' };
+    });
+    const send = vi.fn();
+    const sup = {
+      id: 'p', status: 'active', child: { send }, rpcHost: { dispatch },
+      invocations: new Map(), pending: new Map(),
+      rpcLimiter: new RpcRateLimiter({ burst: 1, perSec: 0, maxInFlight: 8 }, 0),
+    };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rpc = (s as any).onMessage(sup, { k: 'req', id: 'rpc-1', method: 'db.query', params: {} });
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+    let restoreEntered = false;
+    const restore = runInRestoreQuiescence(async () => {
+      restoreEntered = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(restoreEntered).toBe(false);
+
+    finishDispatch();
+    await rpc;
+    await restore;
+    expect(restoreEntered).toBe(true);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ k: 'res', id: 'rpc-1', ok: true }));
+  });
+
+  it('refuses a child-to-host RPC without dispatching while restore owns admission', async () => {
+    const { s } = makeSupervisor();
+    const dispatch = vi.fn();
+    const send = vi.fn();
+    const sup = {
+      id: 'p', status: 'active', child: { send }, rpcHost: { dispatch },
+      invocations: new Map(), pending: new Map(),
+      rpcLimiter: new RpcRateLimiter({ burst: 1, perSec: 0, maxInFlight: 8 }, 0),
+    };
+    const blocker = admitApplicationRequest()!;
+    let finishRestore!: () => void;
+    const restore = runInRestoreQuiescence(
+      () => new Promise<void>((resolve) => {
+        finishRestore = resolve;
+      }),
+    );
+    blocker.release();
+    await vi.waitFor(() => expect(finishRestore).toBeTypeOf('function'));
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).onMessage(sup, { k: 'req', id: 'rpc-2', method: 'db.query', params: {} });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      k: 'res',
+      id: 'rpc-2',
+      ok: false,
+      error: expect.objectContaining({ code: 'HOST_ERROR', message: expect.stringMatching(/restore/i) }),
+    }));
+    finishRestore();
+    await restore;
+  });
+
+  it('defers an activation deadline while restore is blocked, then applies it after reopen', async () => {
+    const { s } = makeSupervisor();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).tuning.activationTimeoutMs = 1;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).kill = vi.fn(async () => {});
+    const activation = s.activate('p', new Set());
+    activation.catch(() => {});
+    const sup = entry(s, 'p');
+    let finishRestore!: () => void;
+    const restore = runInRestoreQuiescence(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRestore = resolve;
+        }),
+    );
+
+    await vi.waitFor(() => expect(finishRestore).toBeTypeOf('function'));
+    await wait(10);
+    const statusDuringRestore = sup.status;
+
+    finishRestore();
+    await restore;
+    await expect(activation).rejects.toThrow('plugin did not finish loading in time');
+
+    expect(statusDuringRestore).toBe('starting');
+    expect(entry(s, 'p')).toBeUndefined();
+    await s.shutdownAll();
+  });
+
+  it('defers a crash respawn while restore is blocked, then retries after reopen', async () => {
+    const { s, spawn } = makeSupervisor();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).tuning.backoffCapMs = 1;
+    const sup = {
+      id: 'p',
+      status: 'active',
+      child: {},
+      jobTasks: undefined,
+      pending: new Map(),
+      invocations: new Map(),
+      crashes: [],
+      rpcHost: { dispose: vi.fn() },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).running.set('p', sup);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).onExit(sup, 1, null);
+    let finishRestore!: () => void;
+    const restore = runInRestoreQuiescence(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRestore = resolve;
+        }),
+    );
+
+    await vi.waitFor(() => expect(finishRestore).toBeTypeOf('function'));
+    await wait(10);
+    const spawnsDuringRestore = spawn.mock.calls.length;
+
+    finishRestore();
+    await restore;
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(1));
+    await s.shutdownAll();
+
+    expect(spawnsDuringRestore).toBe(0);
+  });
+
+  it('skips the stale-child sweep while restore is blocked and resumes on the next interval', async () => {
+    vi.useFakeTimers();
+    const { s } = makeSupervisor();
+    const reapStale = vi.spyOn(s, 'reapStale');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).ensureSweep();
+    let finishRestore!: () => void;
+    const restore = runInRestoreQuiescence(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRestore = resolve;
+        }),
+    );
+
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(5000);
+      const sweepsDuringRestore = reapStale.mock.calls.length;
+
+      finishRestore();
+      await restore;
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(sweepsDuringRestore).toBe(0);
+      expect(reapStale).toHaveBeenCalledTimes(1);
+    } finally {
+      await s.shutdownAll();
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe('supervisor re-activation after failure', () => {
   const supers: PluginSupervisor[] = [];
@@ -68,6 +340,61 @@ describe('supervisor shutdownAll is a clean stop, not a crash', () => {
     expect(onLog).not.toHaveBeenCalledWith('p', 'warn', expect.stringContaining('crashed'));
     expect(onStatus).not.toHaveBeenCalledWith('p', 'error', expect.anything());
     expect(onStatus).not.toHaveBeenCalledWith('p', 'starting', expect.anything());
+  });
+
+  it('still waits for child termination when the shutdown IPC send throws synchronously', async () => {
+    const { s } = makeSupervisor();
+    const child = {
+      send: vi.fn(() => {
+        throw new Error('Channel closed');
+      }),
+      kill: vi.fn(),
+      once: vi.fn((_event: string, callback: () => void) => callback()),
+    };
+    const sup = { id: 'p', child, jobTasks: undefined };
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect((s as any).kill(sup)).resolves.toBeUndefined();
+
+    expect(child.once).toHaveBeenCalledWith('exit', expect.any(Function));
+    expect(sup.child).toBeNull();
+  });
+
+  it('does not dispose a plugin RPC host until an admitted child request drains', async () => {
+    const { s } = makeSupervisor();
+    let finishDispatch!: () => void;
+    const dispatchBody = new Promise<void>((resolve) => {
+      finishDispatch = resolve;
+    });
+    const dispose = vi.fn();
+    const sup = {
+      id: 'p', status: 'active', child: { send: vi.fn() }, rpcHost: {
+        dispatch: vi.fn(async () => {
+          await dispatchBody;
+          return { k: 'res', id: 'rpc-drain', ok: true, result: null };
+        }),
+        dispose,
+      },
+      invocations: new Map(), pending: new Map(), crashes: [], jobTasks: undefined,
+      rpcLimiter: new RpcRateLimiter({ burst: 1, perSec: 0, maxInFlight: 8 }, 0),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).running.set('p', sup);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (s as any).kill = vi.fn(async () => {});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rpc = (s as any).onMessage(sup, { k: 'req', id: 'rpc-drain', method: 'db.query', params: {} });
+    await vi.waitFor(() => expect(sup.rpcHost.dispatch).toHaveBeenCalledOnce());
+
+    const shutdown = s.shutdownAll();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(dispose).not.toHaveBeenCalled();
+
+    finishDispatch();
+    await rpc;
+    await shutdown;
+    expect(dispose).toHaveBeenCalledOnce();
   });
 });
 

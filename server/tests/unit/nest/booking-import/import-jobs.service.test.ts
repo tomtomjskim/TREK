@@ -1,10 +1,15 @@
+import {
+  resetRestoreQuiescenceForTests,
+  RestoreInProgressError,
+  runInRestoreQuiescence,
+} from '../../../../src/nest/backup/restore-quiescence';
+import { ImportJobsService } from '../../../../src/nest/booking-import/import-jobs.service';
+import { RealtimeService } from '../../../../src/nest/realtime/realtime.service';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { broadcastToUser } = vi.hoisted(() => ({ broadcastToUser: vi.fn() }));
 vi.mock('../../../../src/websocket', () => ({ broadcastToUser }));
-
-import { ImportJobsService } from '../../../../src/nest/booking-import/import-jobs.service';
-import { RealtimeService } from '../../../../src/nest/realtime/realtime.service';
 
 type Preview = ReturnType<typeof vi.fn>;
 function makeService(preview: Preview) {
@@ -13,7 +18,10 @@ function makeService(preview: Preview) {
 const files = (n: number) => Array.from({ length: n }, (_, i) => ({ originalname: `f${i}.pdf` })) as never;
 const eventsFor = (jobId: string) => broadcastToUser.mock.calls.map((c) => c[1]).filter((p) => p.jobId === jobId);
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  resetRestoreQuiescenceForTests();
+});
 
 describe('ImportJobsService', () => {
   it('runs the parse off-request, reports progress and pushes the result on done', async () => {
@@ -39,7 +47,9 @@ describe('ImportJobsService', () => {
   });
 
   it('records an error and pushes import:error when the parse throws', async () => {
-    const preview = vi.fn(async () => { throw new Error('parse boom'); });
+    const preview = vi.fn(async () => {
+      throw new Error('parse boom');
+    });
     const svc = makeService(preview);
 
     const id = svc.start('1', files(1), 'no-ai', 9);
@@ -56,7 +66,7 @@ describe('ImportJobsService', () => {
     expect(svc.get('does-not-exist', 9)).toBeUndefined();
   });
 
-  it('chains a user\'s parses so they run one at a time', async () => {
+  it("chains a user's parses so they run one at a time", async () => {
     const order: string[] = [];
     const preview = vi.fn(async (f: { originalname: string }[]) => {
       order.push(`start:${f[0].originalname}`);
@@ -74,10 +84,52 @@ describe('ImportJobsService', () => {
     expect(order).toEqual(['start:A.pdf', 'end:A.pdf', 'start:B.pdf', 'end:B.pdf']);
   });
 
+  it('drains queued pre-restore files and refuses a new import while restored state is blocked', async () => {
+    let finishFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const order: string[] = [];
+    const preview = vi.fn(async (input: { originalname: string }[]) => {
+      order.push(`start:${input[0].originalname}`);
+      if (input[0].originalname === 'A.pdf') await firstGate;
+      order.push(`end:${input[0].originalname}`);
+      return { items: [] };
+    });
+    const svc = makeService(preview);
+    const a = svc.start('1', [{ originalname: 'A.pdf' }] as never, 'no-ai', 5);
+    const b = svc.start('1', [{ originalname: 'B.pdf' }] as never, 'no-ai', 5);
+    await vi.waitFor(() => expect(order).toEqual(['start:A.pdf']));
+
+    let restoreEntered = false;
+    let finishRestore!: () => void;
+    const restoreGate = new Promise<void>((resolve) => {
+      finishRestore = resolve;
+    });
+    const restore = runInRestoreQuiescence(async () => {
+      restoreEntered = true;
+      await restoreGate;
+    });
+    await Promise.resolve();
+    expect(restoreEntered).toBe(false);
+
+    finishFirst();
+    await vi.waitFor(() => expect(svc.get(b, 5)?.status).toBe('done'));
+    await vi.waitFor(() => expect(restoreEntered).toBe(true));
+    expect(svc.get(a, 5)?.status).toBe('done');
+    expect(order).toEqual(['start:A.pdf', 'end:A.pdf', 'start:B.pdf', 'end:B.pdf']);
+    expect(() => svc.start('1', [{ originalname: 'C.pdf' }] as never, 'no-ai', 5)).toThrow(RestoreInProgressError);
+
+    finishRestore();
+    await restore;
+  });
+
   it('reports a parse failure as an error job rather than losing it', async () => {
     // The catch arm had no case: a throw inside the off-request parse would have
     // left the job stuck on 'running' and the widget spinning forever.
-    const preview = vi.fn(async () => { throw new Error('kitinerary exploded'); });
+    const preview = vi.fn(async () => {
+      throw new Error('kitinerary exploded');
+    });
     const svc = makeService(preview);
 
     const id = svc.start('7', files(1), 'no-ai', 42);
@@ -87,7 +139,9 @@ describe('ImportJobsService', () => {
   });
 
   it('turns a non-Error throw into a readable message', async () => {
-    const preview = vi.fn(async () => { throw 'just a string'; });
+    const preview = vi.fn(async () => {
+      throw 'just a string';
+    });
     const svc = makeService(preview);
 
     const id = svc.start('7', files(1), 'no-ai', 42);

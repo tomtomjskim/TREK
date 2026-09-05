@@ -35,7 +35,12 @@ function makeReq(overrides: {
 
 /** Stub the single users row the verify reads. */
 function userRow(row: Record<string, unknown> | undefined): void {
-  vi.mocked(db.prepare).mockReturnValue({ get: vi.fn(() => row), all: vi.fn() } as never);
+  vi.mocked(db.prepare).mockImplementation(((sql: string) => {
+    if (sql.includes('jsnetworkcorp_auth_session_revocations')) {
+      return { get: vi.fn(() => undefined), all: vi.fn() } as never;
+    }
+    return { get: vi.fn(() => row), all: vi.fn() } as never;
+  }) as never);
 }
 
 afterEach(() => vi.clearAllMocks());

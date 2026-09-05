@@ -44,6 +44,14 @@ function createTables(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_prt_user ON password_reset_tokens(user_id);
     CREATE INDEX IF NOT EXISTS idx_prt_hash ON password_reset_tokens(token_hash);
 
+    CREATE TABLE IF NOT EXISTS jsnetworkcorp_auth_session_revocations (
+      session_key TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      revoked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_jsnetworkcorp_auth_session_revocations_user
+      ON jsnetworkcorp_auth_session_revocations(user_id);
+
     CREATE TABLE IF NOT EXISTS webauthn_credentials (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

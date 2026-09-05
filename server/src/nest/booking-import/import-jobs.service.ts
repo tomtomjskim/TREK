@@ -1,8 +1,10 @@
-import { Injectable } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { runTrackedApplicationWork } from '../backup/restore-quiescence';
 import { RealtimeService } from '../realtime/realtime.service';
 import { BookingImportService } from './booking-import.service';
+import { Injectable } from '@nestjs/common';
 import type { BookingImportMode, BookingImportPreviewResponse, TrekWsPayload } from '@trek/shared';
+
+import { randomUUID } from 'node:crypto';
 
 type JobStatus = 'running' | 'done' | 'error';
 
@@ -36,17 +38,31 @@ export class ImportJobsService {
   /** Tail of each user's job chain — parses run one at a time per user, not all at once. */
   private readonly chains = new Map<number, Promise<void>>();
 
-  constructor(private readonly bookingImport: BookingImportService, private readonly realtime: RealtimeService) {}
+  constructor(
+    private readonly bookingImport: BookingImportService,
+    private readonly realtime: RealtimeService,
+  ) {}
 
   /** Create a job and queue it behind the user's other parses; returns the job id at once. */
   start(tripId: string, files: Express.Multer.File[], mode: BookingImportMode, userId: number): string {
     const id = randomUUID();
-    const job: ImportJob = { id, tripId, userId, status: 'running', done: 0, total: files.length, createdAt: Date.now() };
-    this.jobs.set(id, job);
+    const job: ImportJob = {
+      id,
+      tripId,
+      userId,
+      status: 'running',
+      done: 0,
+      total: files.length,
+      createdAt: Date.now(),
+    };
     // Chain onto the user's previous parse so they run sequentially (one CPU-heavy
-    // inference at a time), while the request returns immediately.
+    // inference at a time), while the request returns immediately. Admission is
+    // acquired NOW, not when this job reaches the head of the chain: a queued
+    // upload belongs to the pre-restore account world and must finish before a
+    // restored DB can reuse the same numeric user id or provider settings.
     const prev = this.chains.get(userId) ?? Promise.resolve();
-    const next = prev.then(() => this.run(job, files, mode)).catch(() => {});
+    const next = runTrackedApplicationWork(() => prev.then(() => this.run(job, files, mode))).catch(() => {});
+    this.jobs.set(id, job);
     this.chains.set(userId, next);
     void next.finally(() => {
       if (this.chains.get(userId) === next) this.chains.delete(userId);

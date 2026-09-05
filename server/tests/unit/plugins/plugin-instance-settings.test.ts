@@ -28,9 +28,18 @@ import { runMigrations } from '../../../src/db/migrations';
 import { PluginsService } from '../../../src/nest/plugins/plugins.service';
 import { PluginsController } from '../../../src/nest/plugins/plugins.controller';
 import { PluginConsentRequired, type PluginRuntimeService } from '../../../src/nest/plugins/plugin-runtime.service';
+import {
+  applyStagedRestoreNowStrict,
+  getPluginRestoreRuntimeLifecycle,
+  stageExtractedPluginTrees,
+} from '../../../src/nest/plugins/plugin-backup';
 import type { PluginRegistryService } from '../../../src/nest/plugins/registry/registry.service';
 import type { RuntimeEnvService } from '../../../src/nest/app-config/runtime-env.service';
 import { AddonsService } from '../../../src/nest/addons/addons.service';
+import {
+  resetRestoreQuiescenceForTests,
+  runInRestoreQuiescence,
+} from '../../../src/nest/backup/restore-quiescence';
 import { createPluginRuntime } from '../../helpers/plugin-host';
 import { discoverPlugins } from '../../../src/nest/plugins/install/discovery';
 
@@ -227,6 +236,140 @@ describe('respawn on save (runtime)', () => {
 
     await expect(rt.respawnIfActive('p')).resolves.toBe(true);
     expect(calls).toEqual(['disable', 'activate']); // stop first, then bring back up
+  });
+});
+
+describe('dev-link reload debounce restore boundary', () => {
+  it('INS-005a — skips a debounced reload that fires while restore is blocked', async () => {
+    vi.useFakeTimers();
+    const rt = createPluginRuntime(new DatabaseService(dbConn));
+    const reload = vi.spyOn(rt, 'reload').mockResolvedValue(undefined);
+    vi.spyOn(rt, 'isActive').mockReturnValue(true);
+    let changed!: () => void;
+    const watcher = { on: vi.fn(), close: vi.fn() };
+    const watch = vi.spyOn(fs, 'watch').mockImplementation(((...args: unknown[]) => {
+      changed = args.at(-1) as () => void;
+      return watcher as unknown as fs.FSWatcher;
+    }) as typeof fs.watch);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (rt as any).watchLinked('p', codeRoot);
+    changed();
+    let finishRestore!: () => void;
+    const restore = runInRestoreQuiescence(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRestore = resolve;
+        }),
+    );
+
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(reload).not.toHaveBeenCalled();
+      finishRestore();
+      await restore;
+    } finally {
+      watch.mockRestore();
+      vi.useRealTimers();
+      resetRestoreQuiescenceForTests();
+    }
+  });
+
+  it('INS-005b — keeps restore draining until an admitted debounced reload finishes', async () => {
+    vi.useFakeTimers();
+    const rt = createPluginRuntime(new DatabaseService(dbConn));
+    let finishReload!: () => void;
+    const reloadBody = new Promise<void>((resolve) => {
+      finishReload = resolve;
+    });
+    const reload = vi.spyOn(rt, 'reload').mockReturnValue(reloadBody);
+    vi.spyOn(rt, 'isActive').mockReturnValue(true);
+    let changed!: () => void;
+    const watcher = { on: vi.fn(), close: vi.fn() };
+    const watch = vi.spyOn(fs, 'watch').mockImplementation(((...args: unknown[]) => {
+      changed = args.at(-1) as () => void;
+      return watcher as unknown as fs.FSWatcher;
+    }) as typeof fs.watch);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (rt as any).watchLinked('p', codeRoot);
+    changed();
+
+    try {
+      await vi.advanceTimersByTimeAsync(400);
+      let restoreEntered = false;
+      const restore = runInRestoreQuiescence(async () => {
+        restoreEntered = true;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      const enteredWhileReloadPending = restoreEntered;
+
+      finishReload();
+      await reloadBody;
+      await restore;
+
+      expect(enteredWhileReloadPending).toBe(false);
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      watch.mockRestore();
+      vi.useRealTimers();
+      resetRestoreQuiescenceForTests();
+    }
+  });
+});
+
+describe('live plugin restore resume receipt', () => {
+  it('INS-005c — resumes enabled plugins from the post-restore database after the tree receipt commits', async () => {
+    installFixturePlugin({ settings: [] });
+    testDb.prepare("UPDATE plugins SET enabled = 1, status = 'active' WHERE id = 'fixture-id'").run();
+    const rt = createPluginRuntime(new DatabaseService(dbConn));
+    const activate = vi.spyOn(rt, 'activate').mockResolvedValue(undefined);
+    rt.onApplicationBootstrap();
+    await Promise.resolve();
+    activate.mockClear();
+
+    const extract = fs.mkdtempSync(path.join(os.tmpdir(), 'ins-restore-resume-'));
+    fs.cpSync(path.join(codeRoot, 'fixture-id'), path.join(extract, 'plugins-code', 'fixture-id'), {
+      recursive: true,
+    });
+    stageExtractedPluginTrees(extract);
+
+    try {
+      const transaction = await applyStagedRestoreNowStrict();
+      transaction?.commitCleanup();
+      await transaction?.resume?.();
+
+      expect(activate).toHaveBeenCalledWith('fixture-id');
+    } finally {
+      await rt.onModuleDestroy();
+      fs.rmSync(extract, { recursive: true, force: true });
+    }
+  });
+
+  it('INS-005d — exposes an early restore lifecycle that shuts down and reconciles enabled plugins', async () => {
+    installFixturePlugin({ settings: [] });
+    testDb.prepare("UPDATE plugins SET enabled = 1, status = 'active' WHERE id = 'fixture-id'").run();
+    const rt = createPluginRuntime(new DatabaseService(dbConn));
+    const supervisor = (rt as unknown as { supervisor: { shutdownAll: () => Promise<void> } }).supervisor;
+    const shutdownAll = vi.spyOn(supervisor, 'shutdownAll').mockResolvedValue(undefined);
+    const activate = vi.spyOn(rt, 'activate').mockResolvedValue(undefined);
+    rt.onApplicationBootstrap();
+    await Promise.resolve();
+    activate.mockClear();
+
+    try {
+      const lifecycle = getPluginRestoreRuntimeLifecycle();
+      expect(lifecycle).not.toBeNull();
+      await lifecycle?.shutdown();
+      await lifecycle?.resume();
+
+      expect(shutdownAll).toHaveBeenCalledOnce();
+      expect(activate).toHaveBeenCalledWith('fixture-id');
+    } finally {
+      await rt.onModuleDestroy();
+    }
   });
 });
 

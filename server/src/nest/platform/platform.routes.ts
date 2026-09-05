@@ -1,11 +1,16 @@
-import express, { Request, Response, NextFunction } from 'express';
-import path from 'node:path';
-
 import { readEnv } from '../../app-config';
-import { verifyJwtAndLoadUser } from '../auth/jwt-verify';
 import { db } from '../../db/database';
+import { verifyJwtAndLoadUser } from '../auth/jwt-verify';
+import {
+  admitApplicationRequest,
+  RestoreInProgressError,
+  runWithApplicationRequest,
+} from '../backup/restore-quiescence';
 import { StorageService } from '../storage/storage.service';
 import { StorageInvalidKeyError, StorageNotFoundError, type StorageCategory } from '../storage/storage.types';
+
+import express, { Request, Response, NextFunction } from 'express';
+import path from 'node:path';
 
 // Platform / transport routes extracted from the former createApp() composition and
 // mounted on Nest's Express adapter before app.init().
@@ -107,13 +112,17 @@ async function servePhoto(storage: StorageService, req: Request, res: Response):
 
   // Share-token path: require the token to cover the exact trip the
   // photo belongs to. Expired tokens fall through to 401.
-  const photo = db.prepare('SELECT trip_id FROM photos WHERE filename = ?').get(safeName) as { trip_id: number } | undefined;
+  const photo = db.prepare('SELECT trip_id FROM photos WHERE filename = ?').get(safeName) as
+    | { trip_id: number }
+    | undefined;
   if (!photo) {
     res.status(401).send('Authentication required');
     return;
   }
   const share = db
-    .prepare("SELECT trip_id FROM share_tokens WHERE token = ? AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))")
+    .prepare(
+      "SELECT trip_id FROM share_tokens WHERE token = ? AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))",
+    )
     .get(rawToken) as { trip_id: number } | undefined;
   if (!share || share.trip_id !== photo.trip_id) {
     res.status(401).send('Authentication required');
@@ -127,6 +136,27 @@ async function servePhoto(storage: StorageService, req: Request, res: Response):
  * (identical to its original position near the top of createApp).
  */
 export function applyPlatformUploads(app: express.Application, storage: StorageService): void {
+  // These routes are mounted before Nest initializes, so its global restore
+  // interceptor cannot see them. Admit the whole upload subtree here and hold
+  // the lease until streaming has finished (or the connection closes).
+  app.use('/uploads', (_req: Request, res: Response, next: NextFunction) => {
+    const admission = admitApplicationRequest();
+    if (!admission) {
+      const error = new RestoreInProgressError();
+      res.status(error.getStatus()).json(error.getResponse());
+      return;
+    }
+
+    res.once('finish', admission.release);
+    res.once('close', admission.release);
+    try {
+      runWithApplicationRequest(admission, next);
+    } catch (error) {
+      admission.release();
+      throw error;
+    }
+  });
+
   // Static: avatars, covers, and journey photos.
   //
   // Security model (audit SEC-M9): these paths are unauthenticated by

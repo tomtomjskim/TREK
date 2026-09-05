@@ -5,6 +5,11 @@
  * the old job, unregister is idempotent, and onApplicationShutdown stops
  * everything the registrar owns.
  */
+import type { RuntimeEnvService } from '../../../src/nest/app-config/runtime-env.service';
+import { resetRestoreQuiescenceForTests, runInRestoreQuiescence } from '../../../src/nest/backup/restore-quiescence';
+import { CronRegistrarService } from '../../../src/nest/scheduling/cron-registrar.service';
+import { SchedulerRegistry } from '@nestjs/schedule';
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
@@ -33,10 +38,6 @@ vi.mock('cron', () => ({
   },
 }));
 
-import { SchedulerRegistry } from '@nestjs/schedule';
-import { CronRegistrarService } from '../../../src/nest/scheduling/cron-registrar.service';
-import type { RuntimeEnvService } from '../../../src/nest/app-config/runtime-env.service';
-
 function makeRegistrar(isTest: boolean) {
   const registry = new SchedulerRegistry();
   const runtimeEnv = { isTest: () => isTest } as RuntimeEnvService;
@@ -49,6 +50,7 @@ describe('CronRegistrarService', () => {
   beforeEach(() => {
     h.jobs.length = 0;
     delete process.env.TZ;
+    resetRestoreQuiescenceForTests();
   });
 
   afterEach(() => {
@@ -122,12 +124,39 @@ describe('CronRegistrarService', () => {
     registrar.register('a', '0 2 * * *', () => {});
     registrar.register('b', '0 4 * * *', () => {});
     registrar.onApplicationShutdown();
-    expect(h.jobs.every(j => j.stopped)).toBe(true);
+    expect(h.jobs.every((j) => j.stopped)).toBe(true);
     expect(registry.getCronJobs().size).toBe(0);
     expect(registrar.jobCount).toBe(0);
   });
 
-  it("CRONREG-009 — shutdown tolerates the orchestrator having already cleared the registry", () => {
+  it('CRONREG-010 — restore drains an active cron and skips ticks that arrive while blocked', async () => {
+    const { registrar } = makeRegistrar(false);
+    let finishTick!: () => void;
+    const tickGate = new Promise<void>((resolve) => {
+      finishTick = resolve;
+    });
+    const onTick = vi.fn(() => tickGate);
+    registrar.register('writer', '* * * * * *', onTick);
+
+    const firstTick = h.jobs[0].onTick() as Promise<void>;
+    await vi.waitFor(() => expect(onTick).toHaveBeenCalledOnce());
+    let restoreEntered = false;
+    const restore = runInRestoreQuiescence(async () => {
+      restoreEntered = true;
+    });
+    await Promise.resolve();
+    expect(restoreEntered).toBe(false);
+
+    await h.jobs[0].onTick();
+    expect(onTick).toHaveBeenCalledOnce();
+
+    finishTick();
+    await firstTick;
+    await restore;
+    expect(restoreEntered).toBe(true);
+  });
+
+  it('CRONREG-009 — shutdown tolerates the orchestrator having already cleared the registry', () => {
     // @nestjs/schedule v6 deletes every registry cron job in its own
     // beforeApplicationShutdown, which runs before our onApplicationShutdown.
     const { registrar, registry } = makeRegistrar(false);

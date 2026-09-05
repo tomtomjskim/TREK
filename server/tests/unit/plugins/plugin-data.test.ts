@@ -3,11 +3,17 @@
  * idempotent, reads/writes work against the plugin's OWN file, and the guard
  * blocks statements that would let a plugin escape its file (ATTACH/PRAGMA).
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import {
+  checkpointAllPluginDataDbs,
+  PluginDataDb,
+  removePluginData,
+  snapshotAllPluginDataDbs,
+} from '../../../src/nest/plugins/host/plugin-data.service';
+
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PluginDataDb, removePluginData, snapshotAllPluginDataDbs } from '../../../src/nest/plugins/host/plugin-data.service';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 
 let tmp: string;
 beforeAll(() => {
@@ -41,8 +47,12 @@ describe('PluginDataDb', () => {
     expect(() => db.exec("ATTACH DATABASE 'trek.db' AS core")).toThrow(/not allowed/);
     expect(() => db.query('PRAGMA table_info(x)')).toThrow(/not allowed/);
     // WITH RECURSIVE is the unbounded-CPU vector on the synchronous host — refused
-    expect(() => db.query('WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM r) SELECT x FROM r')).toThrow(/not allowed/);
-    expect(() => db.exec('WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM r) INSERT INTO t SELECT x FROM r')).toThrow(/not allowed/);
+    expect(() => db.query('WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM r) SELECT x FROM r')).toThrow(
+      /not allowed/,
+    );
+    expect(() =>
+      db.exec('WITH RECURSIVE r(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM r) INSERT INTO t SELECT x FROM r'),
+    ).toThrow(/not allowed/);
     expect(() => db.exec(123 as unknown as string)).toThrow(/must be a string/);
     expect(() => db.query('x'.repeat(100_001))).toThrow(/too long/);
     db.close();
@@ -71,13 +81,20 @@ describe('PluginDataDb', () => {
       { sql: 'SELECT id, bal FROM acct ORDER BY id' },
     ]);
     expect(out.results[0]).toEqual({ changes: 1 });
-    expect(out.results[2]).toEqual({ rows: [{ id: 1, bal: 60 }, { id: 2, bal: 40 }] });
+    expect(out.results[2]).toEqual({
+      rows: [
+        { id: 1, bal: 60 },
+        { id: 2, bal: 40 },
+      ],
+    });
 
     // failure path: a later statement throws → the earlier write must NOT persist
-    expect(() => db.tx([
-      { sql: 'UPDATE acct SET bal = 0 WHERE id = ?', args: [1] },
-      { sql: 'INSERT INTO nonexistent (x) VALUES (1)' },
-    ])).toThrow();
+    expect(() =>
+      db.tx([
+        { sql: 'UPDATE acct SET bal = 0 WHERE id = ?', args: [1] },
+        { sql: 'INSERT INTO nonexistent (x) VALUES (1)' },
+      ]),
+    ).toThrow();
     expect(db.query('SELECT bal FROM acct WHERE id = 1')).toEqual([{ bal: 60 }]); // unchanged
 
     // guard + caps apply inside a batch too
@@ -87,12 +104,12 @@ describe('PluginDataDb', () => {
 
     // a raw COMMIT inside the batch must be refused (else it breaks atomicity), but a
     // CASE ... END expression (END not at statement start) stays allowed
-    expect(() => db.tx([
-      { sql: 'UPDATE acct SET bal = 0 WHERE id = ?', args: [1] },
-      { sql: 'COMMIT' },
-    ])).toThrow(/transaction-control/);
-    expect(db.tx([{ sql: "SELECT CASE WHEN bal > 0 THEN 'y' ELSE 'n' END AS s FROM acct WHERE id = 1" }]).results[0])
-      .toEqual({ rows: [{ s: 'y' }] });
+    expect(() => db.tx([{ sql: 'UPDATE acct SET bal = 0 WHERE id = ?', args: [1] }, { sql: 'COMMIT' }])).toThrow(
+      /transaction-control/,
+    );
+    expect(
+      db.tx([{ sql: "SELECT CASE WHEN bal > 0 THEN 'y' ELSE 'n' END AS s FROM acct WHERE id = 1" }]).results[0],
+    ).toEqual({ rows: [{ s: 'y' }] });
     // the row cap is now for the WHOLE batch, not per statement
     db.exec('CREATE TABLE big (n INTEGER)');
     db.exec('INSERT INTO big (n) VALUES ' + Array.from({ length: 400 }, (_, i) => `(${i})`).join(','));
@@ -125,6 +142,97 @@ describe('PluginDataDb', () => {
       expect(fs.readFileSync(path.join(outDir, 'plugin.db-wal'), 'utf8')).toBe('WAL-committed');
       expect(fs.existsSync(path.join(outDir, 'plugin.db-shm'))).toBe(true);
     } finally {
+      fs.rmSync(dest, { recursive: true, force: true });
+      fs.rmSync(srcDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when an open plugin database cannot be VACUUMed', () => {
+    const db = new PluginDataDb('vacuum-failure');
+    db.migrate('001', 'CREATE TABLE entries (id INTEGER PRIMARY KEY)');
+    const snapshotInto = vi.spyOn(db, 'snapshotInto').mockImplementation(() => {
+      throw new Error('VACUUM INTO failed');
+    });
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'trekplug-snap-'));
+    try {
+      expect(() => snapshotAllPluginDataDbs(dest)).toThrow(/database snapshot failed/);
+      expect(snapshotInto).toHaveBeenCalledOnce();
+    } finally {
+      snapshotInto.mockRestore();
+      db.close();
+      fs.rmSync(dest, { recursive: true, force: true });
+      removePluginData('vacuum-failure');
+    }
+  });
+
+  it('fails closed when an open plugin database cannot checkpoint its WAL', () => {
+    const db = new PluginDataDb('checkpoint-failure');
+    const checkpoint = vi.spyOn(db, 'checkpoint').mockImplementation(() => {
+      throw new Error('WAL checkpoint failed');
+    });
+    try {
+      expect(() => checkpointAllPluginDataDbs()).toThrow(/checkpoint failed/);
+      expect(checkpoint).toHaveBeenCalled();
+    } finally {
+      checkpoint.mockRestore();
+      db.close();
+      removePluginData('checkpoint-failure');
+    }
+  });
+
+  it('fails closed when a plugin blob or directory cannot be copied', () => {
+    const srcDir = path.join(tmp, 'copy-failure');
+    fs.mkdirSync(path.join(srcDir, 'blob-dir'), { recursive: true });
+    fs.writeFileSync(path.join(srcDir, 'plugin.db'), 'DB');
+    fs.writeFileSync(path.join(srcDir, 'blob-dir', 'photo.bin'), 'PHOTO');
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'trekplug-snap-'));
+    const cpSync = vi.spyOn(fs, 'cpSync').mockImplementation(() => {
+      throw new Error('blob directory copy failed');
+    });
+    try {
+      expect(() => snapshotAllPluginDataDbs(dest)).toThrow(/entry copy failed/);
+    } finally {
+      cpSync.mockRestore();
+      fs.rmSync(dest, { recursive: true, force: true });
+      fs.rmSync(srcDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when a source entry is unreadable', () => {
+    const srcDir = path.join(tmp, 'unreadable-source');
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(path.join(srcDir, 'plugin.db'), 'DB');
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'trekplug-snap-'));
+    const originalReaddirSync = fs.readdirSync;
+    const readdirSync = vi.spyOn(fs, 'readdirSync').mockImplementation((directory, options) => {
+      if (String(directory) === srcDir) throw new Error('source directory unreadable');
+      return originalReaddirSync.call(fs, directory, options as never) as never;
+    });
+    try {
+      expect(() => snapshotAllPluginDataDbs(dest)).toThrow(/source is unreadable/);
+    } finally {
+      readdirSync.mockRestore();
+      fs.rmSync(dest, { recursive: true, force: true });
+      fs.rmSync(srcDir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when the staged inventory does not match the source inventory', () => {
+    const srcDir = path.join(tmp, 'inventory-mismatch');
+    fs.rmSync(srcDir, { recursive: true, force: true });
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(path.join(srcDir, 'plugin.db'), 'DB');
+    const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'trekplug-snap-'));
+    const originalCopyFileSync = fs.copyFileSync;
+    const copyFileSync = vi.spyOn(fs, 'copyFileSync').mockImplementation((source, target) => {
+      if (String(source) === path.join(srcDir, 'plugin.db')) return;
+      originalCopyFileSync.call(fs, source, target);
+    });
+    try {
+      expect(() => snapshotAllPluginDataDbs(dest)).toThrow(/inventory/i);
+      expect(copyFileSync).toHaveBeenCalled();
+    } finally {
+      copyFileSync.mockRestore();
       fs.rmSync(dest, { recursive: true, force: true });
       fs.rmSync(srcDir, { recursive: true, force: true });
     }

@@ -7,10 +7,11 @@ import {
 import {
   FORK_MIGRATION_IDS,
   LEGACY_COLLISION_BRIDGE_ID,
+  assertSchemaCompatibility,
   prepareLegacyForkSchema,
   runMigrations,
 } from '../../../src/db/migrationRunner';
-import { runMigrations as runOfficialMigrations } from '../../../src/db/migrations';
+import { OFFICIAL_SCHEMA_VERSION, runMigrations as runOfficialMigrations } from '../../../src/db/migrations';
 import { createTables } from '../../../src/db/schema';
 
 import Database from 'better-sqlite3';
@@ -52,6 +53,9 @@ function createOfficialBase(): Database.Database {
   const db = new Database(':memory:');
   db.exec('PRAGMA foreign_keys = ON');
   createTables(db);
+  // createTables is the fork's fresh-install schema. Official source images do
+  // not carry fork-owned tables; the stable fork migration must add them.
+  db.exec('DROP TABLE jsnetworkcorp_auth_session_revocations');
   db.exec(`
     CREATE TABLE schema_version (version INTEGER NOT NULL);
     INSERT INTO schema_version (version) VALUES (19);
@@ -350,6 +354,9 @@ function expectIntegrated(db: Database.Database, bridgeExpected: boolean, expect
   expect(columnNames(db, 'google_api_usage')).toEqual(
     expect.arrayContaining(['period', 'sku', 'attempts', 'updated_at']),
   );
+  expect(columnNames(db, 'jsnetworkcorp_auth_session_revocations')).toEqual(
+    expect.arrayContaining(['session_key', 'user_id', 'revoked_at']),
+  );
 
   if (db.prepare('SELECT 1 FROM packing_templates WHERE id = 10').get()) {
     expect(db.prepare('SELECT template_id FROM packing_template_categories WHERE id = 20').get()).toEqual({
@@ -389,6 +396,7 @@ function expectFailureWithoutMutation(db: Database.Database, expected: RegExp): 
 
 beforeAll(() => {
   buildOfficialImages();
+  expect(latestOfficialVersion).toBe(OFFICIAL_SCHEMA_VERSION);
 });
 
 afterEach(() => {
@@ -422,9 +430,7 @@ describe('fork migration runner — generated official schema matrix', () => {
     db.prepare(
       "INSERT INTO plugin_settings_fields (plugin_id, field_key, input_type) VALUES ('fixture', 'endpoint', 'text')",
     ).run();
-    db.prepare(
-      "INSERT INTO plugin_actions (plugin_id, action_key, label) VALUES ('fixture', 'sync', 'Sync')",
-    ).run();
+    db.prepare("INSERT INTO plugin_actions (plugin_id, action_key, label) VALUES ('fixture', 'sync', 'Sync')").run();
 
     runTwiceAndExpectStable(db);
 
@@ -470,7 +476,9 @@ describe('fork migration runner — generated official schema matrix', () => {
       officialImageVersion: 175,
       googleUsage: 'valid',
       packing: 'scoped',
-      forkHistory: FORK_MIGRATION_IDS,
+      // This is the previously deployed fork state. The new session-revocation
+      // migration must append cleanly without rebuilding either existing fork lane.
+      forkHistory: [GOOGLE_API_USAGE_MIGRATION_ID, PACKING_TEMPLATE_SCOPE_MIGRATION_ID],
     });
     db.prepare(
       "INSERT INTO packing_templates (name, scope, owner_id, created_by) VALUES ('Private', 'personal', 2, 2)",
@@ -578,6 +586,31 @@ describe('fork migration runner — generated official schema matrix', () => {
 });
 
 describe('fork migration runner — unknown states fail closed', () => {
+  it('rejects a future official marker before any migration mutation', () => {
+    const db = createFixture({ officialImageVersion: 'latest' });
+    setSchemaVersion(db, OFFICIAL_SCHEMA_VERSION + 1);
+
+    expectFailureWithoutMutation(db, /future or invalid official schema_version/i);
+  });
+
+  it('rejects an unknown fork marker before any migration mutation', () => {
+    const db = createFixture({
+      officialImageVersion: 'latest',
+      forkHistory: ['jsnetworkcorp.future_feature.v1'],
+    });
+
+    expectFailureWithoutMutation(db, /unknown fork_schema_migrations\.id/i);
+  });
+
+  it('accepts the known bridge and current fork migration markers', () => {
+    const db = createFixture({
+      officialImageVersion: 'latest',
+      forkHistory: [...FORK_MIGRATION_IDS, LEGACY_COLLISION_BRIDGE_ID],
+    });
+
+    expect(() => assertSchemaCompatibility(db)).not.toThrow();
+  });
+
   it('rejects mixed local and stock-official signatures', () => {
     expectFailureWithoutMutation(
       createFixture({ officialImageVersion: 172, marker: 172, googleUsage: 'valid' }),

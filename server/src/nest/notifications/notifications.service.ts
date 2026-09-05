@@ -20,6 +20,7 @@ import { getAction } from './in-app-actions';
 import { avatarUrl } from '../common/avatarUrl';
 import { DatabaseService } from '../database/database.service';
 import { RealtimeService } from '../realtime/realtime.service';
+import { runTrackedApplicationWork } from '../backup/restore-quiescence';
 
 
 // SQLite's CURRENT_TIMESTAMP is UTC but the string ('YYYY-MM-DD HH:MM:SS') has
@@ -679,6 +680,14 @@ export class NotificationsService {
   // ── Unified dispatcher (from services/notificationService.ts) ─────────────
 
   async send(payload: NotificationPayload): Promise<void> {
+    return runTrackedApplicationWork(() => this.sendAdmitted(payload));
+  }
+
+  /**
+   * Dispatch after the caller has been admitted to the restore drain set.
+   * Keep this private so every public send path shares the same boundary.
+   */
+  private async sendAdmitted(payload: NotificationPayload): Promise<void> {
     const { event, actorId, params, scope, targetId, inApp } = payload;
 
     // Resolve recipients based on scope

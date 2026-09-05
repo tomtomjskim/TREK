@@ -5,7 +5,7 @@ import {
   packingTemplateSchemaState,
   runForkMigrations,
 } from './forkMigrations';
-import { runMigrations as runOfficialMigrations } from './migrations';
+import { OFFICIAL_SCHEMA_VERSION, runMigrations as runOfficialMigrations } from './migrations';
 
 import Database from 'better-sqlite3';
 
@@ -20,6 +20,40 @@ function schemaVersion(db: Database.Database): number {
   const rows = db.prepare('SELECT version FROM schema_version').all() as Array<{ version: number }>;
   if (rows.length > 1) throw new Error(`schema_version must contain at most one row; found ${rows.length}`);
   return rows[0]?.version ?? 0;
+}
+
+/**
+ * Refuse to mutate a database produced by a newer or unknown migration lane.
+ * This check intentionally does not create either marker table: startup and
+ * restore callers can run it against a snapshot before any migration write.
+ */
+export function assertSchemaCompatibility(db: Database.Database): void {
+  const schemaTable = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'").get();
+  if (schemaTable) {
+    const rows = db.prepare('SELECT version FROM schema_version').all() as Array<{ version: unknown }>;
+    if (rows.length > 1) throw new Error(`schema_version must contain at most one row; found ${rows.length}`);
+    const version = rows[0]?.version;
+    if (
+      version !== undefined &&
+      (!Number.isInteger(version) || Number(version) < 0 || Number(version) > OFFICIAL_SCHEMA_VERSION)
+    ) {
+      throw new Error(
+        `Refusing migration from future or invalid official schema_version ${String(version)} (maximum supported ${OFFICIAL_SCHEMA_VERSION})`,
+      );
+    }
+  }
+
+  const forkTable = db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'fork_schema_migrations'")
+    .get();
+  if (!forkTable) return;
+
+  const allowed = new Set<string>([LEGACY_COLLISION_BRIDGE_ID, ...FORK_MIGRATION_IDS]);
+  const rows = db.prepare('SELECT id FROM fork_schema_migrations').all() as Array<{ id: unknown }>;
+  const unknown = rows.map((row) => row.id).filter((id) => typeof id !== 'string' || !allowed.has(id));
+  if (unknown.length > 0) {
+    throw new Error(`Refusing migration with unknown fork_schema_migrations.id: ${unknown.map(String).join(', ')}`);
+  }
 }
 
 function pluginColumns(db: Database.Database): Set<string> {
@@ -99,6 +133,9 @@ export function runMigrations(db: Database.Database): void {
   if (db.inTransaction) {
     throw new Error('Migration adapter must run outside an existing transaction');
   }
+  // Must precede the legacy bridge and both official/fork runners: none of
+  // those may mutate an incompatible snapshot while trying to inspect it.
+  assertSchemaCompatibility(db);
   prepareLegacyForkSchema(db);
   runOfficialMigrations(db);
   runForkMigrations(db);

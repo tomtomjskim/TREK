@@ -1,7 +1,8 @@
-import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 import { logInfo, logError } from '../audit/audit-log.logger';
+import { RestoreInProgressError, runTrackedApplicationWork } from '../backup/restore-quiescence';
 import { CronRegistrarService } from '../scheduling/cron-registrar.service';
 import { ThumbnailService } from './thumbnail.service';
+import { Injectable, type OnApplicationBootstrap } from '@nestjs/common';
 
 /**
  * Journey thumbnail cleanup: daily — reclaim journey/thumbs/ objects whose
@@ -20,10 +21,12 @@ export class JourneyThumbsJob implements OnApplicationBootstrap {
   onApplicationBootstrap(): void {
     if (!this.registrar.isEnabled()) return;
     // Run once on startup to reclaim orphans left over from before this sweeper existed.
-    void this.sweep();
-    this.registrar.register('journey-thumbs', '0 4 * * *', () => {
-      void this.sweep();
-    });
+    try {
+      void runTrackedApplicationWork(() => this.sweep());
+    } catch (error) {
+      if (!(error instanceof RestoreInProgressError)) throw error;
+    }
+    this.registrar.register('journey-thumbs', '0 4 * * *', () => this.sweep());
   }
 
   async sweep(): Promise<void> {

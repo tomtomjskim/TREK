@@ -1,9 +1,11 @@
-import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
-import type { Request, Response } from 'express';
-import type { Observable } from 'rxjs';
+import { setAuthCookie } from '../common/cookie';
 import { AuthService } from './auth.service';
 import { decodeSessionClaims } from './jwt-verify';
-import { setAuthCookie } from '../common/cookie';
+import { sessionIdForToken } from './session-revocation';
+import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+
+import type { Request, Response } from 'express';
+import type { Observable } from 'rxjs';
 
 /**
  * Sliding session renewal (#1927): once a cookie-authenticated session token is
@@ -56,6 +58,7 @@ export class SessionRenewalInterceptor implements NestInterceptor {
     const token = this.auth.generateToken(
       { id: req.user.id, password_version: claims.pv ?? 0 },
       claims.remember,
+      sessionIdForToken(cookieToken, claims),
     );
     setAuthCookie(res, token, req, claims.remember);
   }

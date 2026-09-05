@@ -2,7 +2,12 @@ import Database from 'better-sqlite3';
 
 export const GOOGLE_API_USAGE_MIGRATION_ID = 'jsnetworkcorp.google_api_usage.v1';
 export const PACKING_TEMPLATE_SCOPE_MIGRATION_ID = 'jsnetworkcorp.packing_template_scope.v1';
-export const FORK_MIGRATION_IDS = [GOOGLE_API_USAGE_MIGRATION_ID, PACKING_TEMPLATE_SCOPE_MIGRATION_ID] as const;
+export const AUTH_SESSION_REVOCATION_MIGRATION_ID = 'jsnetworkcorp.auth_session_revocation.v1';
+export const FORK_MIGRATION_IDS = [
+  GOOGLE_API_USAGE_MIGRATION_ID,
+  PACKING_TEMPLATE_SCOPE_MIGRATION_ID,
+  AUTH_SESSION_REVOCATION_MIGRATION_ID,
+] as const;
 
 export const FORK_MIGRATION_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS fork_schema_migrations (
@@ -183,6 +188,51 @@ export function assertPackingTemplateScopeSchema(db: Database.Database): void {
   }
 }
 
+export function assertAuthSessionRevocationSchema(db: Database.Database): void {
+  const sql = tableSql(db, 'jsnetworkcorp_auth_session_revocations');
+  if (!sql)
+    throw new Error('jsnetworkcorp_auth_session_revocations schema does not match fork migration: table is missing');
+
+  const columns = tableColumns(db, 'jsnetworkcorp_auth_session_revocations');
+  const byName = new Map(columns.map((column) => [column.name, column]));
+  const expected = [
+    ['session_key', 'TEXT', 0, null, 1],
+    ['user_id', 'INTEGER', 1, null, 0],
+    ['revoked_at', 'TEXT', 1, 'CURRENT_TIMESTAMP', 0],
+  ] as const;
+  const errors: string[] = [];
+  for (const [name, type, notnull, defaultValue, pk] of expected) {
+    const column = byName.get(name);
+    if (
+      !column ||
+      column.type.toUpperCase() !== type ||
+      column.notnull !== notnull ||
+      column.dflt_value !== defaultValue ||
+      column.pk !== pk
+    ) {
+      errors.push(`${name} column contract is invalid`);
+    }
+  }
+  if (columns.length !== expected.length) errors.push(`expected ${expected.length} columns, found ${columns.length}`);
+
+  const foreignKeys = db
+    .prepare("PRAGMA foreign_key_list('jsnetworkcorp_auth_session_revocations')")
+    .all() as ForeignKey[];
+  if (foreignKeys.length > 0) errors.push('revocations must survive user deletion');
+  const userIndex = db
+    .prepare(
+      "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_jsnetworkcorp_auth_session_revocations_user'",
+    )
+    .get();
+  if (!userIndex) errors.push('user lookup index is missing');
+
+  if (errors.length > 0) {
+    throw new Error(
+      `jsnetworkcorp_auth_session_revocations schema does not match fork migration: ${errors.join('; ')}`,
+    );
+  }
+}
+
 type RecordApplied = () => void;
 
 function migrateGoogleApiUsage(db: Database.Database, recordApplied: RecordApplied): void {
@@ -256,9 +306,26 @@ function migratePackingTemplateScope(db: Database.Database, recordApplied: Recor
   }
 }
 
+function migrateAuthSessionRevocation(db: Database.Database, recordApplied: RecordApplied): void {
+  db.transaction(() => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS jsnetworkcorp_auth_session_revocations (
+        session_key TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        revoked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_jsnetworkcorp_auth_session_revocations_user
+        ON jsnetworkcorp_auth_session_revocations(user_id);
+    `);
+    assertAuthSessionRevocationSchema(db);
+    recordApplied();
+  })();
+}
+
 const forkMigrations = [
   { id: GOOGLE_API_USAGE_MIGRATION_ID, run: migrateGoogleApiUsage },
   { id: PACKING_TEMPLATE_SCOPE_MIGRATION_ID, run: migratePackingTemplateScope },
+  { id: AUTH_SESSION_REVOCATION_MIGRATION_ID, run: migrateAuthSessionRevocation },
 ] as const;
 
 export function runForkMigrations(db: Database.Database): void {
@@ -277,4 +344,5 @@ export function runForkMigrations(db: Database.Database): void {
 
   assertGoogleApiUsageSchema(db);
   assertPackingTemplateScopeSchema(db);
+  assertAuthSessionRevocationSchema(db);
 }
