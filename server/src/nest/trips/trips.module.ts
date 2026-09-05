@@ -6,7 +6,6 @@ import { FilesModule } from '../files/files.module';
 import { PackingModule } from '../packing/packing.module';
 import { ReservationsModule } from '../reservations/reservations.module';
 import { TodoModule } from '../todo/todo.module';
-import { VacayModule } from '../vacay/vacay.module';
 import { PermissionsModule } from '../permissions/permissions.module';
 import { AuditModule } from '../audit/audit.module';
 import { PlacesModule } from '../places/places.module';
@@ -48,7 +47,7 @@ import { MAX_COVER_SIZE, TRIP_COVER_FILE_FILTER } from './trips.controller';
         }),
     }),
     StorageModule,
-    McpSharedModule, TodoModule, PackingModule, FilesModule, ReservationsModule, DaysModule, PermissionsModule, AuditModule, BudgetModule, CollabModule, VacayModule, PlacesModule, AuthModule, AppConfigModule, UnsplashModule, RealtimeModule, PluginGuardsModule, AddonsModule, TripMembershipModule, CalendarModule, AccommodationsModule, TripMembersModule, TripReadModelModule],
+    McpSharedModule, TodoModule, PackingModule, FilesModule, ReservationsModule, DaysModule, PermissionsModule, AuditModule, BudgetModule, CollabModule, PlacesModule, AuthModule, AppConfigModule, UnsplashModule, RealtimeModule, PluginGuardsModule, AddonsModule, TripMembershipModule, CalendarModule, AccommodationsModule, TripMembersModule, TripReadModelModule],
   controllers: [TripsController],
   providers: [TripsService, TripsMcp, TripPromptsMcp, TripsRpc],
   // Exported for FeedsModule (ICS feeds) and PluginsModule (RPC host injection).

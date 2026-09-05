@@ -171,7 +171,6 @@ export function createMcpTestRegistry(): McpRegistry {
     daysService,
     permissionsService,
     budgetService,
-    new VacayService(dbService, realtimeService, notificationsStub()),
     realtimeService,
     new UnsplashService(dbService, new RuntimeEnvService(), generalStorage),
     generalStorage,

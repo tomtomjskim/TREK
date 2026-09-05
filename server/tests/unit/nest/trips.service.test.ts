@@ -67,7 +67,6 @@ import { BudgetService } from '../../../src/nest/budget/budget.service';
 import { ExchangeRatesService } from '../../../src/nest/budget/exchange-rates.service';
 import { CollabService } from '../../../src/nest/collab/collab.service';
 import { RateLimitService } from '../../../src/nest/common/rate-limit.service';
-import { VacayService } from '../../../src/nest/vacay/vacay.service';
 import { TripsService } from '../../../src/nest/trips/trips.service';
 import { PlacesService } from '../../../src/nest/places/places.service';
 import { UserCleanupService } from '../../../src/nest/auth/user-cleanup.service';
@@ -122,7 +121,6 @@ const svc = new TripsService(
   daysSvc,
   new PermissionsService(dbs()),
   budgetSvc,
-  new VacayService(dbs(), new RealtimeService(), notificationsStub()),
   new RealtimeService(),
   undefined as never, // unsplash — not exercised here
   coversFx.storage,
@@ -1088,7 +1086,6 @@ describe('quirk fixes', () => {
       daysSvc,
       new PermissionsService(dbs()),
       budgetSvc,
-      new VacayService(dbs(), new RealtimeService(), notificationsStub()),
       new RealtimeService(),
       undefined as never,
       coversFx.storage,
