@@ -13,6 +13,7 @@ import cookieParser from 'cookie-parser';
 import type { Server } from 'http';
 import { DatabaseModule } from '../../src/nest/database/database.module';
 import { RealtimeModule } from '../../src/nest/realtime/realtime.module';
+import { ADDON_IDS } from '../../src/addons';
 import { Test } from '@nestjs/testing';
 import { seedUser, sessionCookie } from './harness';
 
@@ -125,6 +126,7 @@ describe('Admin e2e (real auth + admin guard + temp SQLite)', () => {
   beforeAll(async () => {
     seedUser(db as never, { id: 1, role: 'admin', email: 'admin@example.test', username: 'admin' });
     seedUser(db as never, { id: 2, role: 'user', email: 'member@example.test', username: 'member' });
+    db.prepare('INSERT INTO addons (id, name, enabled, sort_order) VALUES (?, ?, 1, 0)').run(ADDON_IDS.PACKING, 'Packing');
     app = await build();
     server = app.getHttpServer();
   });
