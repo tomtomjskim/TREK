@@ -468,12 +468,11 @@ jobs:
         with:
           # New Code is configured as "previous version", so this string is what
           # draws that line — changing it re-bases every "new code" metric.
-          # Pinned rather than read from package.json on purpose: package.json is
-          # still on 3.4.1 while the project has been analysed as 4.0.0 all along,
-          # and taking the lower number would silently move the baseline. Bump it
-          # here as part of the release, together with the version bump.
+          # Pinned rather than read from package.json on purpose so a package-only
+          # edit cannot silently move the New Code baseline. Keep this value in
+          # lockstep with an intentionally released application version.
           #
           # Everything else — sources, tests, exclusions, the documented
           # false-positive list — lives in sonar-project.properties so it stays
           # reviewable in a PR rather than buried in workflow YAML.
-          args: -Dsonar.projectVersion=4.0.0
+          args: -Dsonar.projectVersion=4.2.0
