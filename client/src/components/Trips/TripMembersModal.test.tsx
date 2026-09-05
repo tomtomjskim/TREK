@@ -376,12 +376,12 @@ describe('TripMembersModal', () => {
     render(<TripMembersModal {...defaultProps} />);
     // Wait for the share section to load
     await screen.findByText('Public Link');
-    const bookingsBtn = await screen.findByText('Bookings');
-    await user.click(bookingsBtn);
+    const packingBtn = await screen.findByText('Packing');
+    await user.click(packingBtn);
 
     await waitFor(() => {
       expect(postedPerms).not.toBeNull();
-      expect(postedPerms).toMatchObject({ share_bookings: false });
+      expect(postedPerms).toMatchObject({ share_packing: true });
     });
   });
 
@@ -633,7 +633,7 @@ describe('TripMembersModal', () => {
     );
     render(<TripMembersModal {...defaultProps} />);
 
-    await user.click(await screen.findByText('Bookings'));
+    await user.click(await screen.findByText('Packing'));
 
     await waitFor(() => expect(addToast).toHaveBeenCalledWith('Could not create link', 'error', undefined));
   });
