@@ -49,10 +49,11 @@ deployment section을 source of truth로 삼는다. 현재 운영 이미지는
 `13c4a137751c53382a58521434657923e34c5080`에서 나온다.
 
 포크 기능은 [`fork extension manifest`](fork-extension-manifest.md)에 addon,
-provider/config, always-on invariant, instance-only로 분류한다. addon off는 REST/MCP와
-desktop/mobile/admin UI를 함께 닫되 데이터를 지우지 않는다. 보안·개인정보·데이터
-정합성 수정은 비활성화 스위치로 되돌리지 않고, 공식 release가 같은 negative regression을
-통과할 때 patch와 test를 함께 제거한다. 설계와 실행 순서는
+provider/config, always-on invariant, instance-only로 분류한다. instance-only에는
+Android/Cloudflare/Compose 같은 배포 자산과 Sonar 같은 CI provider adapter가 포함된다.
+addon off는 REST/MCP와 desktop/mobile/admin UI를 함께 닫되 데이터를 지우지 않는다.
+보안·개인정보·데이터 정합성 수정은 비활성화 스위치로 되돌리지 않고, 공식 release가 같은
+negative regression을 통과할 때 patch와 test를 함께 제거한다. 설계와 실행 순서는
 [`main landing design`](../plans/2026-09-05-v4.2.0-main-landing-design.md)과
 [`implementation plan`](../plans/2026-09-05-v4.2.0-main-landing.md)을 따른다.
 
@@ -225,6 +226,7 @@ v3.4 통합부터 다음 계약을 사용한다.
 | packing template scope R1                      | fork core / upstream discussion              | 중간                              | 개인 템플릿 제품 방향 승인 전 writer는 비활성, migration은 fork namespace 유지                                                                                                                                                                          |
 | Google place enrichment와 app hard cap         | fork core, plugin 추출 검토                  | 중간                              | provider 호출·usage ledger를 plugin-owned DB/action으로 옮길 SDK gap 분석 필요                                                                                                                                                                          |
 | Google 사용량 admin UI                         | plugin 또는 upstream generic 후보            | 중간                              | Google 전용 표현과 instance 정책을 분리해야 함                                                                                                                                                                                                          |
+| Optional Sonar Scan provider                   | instance-only CI provider adapter            | 없음                              | fork identity는 repository settings에서만 주입한다. `SONAR_ENABLED`가 없거나 `true`가 아니면 scan만 skip한다. 활성화할 때는 project key/organization vars와 token secret을 preflight하고 같은 run의 coverage를 재사용한다. `SONAR_ENABLED=false`로 즉시 분리할 수 있으며 app runtime, DB, deploy에는 영향이 없다. |
 | Android TWA/APK                                | instance-only                                | 없음                              | package identity, assetlinks, signing을 포크에서만 관리                                                                                                                                                                                                 |
 | 공개 지도·계획의 공유 장소 메모                | upstream contribution 후보 / 현재 fork-first | 높음, 일반 public projection 결함 | v4.2.0 기준 `places.notes`의 top-level/nested 동등성, 모든 anonymous section의 exact allowlist·disabled-flag no-query, Popup·계획 표시, `share_map=false` sentinel 비노출과 개인 메모 오표기 수정이 공식 release에서 모두 통과하면 local patch 제거  |
 | Cloudflare/nginx/Compose 운영 설정             | instance-only                                | 없음                              | repository secret 금지, 외부 deployment runbook에서 관리                                                                                                                                                                                                |
