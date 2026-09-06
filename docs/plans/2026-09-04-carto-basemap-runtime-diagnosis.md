@@ -1,16 +1,22 @@
 # CARTO Basemap Runtime Diagnosis
 
 > 작성일: 2026-09-04
-> 상태: 원인 확인; v4.2.0 격리 후보에 계약 보존·focused 검증 반영; 운영 변경 없음
+> 갱신일: 2026-09-07
+> 상태: 원인 확인; v4.2.0 fork 운영 배포 및 OpenFreeMap fallback 유지
 > 범위: 계획 탭 지도에서 보이는 `API KEY REQUIRED` 워터마크
 > 로컬 코드 근거: 계획 탭 fallback `14a1796d`, public map 격리 `69f83999`, public Journey 서버/클라이언트 경계 `d4f8ed9f` + `3ee91284`; 최종 code/test descendant `a55fcccb`
 
 ## 결론
 
-현재 운영 중인 TREK v3.4.1 fork는 사용자 지도 URL이 비어 있으면 키 없는 CARTO raster
-URL을 기본값으로 사용한다. 운영 DB의 비밀값 비노출 집계에서도 `carto_api_key` 설정 행은
-0개이고 `map_tile_url` 한 행은 빈 값이었다. 따라서 현재 증상은 등록된 키의 만료가 아니라
-**운영 앱에 CARTO key binding이 없고 v3 기본값이 keyless CARTO로 해석되는 문제**다.
+배포 전 TREK v3.4.1 fork는 사용자 지도 URL이 비어 있으면 키 없는 CARTO raster URL을
+기본값으로 사용했다. 당시 운영 DB의 비밀값 비노출 집계에서도 `carto_api_key` 설정 행은
+0개이고 `map_tile_url` 한 행은 빈 값이었다. 따라서 기존 증상은 등록된 키의 만료가 아니라
+**운영 앱에 CARTO key binding이 없고 v3 기본값이 keyless CARTO로 해석된 문제**였다.
+
+현재는 fork runtime `4.2.0+jsnetworkcorp.13c4a137`이 배포됐고, CARTO key가 없는 Plan
+지도는 OpenFreeMap으로 fallback한다. 운영 환경변수와 사용자/instance DB 설정에도 여전히
+CARTO key binding이 없으므로 외부 CARTO 계정에서 만든 key의 만료·회수 여부는 판단할 수
+없다.
 
 CARTO 계정에서 발급받은 외부 키 자체의 정지·회수 여부는 키를 사용하거나 CARTO 계정을
 조회하지 않았으므로 판단하지 않는다. CARTO는 basemap key의 고정 만료일을 공개하지 않지만
@@ -23,7 +29,7 @@ GitHub의 `releases/latest`는 2026-09-03 공개된
 v4.1.1 동작 검증은 유효한 중간 근거지만, 최신 배포 후보는 v4.2.0 증분 통합에서 같은 계약을
 다시 확인해야 한다.
 
-## 비밀값 비노출 증거
+## 배포 전 비밀값 비노출 증거
 
 | 확인            | 결과                                               | 판정                         |
 | --------------- | -------------------------------------------------- | ---------------------------- |
@@ -84,6 +90,21 @@ attribution이 표시되고 `API KEY REQUIRED` 워터마크가 없음을 육안 
 이미지는 1280×720 PNG이며 SHA-256은
 `b32768fa3eca655609d1693c70ef734d9ba5c9af71b4ee76a8abf2e9247a2c68`이다.
 
+## 2026-09-07 운영 후속
+
+- 운영 public config는 `4.2.0+jsnetworkcorp.13c4a137`, managed false였고 password
+  registration은 false였다. 운영 계정·trip·설정을 임의 생성하지 않았다.
+- exact deployed image ID
+  `sha256:8f43b5cfee96ea33ff3e24233f3b83b5d9c80cbead61496b7016a456b1b8ddd3`를 fresh DB,
+  localhost 임의 포트, empty `CARTO_API_KEY`, read-only rootfs로 격리 기동했다.
+- 임시 seeded admin 인증, 강제 비밀번호 변경, trip/place 생성 뒤 Plan에서
+  `.leaflet-container`와 `.maplibregl-canvas` 표시까지 확인했다.
+- 새 request-host/screenshot 증거는 `window.__trek_map.loaded()` 대기 timeout으로 완결되지
+  않았다. 따라서 이 smoke를 완전 통과로 올리지 않고, CARTO 0/OpenFreeMap 요청 존재에 대한
+  판정은 앞선 7/7 focused Playwright 증거를 유지한다.
+- 임시 container, DB/uploads directory, 빈 screenshot은 모두 제거했으며 production DB와
+  계정에는 쓰지 않았다.
+
 ## 배포 후 안전 확인 절차
 
 1. `/api/auth/app-config`의 version/managed 상태만 확인하고 v4.2.0 server/client가 함께
@@ -102,8 +123,8 @@ attribution이 표시되고 `API KEY REQUIRED` 워터마크가 없음을 육안 
 - v3에 임시 key를 직접 주입하지 않는다. 정상 UI 계약이 없고 평문 저장 위험이 있다.
 - 권장 경로는 검증된 v4.1.1 CARTO 계약을 official v4.2.0 증분 branch에 보존한 뒤
   server/client를 원자적으로 승격하는 것이다.
-- 현재 v4.2.0 branch는 로컬 격리 후보이며, restore/image/browser gate와 별도
-  승인 전에는 main merge·push·production deploy를 수행하지 않는다.
+- v4.2.0 fork는 검증 후 `main`과 운영에 배포됐다. 현재는 keyless OpenFreeMap을 유지하며,
+  CARTO를 다시 선택할 때만 앱 설정에 key를 바인딩하고 provider 응답을 별도로 검증한다.
 - CARTO 공식 근거:
   [Basemap API key 안내](https://carto.com/basemaps/apikey/),
   [Basemap Terms](https://carto.com/legal/basemap-terms/).
