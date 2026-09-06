@@ -187,6 +187,18 @@ test('workflow name does not present Sonar as a core success condition', async (
   );
 });
 
+test('root README changes exercise the Sonar identity contract', async () => {
+  const workflow = await readText(workflowPath);
+  const readmeReincludes =
+    workflow.match(/^\s+- '!\*\*\/\*\.md'\r?\n\s+- 'README\.md'$/gm) ?? [];
+
+  assert.equal(
+    readmeReincludes.length,
+    2,
+    'push and pull_request paths must re-include README.md after the markdown exclusion',
+  );
+});
+
 test('checked-in Sonar identity stays fork-owned', async () => {
   const [sonarProperties, readme] = await Promise.all([
     readText(sonarPropertiesPath),

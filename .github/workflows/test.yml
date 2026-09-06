@@ -33,11 +33,10 @@ permissions:
 # exclusive with CI-based analysis, and it cannot import the lcov coverage
 # this workflow produces.
 # A push or PR that touches none of these paths can't change the tests or the
-# analysis, so don't spend the coverage fan-out on it. For a docs-only push
-# that means no run and no fresh branch analysis — harmless, since the last
-# analysis is still accurate for unchanged code. GitHub Actions doesn't
-# support YAML anchors, so the two lists are literal copies: keep them
-# identical when editing either one.
+# analysis, so don't spend the coverage fan-out on it. Docs-only changes are
+# ignored except for the root README, whose Sonar badge is part of the fork
+# identity contract. GitHub Actions doesn't support YAML anchors, so the two
+# lists are literal copies: keep them identical when editing either one.
 on:
   push:
     branches: [main, dev]
@@ -53,10 +52,11 @@ on:
       - 'package-lock.json'
       - 'sonar-project.properties'
       - '.github/workflows/test.yml'
-      # Docs inside the workspaces (CLAUDE.md, READMEs, PATTERN.md) affect
-      # neither the tests nor the scan — no test reads checked-in markdown
-      # and SonarCloud has no markdown analyzer. Negations must stay last.
+      # Ignore markdown generally, then re-include the root README because the
+      # cheap contract test rejects a stale upstream Sonar badge there. Order
+      # is load-bearing: a later positive pattern re-includes the file.
       - '!**/*.md'
+      - 'README.md'
   pull_request:
     branches: [main, dev]
     paths:
@@ -71,10 +71,11 @@ on:
       - 'package-lock.json'
       - 'sonar-project.properties'
       - '.github/workflows/test.yml'
-      # Docs inside the workspaces (CLAUDE.md, READMEs, PATTERN.md) affect
-      # neither the tests nor the scan — no test reads checked-in markdown
-      # and SonarCloud has no markdown analyzer. Negations must stay last.
+      # Ignore markdown generally, then re-include the root README because the
+      # cheap contract test rejects a stale upstream Sonar badge there. Order
+      # is load-bearing: a later positive pattern re-includes the file.
       - '!**/*.md'
+      - 'README.md'
   workflow_dispatch:
 
 # A newer push to the same branch/PR supersedes the running one — cancel it
