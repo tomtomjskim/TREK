@@ -10,7 +10,7 @@
 | 애플리케이션 버전        | `4.2.0+jsnetworkcorp.13c4a137`                                          |
 | 공식 release 기준        | exact `v4.2.0` peeled commit `09ce5cb733bb681c992dfd4f029706718aae58cc` |
 | 포크 runtime source      | `13c4a137751c53382a58521434657923e34c5080`                              |
-| 포크 `main` 검증 기준    | `13c4a137`: core CI 10 jobs 성공, Sonar token 미설정으로 Scan만 실패    |
+| 포크 `main` 검증 기준    | `ea0e7411`: run `34049631241` core 10 jobs 성공, Optional Sonar Scan skip |
 | 운영 image               | `trek:4.2.0-jsnetworkcorp-13c4a137`                                     |
 | 즉시 code-only rollback  | `trek:4.2.0-jsnetworkcorp-e258a7b8` (동일 schema/fork ledger)            |
 | pre-v4.2 rollback pair   | `trek:3.4.1-jsnetworkcorp-7a50356e` + 배포 직전 stopped-point snapshot  |
@@ -53,7 +53,8 @@ truth다.
   [implementation plan](plans/2026-09-07-fork-optional-sonar.md): Sonar를 instance-only CI
   provider adapter로 두고 `SONAR_ENABLED` default-skip, same-workflow coverage artifact 재사용,
   fail-closed preflight, badge 제거와 detach/rollback 계약을 고정한 문서. 격리 브랜치 run
-  `34048321284`에서 core 10 jobs 성공, Optional Sonar Scan skip, workflow success를 확인했다.
+  `34048321284`와 최종 main run `34049631241`에서 core 10 jobs 성공, Optional Sonar Scan
+  skip, workflow success를 확인했다.
 - [v4.1.1 fork preservation matrix](plans/2026-09-01-upstream-v4.1.1-preservation-matrix.md):
   DB, packing privacy, Google 비용, Vacay 데이터 안전, 지도/Fold/calendar, Android와
   Trip/Journey 공개 공유 동작을 새 v4 owner module의 RED/GREEN 증거에 연결하는 누락 방지 원장
