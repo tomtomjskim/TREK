@@ -52,8 +52,8 @@ truth다.
 - [Optional Sonar provider design](plans/2026-09-07-fork-optional-sonar-design.md) ·
   [implementation plan](plans/2026-09-07-fork-optional-sonar.md): Sonar를 instance-only CI
   provider adapter로 두고 `SONAR_ENABLED` default-skip, same-workflow coverage artifact 재사용,
-  fail-closed preflight, badge 제거와 detach/rollback 계약을 고정한 문서. 현재 원격 재검증은
-  pending remote validation이다.
+  fail-closed preflight, badge 제거와 detach/rollback 계약을 고정한 문서. 격리 브랜치 run
+  `34048321284`에서 core 10 jobs 성공, Optional Sonar Scan skip, workflow success를 확인했다.
 - [v4.1.1 fork preservation matrix](plans/2026-09-01-upstream-v4.1.1-preservation-matrix.md):
   DB, packing privacy, Google 비용, Vacay 데이터 안전, 지도/Fold/calendar, Android와
   Trip/Journey 공개 공유 동작을 새 v4 owner module의 RED/GREEN 증거에 연결하는 누락 방지 원장
