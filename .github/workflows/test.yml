@@ -421,7 +421,7 @@ jobs:
           retention-days: 1
 
   scan:
-    name: Scan
+    name: Optional Sonar Scan
     runs-on: ubuntu-latest
     # Sonar stays optional: only run when the fork owner enables it and the
     # event is not an unsafe fork PR.
