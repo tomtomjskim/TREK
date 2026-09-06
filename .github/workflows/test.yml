@@ -1,13 +1,13 @@
-name: Tests & SonarQube
+name: Tests
 
 permissions:
   contents: read
 
-# The repo's test/quality CI and SonarQube Cloud analysis in one workflow, so
-# each test suite runs once per event instead of once for the old test.yml and
-# once more for Sonar's coverage. Pushes to dev and main produce branch
-# analysis; pull requests get PR analysis with decoration on the PR itself
-# (the scanner picks the context up from the Actions environment).
+# The repo's test/quality CI and optional Sonar analysis live in one workflow,
+# so each test suite runs once per event instead of once for the old test.yml
+# and once more for Sonar's coverage. Forks can keep the core CI without a
+# Sonar account, and fork owners can turn the scan on later by setting
+# SONAR_ENABLED plus the fork-owned repository variables.
 #
 # Job layout — three tiers:
 #   - Preflight: plugin-facts, i18n-parity and the quality jobs
@@ -22,9 +22,10 @@ permissions:
 #     must stop the scan — a missing lcov file would make every line of that
 #     package report as uncovered, and the dashboard would show a collapse
 #     that did not happen. (The preflight gates stop it transitively.)
-#   - Fork PRs don't receive secrets, so the scan job still skips itself;
-#     s3-contract uses the published free MinIO community image and runs
-#     everywhere so the S3 contract stays reproducible without a license.
+#   - Fork PRs don't receive secrets, so the scan job still skips itself when
+#     SONAR_ENABLED is off; s3-contract uses the published free MinIO community
+#     image and runs everywhere so the S3 contract stays reproducible without a
+#     license.
 #     Everything else runs on fork PRs so outside contributors still get the
 #     full test signal.
 #
@@ -422,8 +423,11 @@ jobs:
   scan:
     name: Scan
     runs-on: ubuntu-latest
-    # Fork PRs don't receive SONAR_TOKEN — skip the scan rather than fail it.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Sonar stays optional: only run when the fork owner enables it and the
+    # event is not an unsafe fork PR.
+    if: >-
+      vars.SONAR_ENABLED == 'true' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     # Coverage jobs failing must stop the scan: a missing lcov file would make
     # every line of that package report as uncovered, and the dashboard would
     # show a collapse that did not happen. The preflight gates already stop it
@@ -461,13 +465,30 @@ jobs:
           name: sonar-plugin-sdk-coverage
           path: plugin-sdk/coverage/
 
+      - name: Sonar preflight
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+        run: |
+          missing=0
+          for name in SONAR_TOKEN SONAR_PROJECT_KEY SONAR_ORGANIZATION; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name is required when SONAR_ENABLED=true"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: Scan
         uses: SonarSource/sonarqube-scan-action@v8
         env:
           # SonarQube Cloud is the scan action's default host, so no
-          # SONAR_HOST_URL — the token is a sonarcloud.io token for the
-          # liketrek org.
+          # SONAR_HOST_URL — the token and repository variables come from the
+          # fork owner's SonarCloud setup.
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
         with:
           # New Code is configured as "previous version", so this string is what
           # draws that line — changing it re-bases every "new code" metric.
@@ -478,4 +499,7 @@ jobs:
           # Everything else — sources, tests, exclusions, the documented
           # false-positive list — lives in sonar-project.properties so it stays
           # reviewable in a PR rather than buried in workflow YAML.
-          args: -Dsonar.projectVersion=4.2.0
+          args: >-
+            -Dsonar.projectVersion=4.2.0
+            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}

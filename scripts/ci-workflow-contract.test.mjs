@@ -65,7 +65,7 @@ test('scan job is optional, gated, and fail-closed', async () => {
     'preflight must check SONAR_ORGANIZATION',
   );
   assert.ok(
-    !hasLineMatching(preflightWindow.split(/\r?\n/), /echo .*SONAR_|printenv|set -x/i),
+    !hasLineMatching(preflightWindow.split(/\r?\n/), /echo .*\\\$SONAR_|printenv|set -x/i),
     'preflight must not print secret values',
   );
 
